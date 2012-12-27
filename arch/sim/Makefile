@@ -1,7 +1,7 @@
 ARCH_DIR := arch/sim
 SRCDIR=$(dir $(firstword $(MAKEFILE_LIST)))
-KERNEL_VERSION=6be35c700f742e911ecedd07fcc43d4439922334
-KERNEL_VERSION=v3.4
+#KERNEL_VERSION=6be35c700f742e911ecedd07fcc43d4439922334
+#KERNEL_VERSION=v3.4
 
 SIM_SRC=\
 fs.c random.c sim.c softirq.c time.c \
@@ -12,9 +12,9 @@ proc.c seq.c socket.c tasklet-hrtimer.c \
 cred.c pid.c modules.c 
 
 COV?=no
-cov_yes=-coverage
+cov_yes=-fprofile-arcs -ftest-coverage
 cov_no=
-covl_yes=-Wl,-whole-archive -lgcov -Wl,-no-whole-archive
+covl_yes=-fprofile-arcs
 covl_no=
 # no idea why OPT=no doesn't work...
 OPT?=yes
@@ -24,7 +24,7 @@ PIC?=yes
 pic_yes=-fpic -DPIC
 pic_no=-mcmodel=large
 PIC_CFLAGS=$(pic_$(PIC))
-KERNEL_LIB=liblinux-$(KERNEL_VERSION).so
+KERNEL_LIB=libsim-linux$(KERNELVERSION).so
 SIM_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(SIM_SRC))))
 CFLAGS+= \
  $(opt_$(OPT)) -g3 -D__KERNEL__ -Wall -Wstrict-prototypes -Wno-trigraphs \

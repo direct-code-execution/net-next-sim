@@ -177,12 +177,12 @@ ssize_t splice_to_pipe(struct pipe_inode_info *info,
   sim_assert (false);
   return 0;
 }
-int splice_grow_spd(struct pipe_inode_info *info, struct splice_pipe_desc *desc)
+int splice_grow_spd(const struct pipe_inode_info *info, struct splice_pipe_desc *desc)
 {
   sim_assert (false);
   return 0;
 }
-void splice_shrink_spd(struct pipe_inode_info *info, struct splice_pipe_desc *desc)
+void splice_shrink_spd(struct splice_pipe_desc *desc)
 {
   sim_assert (false);
 }

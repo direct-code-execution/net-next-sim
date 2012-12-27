@@ -29,7 +29,6 @@ struct SimTask *sim_task_create (void *private, unsigned long pid)
   struct thread_info *info = alloc_thread_info (&task->kernel_task);
   struct pid *kpid = sim_malloc (sizeof (struct pid));
   kpid->numbers[0].nr = pid;
-  user->user_ns = 0;
   cred->fsuid = 0;
   cred->fsgid = 0;
   cred->user = user;

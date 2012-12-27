@@ -15,4 +15,21 @@ struct thread_info *current_thread_info(void);
 struct thread_info *alloc_thread_info (struct task_struct *task);
 void free_thread_info (struct thread_info *ti);
 
+#define TS_RESTORE_SIGMASK      0x0008  /* restore signal mask in do_signal() */
+#define HAVE_SET_RESTORE_SIGMASK        1
+static inline void set_restore_sigmask(void)
+{
+}
+static inline void clear_restore_sigmask(void)
+{
+}
+static inline bool test_restore_sigmask(void)
+{
+        return true;
+}
+static inline bool test_and_clear_restore_sigmask(void)
+{
+        return true;
+}
+
 #endif /* _ASM_SIM_THREAD_INFO_H */

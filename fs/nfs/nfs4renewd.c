@@ -60,29 +60,36 @@ nfs4_renew_state(struct work_struct *work)
 	struct rpc_cred *cred;
 	long lease;
 	unsigned long last, now;
+	unsigned renew_flags = 0;
 
 	ops = clp->cl_mvops->state_renewal_ops;
 	dprintk("%s: start\n", __func__);
-	/* Are there any active superblocks? */
-	if (list_empty(&clp->cl_superblocks))
+
+	if (test_bit(NFS_CS_STOP_RENEW, &clp->cl_res_state))
 		goto out;
+
 	spin_lock(&clp->cl_lock);
 	lease = clp->cl_lease_time;
 	last = clp->cl_last_renewal;
 	now = jiffies;
 	/* Are we close to a lease timeout? */
-	if (time_after(now, last + lease/3)) {
+	if (time_after(now, last + lease/3))
+		renew_flags |= NFS4_RENEW_TIMEOUT;
+	if (nfs_delegations_present(clp))
+		renew_flags |= NFS4_RENEW_DELEGATION_CB;
+
+	if (renew_flags != 0) {
 		cred = ops->get_state_renewal_cred_locked(clp);
 		spin_unlock(&clp->cl_lock);
 		if (cred == NULL) {
-			if (list_empty(&clp->cl_delegations)) {
+			if (!(renew_flags & NFS4_RENEW_DELEGATION_CB)) {
 				set_bit(NFS4CLNT_LEASE_EXPIRED, &clp->cl_state);
 				goto out;
 			}
 			nfs_expire_all_delegations(clp);
 		} else {
 			/* Queue an asynchronous RENEW. */
-			ops->sched_state_renewal(clp, cred);
+			ops->sched_state_renewal(clp, cred, renew_flags);
 			put_rpccred(cred);
 			goto out_exp;
 		}

@@ -28,7 +28,6 @@ static const char version[] = "madgemc.c: v0.91 23/01/2000 by Adam Fritzler\n";
 #include <linux/netdevice.h>
 #include <linux/trdevice.h>
 
-#include <asm/system.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 
@@ -73,7 +72,7 @@ static void madgemc_setint(struct net_device *dev, int val);
 static irqreturn_t madgemc_interrupt(int irq, void *dev_id);
 
 /*
- * These work around paging, however they don't guarentee you're on the
+ * These work around paging, however they don't guarantee you're on the
  * right page.
  */
 #define SIFREADB(reg) (inb(dev->base_addr + ((reg<0x8)?reg:reg-0x8)))
@@ -171,7 +170,6 @@ static int __devinit madgemc_probe(struct device *device)
 
 	card = kmalloc(sizeof(struct card_info), GFP_KERNEL);
 	if (card==NULL) {
-		printk("madgemc: unable to allocate card struct\n");
 		ret = -ENOMEM;
 		goto getout1;
 	}
@@ -387,7 +385,7 @@ getout:
  * both with their own disadvantages...
  *
  * 1)  	Read in the SIFSTS register from the TMS controller.  This
- *	is guarenteed to be accurate, however, there's a fairly
+ *	is guaranteed to be accurate, however, there's a fairly
  *	large performance penalty for doing so: the Madge chips
  *	must request the register from the Eagle, the Eagle must
  *	read them from its internal bus, and then take the route
@@ -418,7 +416,7 @@ static irqreturn_t madgemc_interrupt(int irq, void *dev_id)
 		return IRQ_NONE;
 	}
 
-	dev = (struct net_device *)dev_id;
+	dev = dev_id;
 
 	/* Make sure its really us. -- the Madge way */
 	pending = inb(dev->base_addr + MC_CONTROL_REG0);
@@ -454,7 +452,7 @@ static irqreturn_t madgemc_interrupt(int irq, void *dev_id)
 }
 
 /*
- * Set the card to the prefered ring speed.
+ * Set the card to the preferred ring speed.
  *
  * Unlike newer cards, the MC16/32 have their speed selection
  * circuit connected to the Madge ASICs and not to the TMS380

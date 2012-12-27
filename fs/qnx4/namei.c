@@ -12,7 +12,6 @@
  * 04-07-1998 by Frank Denis : first step for rmdir/unlink.
  */
 
-#include <linux/smp_lock.h>
 #include <linux/buffer_head.h>
 #include "qnx4.h"
 
@@ -39,10 +38,6 @@ static int qnx4_match(int len, const char *name,
 		namelen = QNX4_NAME_MAX;
 	} else {
 		namelen = QNX4_SHORT_NAME_MAX;
-	}
-	/* "" means "." ---> so paths like "/usr/lib//libc.a" work */
-	if (!len && (de->di_fname[0] == '.') && (de->di_fname[1] == '\0')) {
-		return 1;
 	}
 	thislen = strlen( de->di_fname );
 	if ( thislen > namelen )
@@ -73,7 +68,9 @@ static struct buffer_head *qnx4_find_entry(int len, struct inode *dir,
 	block = offset = blkofs = 0;
 	while (blkofs * QNX4_BLOCK_SIZE + offset < dir->i_size) {
 		if (!bh) {
-			bh = qnx4_bread(dir, blkofs, 0);
+			block = qnx4_block_map(dir, blkofs);
+			if (block)
+				bh = sb_bread(dir->i_sb, block);
 			if (!bh) {
 				blkofs++;
 				continue;
@@ -81,7 +78,6 @@ static struct buffer_head *qnx4_find_entry(int len, struct inode *dir,
 		}
 		*res_dir = (struct qnx4_inode_entry *) (bh->b_data + offset);
 		if (qnx4_match(len, name, bh, &offset)) {
-			block = qnx4_block_map( dir, blkofs );
 			*ino = block * QNX4_INODES_PER_BLOCK +
 			    (offset / QNX4_DIR_ENTRY_SIZE) - 1;
 			return bh;
@@ -109,7 +105,6 @@ struct dentry * qnx4_lookup(struct inode *dir, struct dentry *dentry, struct nam
 	int len = dentry->d_name.len;
 	struct inode *foundinode = NULL;
 
-	lock_kernel();
 	if (!(bh = qnx4_find_entry(len, dir, name, &de, &ino)))
 		goto out;
 	/* The entry is linked, let's get the real info */
@@ -123,13 +118,11 @@ struct dentry * qnx4_lookup(struct inode *dir, struct dentry *dentry, struct nam
 
 	foundinode = qnx4_iget(dir->i_sb, ino);
 	if (IS_ERR(foundinode)) {
-		unlock_kernel();
 		QNX4DEBUG((KERN_ERR "qnx4: lookup->iget -> error %ld\n",
 			   PTR_ERR(foundinode)));
 		return ERR_CAST(foundinode);
 	}
 out:
-	unlock_kernel();
 	d_add(dentry, foundinode);
 
 	return NULL;

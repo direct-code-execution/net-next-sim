@@ -36,12 +36,8 @@ enum audit_state {
 	AUDIT_DISABLED,		/* Do not create per-task audit_context.
 				 * No syscall-specific audit records can
 				 * be generated. */
-	AUDIT_SETUP_CONTEXT,	/* Create the per-task audit_context,
-				 * but don't necessarily fill it in at
-				 * syscall entry time (i.e., filter
-				 * instead). */
 	AUDIT_BUILD_CONTEXT,	/* Create the per-task audit_context,
-				 * and always fill it in at syscall
+				 * and fill it in at syscall
 				 * entry time.  This makes a full
 				 * syscall record available if some
 				 * other part of the kernel decides it
@@ -84,10 +80,7 @@ extern int audit_compare_dname_path(const char *dname, const char *path,
 				    int *dirlen);
 extern struct sk_buff *	    audit_make_reply(int pid, int seq, int type,
 					     int done, int multi,
-					     void *payload, int size);
-extern void		    audit_send_reply(int pid, int seq, int type,
-					     int done, int multi,
-					     void *payload, int size);
+					     const void *payload, int size);
 extern void		    audit_panic(const char *message);
 
 struct audit_netlink_list {

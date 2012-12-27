@@ -45,9 +45,16 @@ static unsigned int help(struct sk_buff *skb,
 
 	/* Try to get same port: if not, try to change it. */
 	for (port = ntohs(exp->saved_proto.tcp.port); port != 0; port++) {
+		int ret;
+
 		exp->tuple.dst.u.tcp.port = htons(port);
-		if (nf_ct_expect_related(exp) == 0)
+		ret = nf_ct_expect_related(exp);
+		if (ret == 0)
 			break;
+		else if (ret != -EBUSY) {
+			port = 0;
+			break;
+		}
 	}
 
 	if (port == 0)
@@ -68,14 +75,14 @@ static unsigned int help(struct sk_buff *skb,
 
 static void __exit nf_nat_irc_fini(void)
 {
-	rcu_assign_pointer(nf_nat_irc_hook, NULL);
+	RCU_INIT_POINTER(nf_nat_irc_hook, NULL);
 	synchronize_rcu();
 }
 
 static int __init nf_nat_irc_init(void)
 {
 	BUG_ON(nf_nat_irc_hook != NULL);
-	rcu_assign_pointer(nf_nat_irc_hook, help);
+	RCU_INIT_POINTER(nf_nat_irc_hook, help);
 	return 0;
 }
 

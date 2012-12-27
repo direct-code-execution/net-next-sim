@@ -24,13 +24,9 @@
 #include <asm/mach/arch.h>
 #include <asm/mach/time.h>
 #include <asm/mach/map.h>
-#include <mach/imxfb.h>
 #include <mach/iomux-mx21.h>
-#include <mach/mxc_nand.h>
-#include <mach/mmc.h>
 
 #include "devices-imx21.h"
-#include "devices.h"
 
 /*
  * Memory-mapped I/O on MX21ADS base board
@@ -41,8 +37,8 @@
 #define MX21ADS_REG_ADDR(offset)    (void __force __iomem *) \
 		(MX21ADS_MMIO_BASE_ADDR + (offset))
 
+#define MX21ADS_CS8900A_MMIO_SIZE   0x200000
 #define MX21ADS_CS8900A_IRQ         IRQ_GPIOE(11)
-#define MX21ADS_CS8900A_IOBASE_REG  MX21ADS_REG_ADDR(0x000000)
 #define MX21ADS_ST16C255_IOBASE_REG MX21ADS_REG_ADDR(0x200000)
 #define MX21ADS_VERSION_REG         MX21ADS_REG_ADDR(0x400000)
 #define MX21ADS_IO_REG              MX21ADS_REG_ADDR(0x800000)
@@ -67,7 +63,7 @@
 #define MX21ADS_IO_LED4_ON      0x4000
 #define MX21ADS_IO_LED3_ON      0x8000
 
-static unsigned int mx21ads_pins[] = {
+static const int mx21ads_pins[] __initconst = {
 
 	/* CS8900A */
 	(GPIO_PORTE | GPIO_GPIO | GPIO_IN | 11),
@@ -163,6 +159,18 @@ static struct platform_device mx21ads_nor_mtd_device = {
 	.resource = &mx21ads_flash_resource,
 };
 
+static const struct resource mx21ads_cs8900_resources[] __initconst = {
+	DEFINE_RES_MEM(MX21_CS1_BASE_ADDR, MX21ADS_CS8900A_MMIO_SIZE),
+	DEFINE_RES_IRQ(MX21ADS_CS8900A_IRQ),
+};
+
+static const struct platform_device_info mx21ads_cs8900_devinfo __initconst = {
+	.name = "cs89x0",
+	.id = 0,
+	.res = mx21ads_cs8900_resources,
+	.num_res = ARRAY_SIZE(mx21ads_cs8900_resources),
+};
+
 static const struct imxuart_platform_data uart_pdata_rts __initconst = {
 	.flags = IMXUART_HAVE_RTSCTS,
 };
@@ -213,7 +221,7 @@ static struct imx_fb_videomode mx21ads_modes[] = {
 	},
 };
 
-static struct imx_fb_platform_data mx21ads_fb_data = {
+static const struct imx_fb_platform_data mx21ads_fb_data __initconst = {
 	.mode = mx21ads_modes,
 	.num_modes = ARRAY_SIZE(mx21ads_modes),
 
@@ -233,15 +241,8 @@ static int mx21ads_sdhc_get_ro(struct device *dev)
 static int mx21ads_sdhc_init(struct device *dev, irq_handler_t detect_irq,
 	void *data)
 {
-	int ret;
-
-	ret = request_irq(IRQ_GPIOD(25), detect_irq,
+	return request_irq(IRQ_GPIOD(25), detect_irq,
 		IRQF_TRIGGER_FALLING, "mmc-detect", data);
-	if (ret)
-		goto out;
-	return 0;
-out:
-	return ret;
 }
 
 static void mx21ads_sdhc_exit(struct device *dev, void *data)
@@ -249,7 +250,7 @@ static void mx21ads_sdhc_exit(struct device *dev, void *data)
 	free_irq(IRQ_GPIOD(25), data);
 }
 
-static struct imxmmc_platform_data mx21ads_sdhc_pdata = {
+static const struct imxmmc_platform_data mx21ads_sdhc_pdata __initconst = {
 	.ocr_avail = MMC_VDD_29_30 | MMC_VDD_30_31, /* 3.0V */
 	.get_ro = mx21ads_sdhc_get_ro,
 	.init = mx21ads_sdhc_init,
@@ -290,17 +291,21 @@ static struct platform_device *platform_devices[] __initdata = {
 
 static void __init mx21ads_board_init(void)
 {
+	imx21_soc_init();
+
 	mxc_gpio_setup_multiple_pins(mx21ads_pins, ARRAY_SIZE(mx21ads_pins),
 			"mx21ads");
 
 	imx21_add_imx_uart0(&uart_pdata_rts);
 	imx21_add_imx_uart2(&uart_pdata_norts);
 	imx21_add_imx_uart3(&uart_pdata_rts);
-	mxc_register_device(&mxc_fb_device, &mx21ads_fb_data);
-	mxc_register_device(&mxc_sdhc_device0, &mx21ads_sdhc_pdata);
+	imx21_add_imx_fb(&mx21ads_fb_data);
+	imx21_add_mxc_mmc(0, &mx21ads_sdhc_pdata);
 	imx21_add_mxc_nand(&mx21ads_nand_board_info);
 
 	platform_add_devices(platform_devices, ARRAY_SIZE(platform_devices));
+	platform_device_register_full(
+			(struct platform_device_info *)&mx21ads_cs8900_devinfo);
 }
 
 static void __init mx21ads_timer_init(void)
@@ -314,11 +319,12 @@ static struct sys_timer mx21ads_timer = {
 
 MACHINE_START(MX21ADS, "Freescale i.MX21ADS")
 	/* maintainer: Freescale Semiconductor, Inc. */
-	.phys_io        = MX21_AIPI_BASE_ADDR,
-	.io_pg_offst    = ((MX21_AIPI_BASE_ADDR_VIRT) >> 18) & 0xfffc,
-	.boot_params    = MX21_PHYS_OFFSET + 0x100,
-	.map_io         = mx21ads_map_io,
-	.init_irq       = mx21_init_irq,
-	.init_machine   = mx21ads_board_init,
-	.timer          = &mx21ads_timer,
+	.atag_offset = 0x100,
+	.map_io = mx21ads_map_io,
+	.init_early = imx21_init_early,
+	.init_irq = mx21_init_irq,
+	.handle_irq = imx21_handle_irq,
+	.timer = &mx21ads_timer,
+	.init_machine = mx21ads_board_init,
+	.restart	= mxc_restart,
 MACHINE_END

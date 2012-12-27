@@ -21,9 +21,9 @@
 #include <asm/cputable.h>
 #include <asm/cacheflush.h>
 #include <asm/smp.h>
-#include <asm/firmware.h>
 #include <linux/compiler.h>
 #include <asm/udbg.h>
+#include <asm/code-patching.h>
 
 
 extern void slb_allocate_realmode(unsigned long ea);
@@ -166,7 +166,7 @@ static inline int esids_match(unsigned long addr1, unsigned long addr2)
 	int esid_1t_count;
 
 	/* System is not 1T segment size capable. */
-	if (!cpu_has_feature(CPU_FTR_1T_SEGMENT))
+	if (!mmu_has_feature(MMU_FTR_1T_SEGMENT))
 		return (GET_ESID(addr1) == GET_ESID(addr2));
 
 	esid_1t_count = (((addr1 >> SID_SHIFT_1T) != 0) +
@@ -201,7 +201,7 @@ void switch_slb(struct task_struct *tsk, struct mm_struct *mm)
 	 */
 	hard_irq_disable();
 	offset = get_paca()->slb_cache_ptr;
-	if (!cpu_has_feature(CPU_FTR_NO_SLBIE_B) &&
+	if (!mmu_has_feature(MMU_FTR_NO_SLBIE_B) &&
 	    offset <= SLB_CACHE_ENTRIES) {
 		int i;
 		asm volatile("isync" : : : "memory");
@@ -249,9 +249,8 @@ void switch_slb(struct task_struct *tsk, struct mm_struct *mm)
 static inline void patch_slb_encoding(unsigned int *insn_addr,
 				      unsigned int immed)
 {
-	*insn_addr = (*insn_addr & 0xffff0000) | immed;
-	flush_icache_range((unsigned long)insn_addr, 4+
-			   (unsigned long)insn_addr);
+	int insn = (*insn_addr & 0xffff0000) | immed;
+	patch_instruction(insn_addr, insn);
 }
 
 void slb_set_size(u16 size)
@@ -306,11 +305,6 @@ void slb_initialize(void)
 	}
 
 	get_paca()->stab_rr = SLB_NUM_BOLTED;
-
-	/* On iSeries the bolted entries have already been set up by
-	 * the hypervisor from the lparMap data in head.S */
-	if (firmware_has_feature(FW_FEATURE_ISERIES))
-		return;
 
 	lflags = SLB_VSID_KERNEL | linear_llp;
 	vflags = SLB_VSID_KERNEL | vmalloc_llp;

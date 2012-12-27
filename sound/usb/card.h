@@ -1,6 +1,7 @@
 #ifndef __USBAUDIO_CARD_H
 #define __USBAUDIO_CARD_H
 
+#define MAX_NR_RATES	1024
 #define MAX_PACKS	20
 #define MAX_PACKS_HS	(MAX_PACKS * 8)	/* in high speed mode */
 #define MAX_URBS	8
@@ -62,12 +63,14 @@ struct snd_usb_substream {
 	unsigned int syncinterval;  /* P for adaptive mode, 0 otherwise */
 	unsigned int freqn;      /* nominal sampling rate in fs/fps in Q16.16 format */
 	unsigned int freqm;      /* momentary sampling rate in fs/fps in Q16.16 format */
+	int          freqshift;  /* how much to shift the feedback value to get Q16.16 */
 	unsigned int freqmax;    /* maximum sampling rate, used for buffer management */
 	unsigned int phase;      /* phase accumulator */
 	unsigned int maxpacksize;	/* max packet size in bytes */
 	unsigned int maxframesize;	/* max packet size in frames */
 	unsigned int curpacksize;	/* current packet size in bytes (for capture) */
 	unsigned int curframesize;	/* current packet size in frames (for capture) */
+	unsigned int syncmaxsize;	/* sync endpoint packet size */
 	unsigned int fill_max: 1;	/* fill max packet size always */
 	unsigned int txfr_quirk:1;	/* allow sub-frame alignment */
 	unsigned int fmt_type;		/* USB audio format type (1-3) */
@@ -92,6 +95,8 @@ struct snd_usb_substream {
 	spinlock_t lock;
 
 	struct snd_urb_ops ops;		/* callbacks (must be filled at init) */
+	int last_frame_number;          /* stored frame number */
+	int last_delay;                 /* stored delay */
 };
 
 struct snd_usb_stream {

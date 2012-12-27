@@ -102,7 +102,7 @@ struct eth_addr {
 };
 
 static struct eth_addr __initdata hw_addr[1];
-static struct eth_platform_data __initdata eth_data[1];
+static struct macb_platform_data __initdata eth_data[1];
 
 /*
  * The next two functions should go away as the boot loader is
@@ -150,7 +150,7 @@ static void __init set_hw_addr(struct platform_device *pdev)
 	regs = (void __iomem __force *)res->start;
 	pclk = clk_get(&pdev->dev, "pclk");
 
-	if (!pclk)
+	if (IS_ERR(pclk))
 		return;
 
 	clk_enable(pclk);

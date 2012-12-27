@@ -14,7 +14,6 @@
 
 struct netpoll {
 	struct net_device *dev;
-	struct net_device *real_dev;
 	char dev_name[IFNAMSIZ];
 	const char *name;
 	void (*rx_hook)(struct netpoll *, int, char *, int);
@@ -41,8 +40,6 @@ struct netpoll_info {
 	struct netpoll *netpoll;
 };
 
-void netpoll_poll_dev(struct net_device *dev);
-void netpoll_poll(struct netpoll *np);
 void netpoll_send_udp(struct netpoll *np, const char *msg, int len);
 void netpoll_print_options(struct netpoll *np);
 int netpoll_parse_options(struct netpoll *np, char *opt);
@@ -53,7 +50,13 @@ void netpoll_set_trap(int trap);
 void __netpoll_cleanup(struct netpoll *np);
 void netpoll_cleanup(struct netpoll *np);
 int __netpoll_rx(struct sk_buff *skb);
-void netpoll_send_skb(struct netpoll *np, struct sk_buff *skb);
+void netpoll_send_skb_on_dev(struct netpoll *np, struct sk_buff *skb,
+			     struct net_device *dev);
+static inline void netpoll_send_skb(struct netpoll *np, struct sk_buff *skb)
+{
+	netpoll_send_skb_on_dev(np, skb, np->dev);
+}
+
 
 
 #ifdef CONFIG_NETPOLL

@@ -29,6 +29,8 @@
  *    Gareth Hughes <gareth@valinux.com>
  */
 
+#include <linux/module.h>
+
 #include "drmP.h"
 #include "drm.h"
 #include "mga_drm.h"
@@ -40,6 +42,20 @@ static int mga_driver_device_is_agp(struct drm_device *dev);
 
 static struct pci_device_id pciidlist[] = {
 	mga_PCI_IDS
+};
+
+static const struct file_operations mga_driver_fops = {
+	.owner = THIS_MODULE,
+	.open = drm_open,
+	.release = drm_release,
+	.unlocked_ioctl = drm_ioctl,
+	.mmap = drm_mmap,
+	.poll = drm_poll,
+	.fasync = drm_fasync,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = mga_compat_ioctl,
+#endif
+	.llseek = noop_llseek,
 };
 
 static struct drm_driver driver = {
@@ -60,27 +76,9 @@ static struct drm_driver driver = {
 	.irq_uninstall = mga_driver_irq_uninstall,
 	.irq_handler = mga_driver_irq_handler,
 	.reclaim_buffers = drm_core_reclaim_buffers,
-	.get_map_ofs = drm_core_get_map_ofs,
-	.get_reg_ofs = drm_core_get_reg_ofs,
 	.ioctls = mga_ioctls,
 	.dma_ioctl = mga_dma_buffers,
-	.fops = {
-		.owner = THIS_MODULE,
-		.open = drm_open,
-		.release = drm_release,
-		.unlocked_ioctl = drm_ioctl,
-		.mmap = drm_mmap,
-		.poll = drm_poll,
-		.fasync = drm_fasync,
-#ifdef CONFIG_COMPAT
-		.compat_ioctl = mga_compat_ioctl,
-#endif
-	},
-	.pci_driver = {
-		.name = DRIVER_NAME,
-		.id_table = pciidlist,
-	},
-
+	.fops = &mga_driver_fops,
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
 	.date = DRIVER_DATE,
@@ -89,15 +87,20 @@ static struct drm_driver driver = {
 	.patchlevel = DRIVER_PATCHLEVEL,
 };
 
+static struct pci_driver mga_pci_driver = {
+	.name = DRIVER_NAME,
+	.id_table = pciidlist,
+};
+
 static int __init mga_init(void)
 {
 	driver.num_ioctls = mga_max_ioctl;
-	return drm_init(&driver);
+	return drm_pci_init(&driver, &mga_pci_driver);
 }
 
 static void __exit mga_exit(void)
 {
-	drm_exit(&driver);
+	drm_pci_exit(&driver, &mga_pci_driver);
 }
 
 module_init(mga_init);

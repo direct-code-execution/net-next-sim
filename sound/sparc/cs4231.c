@@ -40,7 +40,7 @@
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
 /* Enable this card */
-static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
+static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for Sun CS4231 soundcard.");
@@ -1856,7 +1856,7 @@ static int __devinit snd_cs4231_sbus_create(struct snd_card *card,
 	return 0;
 }
 
-static int __devinit cs4231_sbus_probe(struct platform_device *op, const struct of_device_id *match)
+static int __devinit cs4231_sbus_probe(struct platform_device *op)
 {
 	struct resource *rp = &op->resource[0];
 	struct snd_card *card;
@@ -2048,7 +2048,7 @@ static int __devinit snd_cs4231_ebus_create(struct snd_card *card,
 	return 0;
 }
 
-static int __devinit cs4231_ebus_probe(struct platform_device *op, const struct of_device_id *match)
+static int __devinit cs4231_ebus_probe(struct platform_device *op)
 {
 	struct snd_card *card;
 	int err;
@@ -2072,16 +2072,16 @@ static int __devinit cs4231_ebus_probe(struct platform_device *op, const struct 
 }
 #endif
 
-static int __devinit cs4231_probe(struct platform_device *op, const struct of_device_id *match)
+static int __devinit cs4231_probe(struct platform_device *op)
 {
 #ifdef EBUS_SUPPORT
 	if (!strcmp(op->dev.of_node->parent->name, "ebus"))
-		return cs4231_ebus_probe(op, match);
+		return cs4231_ebus_probe(op);
 #endif
 #ifdef SBUS_SUPPORT
 	if (!strcmp(op->dev.of_node->parent->name, "sbus") ||
 	    !strcmp(op->dev.of_node->parent->name, "sbi"))
-		return cs4231_sbus_probe(op, match);
+		return cs4231_sbus_probe(op);
 #endif
 	return -ENODEV;
 }
@@ -2108,7 +2108,7 @@ static const struct of_device_id cs4231_match[] = {
 
 MODULE_DEVICE_TABLE(of, cs4231_match);
 
-static struct of_platform_driver cs4231_driver = {
+static struct platform_driver cs4231_driver = {
 	.driver = {
 		.name = "audio",
 		.owner = THIS_MODULE,
@@ -2118,15 +2118,4 @@ static struct of_platform_driver cs4231_driver = {
 	.remove		= __devexit_p(cs4231_remove),
 };
 
-static int __init cs4231_init(void)
-{
-	return of_register_platform_driver(&cs4231_driver);
-}
-
-static void __exit cs4231_exit(void)
-{
-	of_unregister_platform_driver(&cs4231_driver);
-}
-
-module_init(cs4231_init);
-module_exit(cs4231_exit);
+module_platform_driver(cs4231_driver);

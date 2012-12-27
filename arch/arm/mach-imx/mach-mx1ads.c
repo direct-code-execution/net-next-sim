@@ -25,14 +25,12 @@
 
 #include <mach/common.h>
 #include <mach/hardware.h>
-#include <mach/i2c.h>
 #include <mach/iomux-mx1.h>
 #include <mach/irqs.h>
 
 #include "devices-imx1.h"
-#include "devices.h"
 
-static int mx1ads_pins[] = {
+static const int mx1ads_pins[] __initconst = {
 	/* UART1 */
 	PC9_PF_UART1_CTS,
 	PC10_PF_UART1_RTS,
@@ -70,21 +68,14 @@ static const struct imxuart_platform_data uart1_pdata __initconst = {
  * Physmap flash
  */
 
-static struct physmap_flash_data mx1ads_flash_data = {
+static const struct physmap_flash_data mx1ads_flash_data __initconst = {
 	.width		= 4,		/* bankwidth in bytes */
 };
 
-static struct resource flash_resource = {
+static const struct resource flash_resource __initconst = {
 	.start	= MX1_CS0_PHYS,
 	.end	= MX1_CS0_PHYS + SZ_32M - 1,
 	.flags	= IORESOURCE_MEM,
-};
-
-static struct platform_device flash_device = {
-	.name	= "physmap-flash",
-	.id	= 0,
-	.resource = &flash_resource,
-	.num_resources = 1,
 };
 
 /*
@@ -117,6 +108,8 @@ static struct i2c_board_info mx1ads_i2c_devices[] = {
  */
 static void __init mx1ads_init(void)
 {
+	imx1_soc_init();
+
 	mxc_gpio_setup_multiple_pins(mx1ads_pins,
 		ARRAY_SIZE(mx1ads_pins), "mx1ads");
 
@@ -125,13 +118,15 @@ static void __init mx1ads_init(void)
 	imx1_add_imx_uart1(&uart1_pdata);
 
 	/* Physmap flash */
-	mxc_register_device(&flash_device, &mx1ads_flash_data);
+	platform_device_register_resndata(NULL, "physmap-flash", 0,
+			&flash_resource, 1,
+			&mx1ads_flash_data, sizeof(mx1ads_flash_data));
 
 	/* I2C */
 	i2c_register_board_info(0, mx1ads_i2c_devices,
 				ARRAY_SIZE(mx1ads_i2c_devices));
 
-	imx1_add_i2c_imx(&mx1ads_i2c_data);
+	imx1_add_imx_i2c(&mx1ads_i2c_data);
 }
 
 static void __init mx1ads_timer_init(void)
@@ -145,21 +140,23 @@ struct sys_timer mx1ads_timer = {
 
 MACHINE_START(MX1ADS, "Freescale MX1ADS")
 	/* Maintainer: Sascha Hauer, Pengutronix */
-	.phys_io	= MX1_IO_BASE_ADDR,
-	.io_pg_offst	= (MX1_IO_BASE_ADDR_VIRT >> 18) & 0xfffc,
-	.boot_params	= MX1_PHYS_OFFSET + 0x100,
-	.map_io		= mx1_map_io,
-	.init_irq	= mx1_init_irq,
-	.timer		= &mx1ads_timer,
-	.init_machine	= mx1ads_init,
+	.atag_offset = 0x100,
+	.map_io = mx1_map_io,
+	.init_early = imx1_init_early,
+	.init_irq = mx1_init_irq,
+	.handle_irq = imx1_handle_irq,
+	.timer = &mx1ads_timer,
+	.init_machine = mx1ads_init,
+	.restart	= mxc_restart,
 MACHINE_END
 
 MACHINE_START(MXLADS, "Freescale MXLADS")
-	.phys_io	= MX1_IO_BASE_ADDR,
-	.io_pg_offst	= (MX1_IO_BASE_ADDR_VIRT >> 18) & 0xfffc,
-	.boot_params	= MX1_PHYS_OFFSET + 0x100,
-	.map_io		= mx1_map_io,
-	.init_irq	= mx1_init_irq,
-	.timer		= &mx1ads_timer,
-	.init_machine	= mx1ads_init,
+	.atag_offset = 0x100,
+	.map_io = mx1_map_io,
+	.init_early = imx1_init_early,
+	.init_irq = mx1_init_irq,
+	.handle_irq = imx1_handle_irq,
+	.timer = &mx1ads_timer,
+	.init_machine = mx1ads_init,
+	.restart	= mxc_restart,
 MACHINE_END

@@ -28,9 +28,10 @@
 #include <linux/key.h>
 #include <linux/slab.h>
 #include <linux/seq_file.h>
-#include <linux/smp_lock.h>
 #include <linux/file.h>
 #include <linux/crypto.h>
+#include <linux/statfs.h>
+#include <linux/magic.h>
 #include "ecryptfs_kernel.h"
 
 struct kmem_cache *ecryptfs_inode_info_cache;
@@ -57,10 +58,20 @@ static struct inode *ecryptfs_alloc_inode(struct super_block *sb)
 		goto out;
 	ecryptfs_init_crypt_stat(&inode_info->crypt_stat);
 	mutex_init(&inode_info->lower_file_mutex);
+	atomic_set(&inode_info->lower_file_count, 0);
 	inode_info->lower_file = NULL;
 	inode = &inode_info->vfs_inode;
 out:
 	return inode;
+}
+
+static void ecryptfs_i_callback(struct rcu_head *head)
+{
+	struct inode *inode = container_of(head, struct inode, i_rcu);
+	struct ecryptfs_inode_info *inode_info;
+	inode_info = ecryptfs_inode_to_private(inode);
+
+	kmem_cache_free(ecryptfs_inode_info_cache, inode_info);
 }
 
 /**
@@ -69,8 +80,7 @@ out:
  *
  * This is used during the final destruction of the inode.  All
  * allocation of memory related to the inode, including allocated
- * memory in the crypt_stat struct, will be released here. This
- * function also fput()'s the persistent file for the lower inode.
+ * memory in the crypt_stat struct, will be released here.
  * There should be no chance that this deallocation will be missed.
  */
 static void ecryptfs_destroy_inode(struct inode *inode)
@@ -78,34 +88,9 @@ static void ecryptfs_destroy_inode(struct inode *inode)
 	struct ecryptfs_inode_info *inode_info;
 
 	inode_info = ecryptfs_inode_to_private(inode);
-	if (inode_info->lower_file) {
-		struct dentry *lower_dentry =
-			inode_info->lower_file->f_dentry;
-
-		BUG_ON(!lower_dentry);
-		if (lower_dentry->d_inode) {
-			fput(inode_info->lower_file);
-			inode_info->lower_file = NULL;
-		}
-	}
+	BUG_ON(inode_info->lower_file);
 	ecryptfs_destroy_crypt_stat(&inode_info->crypt_stat);
-	kmem_cache_free(ecryptfs_inode_info_cache, inode_info);
-}
-
-/**
- * ecryptfs_init_inode
- * @inode: The ecryptfs inode
- *
- * Set up the ecryptfs inode.
- */
-void ecryptfs_init_inode(struct inode *inode, struct inode *lower_inode)
-{
-	ecryptfs_set_inode_lower(inode, lower_inode);
-	inode->i_ino = lower_inode->i_ino;
-	inode->i_version++;
-	inode->i_op = &ecryptfs_main_iops;
-	inode->i_fop = &ecryptfs_main_fops;
-	inode->i_mapping->a_ops = &ecryptfs_aops;
+	call_rcu(&inode->i_rcu, ecryptfs_i_callback);
 }
 
 /**
@@ -119,10 +104,20 @@ void ecryptfs_init_inode(struct inode *inode, struct inode *lower_inode)
 static int ecryptfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
 	struct dentry *lower_dentry = ecryptfs_dentry_to_lower(dentry);
+	int rc;
 
 	if (!lower_dentry->d_sb->s_op->statfs)
 		return -ENOSYS;
-	return lower_dentry->d_sb->s_op->statfs(lower_dentry, buf);
+
+	rc = lower_dentry->d_sb->s_op->statfs(lower_dentry, buf);
+	if (rc)
+		return rc;
+
+	buf->f_type = ECRYPTFS_SUPER_MAGIC;
+	rc = ecryptfs_set_f_namelen(&buf->f_namelen, buf->f_namelen,
+	       &ecryptfs_superblock_to_private(dentry->d_sb)->mount_crypt_stat);
+
+	return rc;
 }
 
 /**
@@ -148,9 +143,9 @@ static void ecryptfs_evict_inode(struct inode *inode)
  * Prints the mount options for a given superblock.
  * Returns zero; does not fail.
  */
-static int ecryptfs_show_options(struct seq_file *m, struct vfsmount *mnt)
+static int ecryptfs_show_options(struct seq_file *m, struct dentry *root)
 {
-	struct super_block *sb = mnt->mnt_sb;
+	struct super_block *sb = root->d_sb;
 	struct ecryptfs_mount_crypt_stat *mount_crypt_stat =
 		&ecryptfs_superblock_to_private(sb)->mount_crypt_stat;
 	struct ecryptfs_global_auth_tok *walker;
@@ -180,6 +175,8 @@ static int ecryptfs_show_options(struct seq_file *m, struct vfsmount *mnt)
 		seq_printf(m, ",ecryptfs_encrypted_view");
 	if (mount_crypt_stat->flags & ECRYPTFS_UNLINK_SIGS)
 		seq_printf(m, ",ecryptfs_unlink_sigs");
+	if (mount_crypt_stat->flags & ECRYPTFS_GLOBAL_MOUNT_AUTH_TOK_ONLY)
+		seq_printf(m, ",ecryptfs_mount_auth_tok_only");
 
 	return 0;
 }
@@ -187,7 +184,6 @@ static int ecryptfs_show_options(struct seq_file *m, struct vfsmount *mnt)
 const struct super_operations ecryptfs_sops = {
 	.alloc_inode = ecryptfs_alloc_inode,
 	.destroy_inode = ecryptfs_destroy_inode,
-	.drop_inode = generic_delete_inode,
 	.statfs = ecryptfs_statfs,
 	.remount_fs = NULL,
 	.evict_inode = ecryptfs_evict_inode,

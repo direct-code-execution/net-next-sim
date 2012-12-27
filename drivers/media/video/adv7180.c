@@ -22,7 +22,6 @@
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
 #include <linux/i2c.h>
-#include <linux/i2c-id.h>
 #include <linux/slab.h>
 #include <media/v4l2-ioctl.h>
 #include <linux/videodev2.h>
@@ -445,20 +444,8 @@ static struct i2c_driver adv7180_driver = {
 	.id_table	= adv7180_id,
 };
 
-static __init int adv7180_init(void)
-{
-	return i2c_add_driver(&adv7180_driver);
-}
-
-static __exit void adv7180_exit(void)
-{
-	i2c_del_driver(&adv7180_driver);
-}
-
-module_init(adv7180_init);
-module_exit(adv7180_exit);
+module_i2c_driver(adv7180_driver);
 
 MODULE_DESCRIPTION("Analog Devices ADV7180 video decoder driver");
 MODULE_AUTHOR("Mocean Laboratories");
 MODULE_LICENSE("GPL v2");
-

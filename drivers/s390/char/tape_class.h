@@ -14,8 +14,6 @@
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/major.h>
-#include <linux/kobject.h>
-#include <linux/kobj_map.h>
 #include <linux/cdev.h>
 
 #include <linux/device.h>

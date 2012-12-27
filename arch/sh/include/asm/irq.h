@@ -9,7 +9,7 @@
  * advised to cap this at the hard limit that they're interested in
  * through the machvec.
  */
-#define NR_IRQS			256
+#define NR_IRQS			512
 #define NR_IRQS_LEGACY		8	/* Legacy external IRQ0-7 */
 
 /*
@@ -19,17 +19,6 @@
  * are woken up and signalled in parallel.
  */
 #define NO_IRQ_IGNORE		((unsigned int)-1)
-
-/*
- * Convert back and forth between INTEVT and IRQ values.
- */
-#ifdef CONFIG_CPU_HAS_INTEVT
-#define evt2irq(evt)		(((evt) >> 5) - 16)
-#define irq2evt(irq)		(((irq) + 16) << 5)
-#else
-#define evt2irq(evt)		(evt)
-#define irq2evt(irq)		(irq)
-#endif
 
 /*
  * Simple Mask Register Support

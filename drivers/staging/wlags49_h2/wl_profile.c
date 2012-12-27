@@ -23,7 +23,7 @@
  * software indicates your acceptance of these terms and conditions.  If you do
  * not agree with these terms and conditions, do not use the software.
  *
- * Copyright © 2003 Agere Systems Inc.
+ * Copyright Â© 2003 Agere Systems Inc.
  * All rights reserved.
  *
  * Redistribution and use in source or binary forms, with or without
@@ -44,7 +44,7 @@
  *
  * Disclaimer
  *
- * THIS SOFTWARE IS PROVIDED “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES,
+ * THIS SOFTWARE IS PROVIDED Â“AS ISÂ” AND ANY EXPRESS OR IMPLIED WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, INFRINGEMENT AND THE IMPLIED WARRANTIES OF
  * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  ANY
  * USE, MODIFICATION OR DISTRIBUTION OF THIS SOFTWARE IS SOLELY AT THE USERS OWN
@@ -248,7 +248,7 @@ void parse_config(struct net_device *dev)
 		} else {
 			DBG_TRACE(DbgInfo, "F/W image file found\n");
 #define DHF_ALLOC_SIZE 96000			/* just below 96K, let's hope it suffices for now and for the future */
-			cp = (char *)vmalloc(DHF_ALLOC_SIZE);
+			cp = vmalloc(DHF_ALLOC_SIZE);
 			if (cp == NULL) {
 				DBG_ERROR(DbgInfo, "error in vmalloc\n");
 			} else {

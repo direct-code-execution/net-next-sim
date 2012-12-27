@@ -79,7 +79,7 @@ static int __init ss4200_led_dmi_callback(const struct dmi_system_id *id)
 	return 1;
 }
 
-static unsigned int __initdata nodetect;
+static bool __initdata nodetect;
 module_param_named(nodetect, nodetect, bool, 0);
 MODULE_PARM_DESC(nodetect, "Skip DMI-based hardware detection");
 
@@ -102,6 +102,7 @@ static struct dmi_system_id __initdata nas_led_whitelist[] = {
 			DMI_MATCH(DMI_PRODUCT_VERSION, "1.00.00")
 		}
 	},
+	{}
 };
 
 /*

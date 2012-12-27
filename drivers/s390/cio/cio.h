@@ -68,8 +68,13 @@ struct schib {
 	__u8 mda[4];		 /* model dependent area */
 } __attribute__ ((packed,aligned(4)));
 
+/*
+ * When rescheduled, todo's with higher values will overwrite those
+ * with lower values.
+ */
 enum sch_todo {
 	SCH_TODO_NOTHING,
+	SCH_TODO_EVAL,
 	SCH_TODO_UNREG,
 };
 
@@ -84,13 +89,6 @@ struct subchannel {
 		SUBCHANNEL_TYPE_MSG = 2,
 		SUBCHANNEL_TYPE_ADM = 3,
 	} st;			/* subchannel type */
-
-	struct {
-		unsigned int suspend:1; /* allow suspend */
-		unsigned int prefetch:1;/* deny prefetch */
-		unsigned int inter:1;   /* suppress intermediate interrupts */
-	} __attribute__ ((packed)) options;
-
 	__u8 vpm;		/* verified path mask */
 	__u8 lpm;		/* logical path mask */
 	__u8 opm;               /* operational path mask */
@@ -99,13 +97,10 @@ struct subchannel {
 	struct chsc_ssd_info ssd_info;	/* subchannel description */
 	struct device dev;	/* entry in device tree */
 	struct css_driver *driver;
-	void *private; /* private per subchannel type data */
 	enum sch_todo todo;
 	struct work_struct todo_work;
 	struct schib_config config;
 } __attribute__ ((aligned(8)));
-
-#define IO_INTERRUPT_TYPE	   0 /* I/O interrupt type */
 
 #define to_subchannel(n) container_of(n, struct subchannel, dev)
 
@@ -120,7 +115,6 @@ extern int cio_start (struct subchannel *, struct ccw1 *, __u8);
 extern int cio_start_key (struct subchannel *, struct ccw1 *, __u8, __u8);
 extern int cio_cancel (struct subchannel *);
 extern int cio_set_options (struct subchannel *, int);
-extern int cio_get_options (struct subchannel *);
 extern int cio_update_schib(struct subchannel *sch);
 extern int cio_commit_config(struct subchannel *sch);
 

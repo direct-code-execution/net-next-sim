@@ -22,26 +22,7 @@
 #include <linux/ethtool.h>
 #include <linux/phy.h>
 #include <linux/netdevice.h>
-
-#define MII_LAN83C185_ISF 29 /* Interrupt Source Flags */
-#define MII_LAN83C185_IM  30 /* Interrupt Mask */
-#define MII_LAN83C185_CTRL_STATUS 17 /* Mode/Status Register */
-
-#define MII_LAN83C185_ISF_INT1 (1<<1) /* Auto-Negotiation Page Received */
-#define MII_LAN83C185_ISF_INT2 (1<<2) /* Parallel Detection Fault */
-#define MII_LAN83C185_ISF_INT3 (1<<3) /* Auto-Negotiation LP Ack */
-#define MII_LAN83C185_ISF_INT4 (1<<4) /* Link Down */
-#define MII_LAN83C185_ISF_INT5 (1<<5) /* Remote Fault Detected */
-#define MII_LAN83C185_ISF_INT6 (1<<6) /* Auto-Negotiation complete */
-#define MII_LAN83C185_ISF_INT7 (1<<7) /* ENERGYON */
-
-#define MII_LAN83C185_ISF_INT_ALL (0x0e)
-
-#define MII_LAN83C185_ISF_INT_PHYLIB_EVENTS \
-	(MII_LAN83C185_ISF_INT6 | MII_LAN83C185_ISF_INT4 | \
-	 MII_LAN83C185_ISF_INT7)
-
-#define MII_LAN83C185_EDPWRDOWN	(1 << 13) /* EDPWRDOWN */
+#include <linux/smscphy.h>
 
 static int smsc_phy_config_intr(struct phy_device *phydev)
 {
@@ -254,7 +235,7 @@ MODULE_LICENSE("GPL");
 module_init(smsc_init);
 module_exit(smsc_exit);
 
-static struct mdio_device_id smsc_tbl[] = {
+static struct mdio_device_id __maybe_unused smsc_tbl[] = {
 	{ 0x0007c0a0, 0xfffffff0 },
 	{ 0x0007c0b0, 0xfffffff0 },
 	{ 0x0007c0c0, 0xfffffff0 },

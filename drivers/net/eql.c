@@ -111,6 +111,8 @@
  * Sorry, I had to rewrite most of this for 2.5.x -DaveM
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/capability.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -123,6 +125,7 @@
 #include <linux/if.h>
 #include <linux/if_arp.h>
 #include <linux/if_eql.h>
+#include <linux/pkt_sched.h>
 
 #include <asm/uaccess.h>
 
@@ -141,7 +144,7 @@ static void eql_timer(unsigned long param)
 	equalizer_t *eql = (equalizer_t *) param;
 	struct list_head *this, *tmp, *head;
 
-	spin_lock_bh(&eql->queue.lock);
+	spin_lock(&eql->queue.lock);
 	head = &eql->queue.all_slaves;
 	list_for_each_safe(this, tmp, head) {
 		slave_t *slave = list_entry(this, slave_t, list);
@@ -155,14 +158,14 @@ static void eql_timer(unsigned long param)
 		}
 
 	}
-	spin_unlock_bh(&eql->queue.lock);
+	spin_unlock(&eql->queue.lock);
 
 	eql->timer.expires = jiffies + EQL_DEFAULT_RESCHED_IVAL;
 	add_timer(&eql->timer);
 }
 
 static const char version[] __initconst =
-	"Equalizer2002: Simon Janes (simon@ncm.com) and David S. Miller (davem@redhat.com)\n";
+	"Equalizer2002: Simon Janes (simon@ncm.com) and David S. Miller (davem@redhat.com)";
 
 static const struct net_device_ops eql_netdev_ops = {
 	.ndo_open	= eql_open,
@@ -204,8 +207,8 @@ static int eql_open(struct net_device *dev)
 	equalizer_t *eql = netdev_priv(dev);
 
 	/* XXX We should force this off automatically for the user. */
-	printk(KERN_INFO "%s: remember to turn off Van-Jacobson compression on "
-	       "your slave devices.\n", dev->name);
+	netdev_info(dev,
+		    "remember to turn off Van-Jacobson compression on your slave devices\n");
 
 	BUG_ON(!list_empty(&eql->queue.all_slaves));
 
@@ -339,7 +342,7 @@ static netdev_tx_t eql_slave_xmit(struct sk_buff *skb, struct net_device *dev)
 		struct net_device *slave_dev = slave->dev;
 
 		skb->dev = slave_dev;
-		skb->priority = 1;
+		skb->priority = TC_PRIO_FILLER;
 		slave->bytes_queued += skb->len;
 		dev_queue_xmit(skb);
 		dev->stats.tx_packets++;
@@ -591,7 +594,7 @@ static int __init eql_init_module(void)
 {
 	int err;
 
-	printk(version);
+	pr_info("%s\n", version);
 
 	dev_eql = alloc_netdev(sizeof(equalizer_t), "eql", eql_setup);
 	if (!dev_eql)

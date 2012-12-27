@@ -68,6 +68,11 @@ static struct platform_device *devices[] __initdata = {
 
 extern struct sys_timer msm_timer;
 
+static void __init halibut_init_early(void)
+{
+	arch_ioremap_caller = __msm_ioremap_caller;
+}
+
 static void __init halibut_init_irq(void)
 {
 	msm_init_irq();
@@ -78,13 +83,9 @@ static void __init halibut_init(void)
 	platform_add_devices(devices, ARRAY_SIZE(devices));
 }
 
-static void __init halibut_fixup(struct machine_desc *desc, struct tag *tags,
-				 char **cmdline, struct meminfo *mi)
+static void __init halibut_fixup(struct tag *tags, char **cmdline,
+				 struct meminfo *mi)
 {
-	mi->nr_banks=1;
-	mi->bank[0].start = PHYS_OFFSET;
-	mi->bank[0].node = PHYS_TO_NID(PHYS_OFFSET);
-	mi->bank[0].size = (101*1024*1024);
 }
 
 static void __init halibut_map_io(void)
@@ -94,13 +95,10 @@ static void __init halibut_map_io(void)
 }
 
 MACHINE_START(HALIBUT, "Halibut Board (QCT SURF7200A)")
-#ifdef CONFIG_MSM_DEBUG_UART
-	.phys_io        = MSM_DEBUG_UART_PHYS,
-	.io_pg_offst    = ((MSM_DEBUG_UART_BASE) >> 18) & 0xfffc,
-#endif
-	.boot_params	= 0x10000100,
+	.atag_offset	= 0x100,
 	.fixup		= halibut_fixup,
 	.map_io		= halibut_map_io,
+	.init_early	= halibut_init_early,
 	.init_irq	= halibut_init_irq,
 	.init_machine	= halibut_init,
 	.timer		= &msm_timer,

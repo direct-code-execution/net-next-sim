@@ -32,6 +32,8 @@
 #include <linux/pagemap.h>
 #include <linux/memblock.h>
 #include <linux/gfp.h>
+#include <linux/slab.h>
+#include <linux/hugetlb.h>
 
 #include <asm/pgalloc.h>
 #include <asm/prom.h>
@@ -43,7 +45,7 @@
 #include <asm/btext.h>
 #include <asm/tlb.h>
 #include <asm/sections.h>
-#include <asm/system.h>
+#include <asm/hugetlb.h>
 
 #include "mmu_decl.h"
 
@@ -62,6 +64,13 @@ phys_addr_t memstart_addr = (phys_addr_t)~0ull;
 EXPORT_SYMBOL(memstart_addr);
 phys_addr_t kernstart_addr;
 EXPORT_SYMBOL(kernstart_addr);
+
+#ifdef CONFIG_RELOCATABLE_PPC32
+/* Used in __va()/__pa() */
+long long virt_phys_offset;
+EXPORT_SYMBOL(virt_phys_offset);
+#endif
+
 phys_addr_t lowmem_end_addr;
 
 int boot_mapsize;
@@ -92,12 +101,6 @@ int __allow_ioremap_reserved;
 unsigned long __max_low_memory = MAX_LOW_MEM;
 
 /*
- * address of the limit of what is accessible with initial MMU setup -
- * 256MB usually, but only 16MB on 601.
- */
-phys_addr_t __initial_memory_limit_addr = (phys_addr_t)0x10000000;
-
-/*
  * Check for command-line options that affect what MMU_init will do.
  */
 void MMU_setup(void)
@@ -126,20 +129,18 @@ void __init MMU_init(void)
 	if (ppc_md.progress)
 		ppc_md.progress("MMU:enter", 0x111);
 
-	/* 601 can only access 16MB at the moment */
-	if (PVR_VER(mfspr(SPRN_PVR)) == 1)
-		__initial_memory_limit_addr = 0x01000000;
-	/* 8xx can only access 8MB at the moment */
-	if (PVR_VER(mfspr(SPRN_PVR)) == 0x50)
-		__initial_memory_limit_addr = 0x00800000;
-
 	/* parse args from command line */
 	MMU_setup();
 
+	/*
+	 * Reserve gigantic pages for hugetlb.  This MUST occur before
+	 * lowmem_end_addr is initialized below.
+	 */
+	reserve_hugetlb_gpages();
+
 	if (memblock.memory.cnt > 1) {
 #ifndef CONFIG_WII
-		memblock.memory.cnt = 1;
-		memblock_analyze();
+		memblock_enforce_memory_limit(memblock.memory.regions[0].size);
 		printk(KERN_WARNING "Only using first contiguous memory region");
 #else
 		wii_memory_fixups();
@@ -161,8 +162,7 @@ void __init MMU_init(void)
 		lowmem_end_addr = memstart_addr + total_lowmem;
 #ifndef CONFIG_HIGHMEM
 		total_memory = total_lowmem;
-		memblock_enforce_memory_limit(lowmem_end_addr);
-		memblock_analyze();
+		memblock_enforce_memory_limit(total_lowmem);
 #endif /* CONFIG_HIGHMEM */
 	}
 
@@ -190,65 +190,30 @@ void __init MMU_init(void)
 #ifdef CONFIG_BOOTX_TEXT
 	btext_unmap();
 #endif
+
+	/* Shortly after that, the entire linear mapping will be available */
+	memblock_set_current_limit(lowmem_end_addr);
 }
 
 /* This is only called until mem_init is done. */
 void __init *early_get_page(void)
 {
-	void *p;
-
-	if (init_bootmem_done) {
-		p = alloc_bootmem_pages(PAGE_SIZE);
-	} else {
-		p = __va(memblock_alloc_base(PAGE_SIZE, PAGE_SIZE,
-					__initial_memory_limit_addr));
-	}
-	return p;
+	if (init_bootmem_done)
+		return alloc_bootmem_pages(PAGE_SIZE);
+	else
+		return __va(memblock_alloc(PAGE_SIZE, PAGE_SIZE));
 }
 
-/* Free up now-unused memory */
-static void free_sec(unsigned long start, unsigned long end, const char *name)
+#ifdef CONFIG_8xx /* No 8xx specific .c file to put that in ... */
+void setup_initial_memory_limit(phys_addr_t first_memblock_base,
+				phys_addr_t first_memblock_size)
 {
-	unsigned long cnt = 0;
+	/* We don't currently support the first MEMBLOCK not mapping 0
+	 * physical on those processors
+	 */
+	BUG_ON(first_memblock_base != 0);
 
-	while (start < end) {
-		ClearPageReserved(virt_to_page(start));
-		init_page_count(virt_to_page(start));
-		free_page(start);
-		cnt++;
-		start += PAGE_SIZE;
- 	}
-	if (cnt) {
-		printk(" %ldk %s", cnt << (PAGE_SHIFT - 10), name);
-		totalram_pages += cnt;
-	}
+	/* 8xx can only access 8MB at the moment */
+	memblock_set_current_limit(min_t(u64, first_memblock_size, 0x00800000));
 }
-
-void free_initmem(void)
-{
-#define FREESEC(TYPE) \
-	free_sec((unsigned long)(&__ ## TYPE ## _begin), \
-		 (unsigned long)(&__ ## TYPE ## _end), \
-		 #TYPE);
-
-	printk ("Freeing unused kernel memory:");
-	FREESEC(init);
- 	printk("\n");
-	ppc_md.progress = NULL;
-#undef FREESEC
-}
-
-#ifdef CONFIG_BLK_DEV_INITRD
-void free_initrd_mem(unsigned long start, unsigned long end)
-{
-	if (start < end)
-		printk ("Freeing initrd memory: %ldk freed\n", (end - start) >> 10);
-	for (; start < end; start += PAGE_SIZE) {
-		ClearPageReserved(virt_to_page(start));
-		init_page_count(virt_to_page(start));
-		free_page(start);
-		totalram_pages++;
-	}
-}
-#endif
-
+#endif /* CONFIG_8xx */

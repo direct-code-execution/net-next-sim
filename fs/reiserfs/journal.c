@@ -1,7 +1,7 @@
 /*
 ** Write ahead logging implementation copyright Chris Mason 2000
 **
-** The background commits make this code very interelated, and
+** The background commits make this code very interrelated, and
 ** overly complex.  I need to rethink things a bit....The major players:
 **
 ** journal_begin -- call with the number of blocks you expect to log.
@@ -37,13 +37,12 @@
 #include <linux/time.h>
 #include <linux/semaphore.h>
 #include <linux/vmalloc.h>
-#include <linux/reiserfs_fs.h>
+#include "reiserfs.h"
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/fcntl.h>
 #include <linux/stat.h>
 #include <linux/string.h>
-#include <linux/smp_lock.h>
 #include <linux/buffer_head.h>
 #include <linux/workqueue.h>
 #include <linux/writeback.h>
@@ -52,7 +51,6 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 
-#include <asm/system.h>
 
 /* gets a struct reiserfs_journal_list * from a list head */
 #define JOURNAL_LIST_ENTRY(h) (list_entry((h), struct reiserfs_journal_list, \
@@ -136,13 +134,6 @@ static int reiserfs_clean_and_file_buffer(struct buffer_head *bh)
 		clear_buffer_journal_test(bh);
 	}
 	return 0;
-}
-
-static void disable_barrier(struct super_block *s)
-{
-	REISERFS_SB(s)->s_mount_opt &= ~(1 << REISERFS_BARRIER_FLUSH);
-	printk("reiserfs: disabling flush barriers on %s\n",
-	       reiserfs_bdevname(s));
 }
 
 static struct reiserfs_bitmap_node *allocate_bitmap_node(struct super_block
@@ -299,14 +290,13 @@ int reiserfs_allocate_list_bitmaps(struct super_block *sb,
 	for (i = 0; i < JOURNAL_NUM_BITMAPS; i++) {
 		jb = jb_array + i;
 		jb->journal_list = NULL;
-		jb->bitmaps = vmalloc(mem);
+		jb->bitmaps = vzalloc(mem);
 		if (!jb->bitmaps) {
 			reiserfs_warning(sb, "clm-2000", "unable to "
 					 "allocate bitmaps for journal lists");
 			failed = 1;
 			break;
 		}
-		memset(jb->bitmaps, 0, mem);
 	}
 	if (failed) {
 		free_list_bitmaps(sb, jb_array);
@@ -361,11 +351,10 @@ static struct reiserfs_journal_cnode *allocate_cnodes(int num_cnodes)
 	if (num_cnodes <= 0) {
 		return NULL;
 	}
-	head = vmalloc(num_cnodes * sizeof(struct reiserfs_journal_cnode));
+	head = vzalloc(num_cnodes * sizeof(struct reiserfs_journal_cnode));
 	if (!head) {
 		return NULL;
 	}
-	memset(head, 0, num_cnodes * sizeof(struct reiserfs_journal_cnode));
 	head[0].prev = NULL;
 	head[0].next = head + 1;
 	for (i = 1; i < num_cnodes; i++) {
@@ -677,30 +666,6 @@ static void submit_ordered_buffer(struct buffer_head *bh)
 	submit_bh(WRITE, bh);
 }
 
-static int submit_barrier_buffer(struct buffer_head *bh)
-{
-	get_bh(bh);
-	bh->b_end_io = reiserfs_end_ordered_io;
-	clear_buffer_dirty(bh);
-	if (!buffer_uptodate(bh))
-		BUG();
-	return submit_bh(WRITE_BARRIER, bh);
-}
-
-static void check_barrier_completion(struct super_block *s,
-				     struct buffer_head *bh)
-{
-	if (buffer_eopnotsupp(bh)) {
-		clear_buffer_eopnotsupp(bh);
-		disable_barrier(s);
-		set_buffer_uptodate(bh);
-		set_buffer_dirty(bh);
-		reiserfs_write_unlock(s);
-		sync_dirty_buffer(bh);
-		reiserfs_write_lock(s);
-	}
-}
-
 #define CHUNK_SIZE 32
 struct buffer_chunk {
 	struct buffer_head *bh[CHUNK_SIZE];
@@ -710,23 +675,19 @@ struct buffer_chunk {
 static void write_chunk(struct buffer_chunk *chunk)
 {
 	int i;
-	get_fs_excl();
 	for (i = 0; i < chunk->nr; i++) {
 		submit_logged_buffer(chunk->bh[i]);
 	}
 	chunk->nr = 0;
-	put_fs_excl();
 }
 
 static void write_ordered_chunk(struct buffer_chunk *chunk)
 {
 	int i;
-	get_fs_excl();
 	for (i = 0; i < chunk->nr; i++) {
 		submit_ordered_buffer(chunk->bh[i]);
 	}
 	chunk->nr = 0;
-	put_fs_excl();
 }
 
 static int add_to_chunk(struct buffer_chunk *chunk, struct buffer_head *bh,
@@ -1009,7 +970,6 @@ static int flush_commit_list(struct super_block *s,
 	struct buffer_head *tbh = NULL;
 	unsigned int trans_id = jl->j_trans_id;
 	struct reiserfs_journal *journal = SB_JOURNAL(s);
-	int barrier = 0;
 	int retval = 0;
 	int write_len;
 
@@ -1018,8 +978,6 @@ static int flush_commit_list(struct super_block *s,
 	if (atomic_read(&jl->j_older_commits_done)) {
 		return 0;
 	}
-
-	get_fs_excl();
 
 	/* before we can put our commit blocks on disk, we have to make sure everyone older than
 	 ** us is on disk too
@@ -1094,24 +1052,6 @@ static int flush_commit_list(struct super_block *s,
 	}
 	atomic_dec(&journal->j_async_throttle);
 
-	/* We're skipping the commit if there's an error */
-	if (retval || reiserfs_is_journal_aborted(journal))
-		barrier = 0;
-
-	/* wait on everything written so far before writing the commit
-	 * if we are in barrier mode, send the commit down now
-	 */
-	barrier = reiserfs_barrier_flush(s);
-	if (barrier) {
-		int ret;
-		lock_buffer(jl->j_commit_bh);
-		ret = submit_barrier_buffer(jl->j_commit_bh);
-		if (ret == -EOPNOTSUPP) {
-			set_buffer_uptodate(jl->j_commit_bh);
-			disable_barrier(s);
-			barrier = 0;
-		}
-	}
 	for (i = 0; i < (jl->j_len + 1); i++) {
 		bn = SB_ONDISK_JOURNAL_1st_BLOCK(s) +
 		    (jl->j_start + i) % SB_ONDISK_JOURNAL_SIZE(s);
@@ -1143,26 +1083,21 @@ static int flush_commit_list(struct super_block *s,
 
 	BUG_ON(atomic_read(&(jl->j_commit_left)) != 1);
 
-	if (!barrier) {
-		/* If there was a write error in the journal - we can't commit
-		 * this transaction - it will be invalid and, if successful,
-		 * will just end up propagating the write error out to
-		 * the file system. */
-		if (likely(!retval && !reiserfs_is_journal_aborted (journal))) {
-			if (buffer_dirty(jl->j_commit_bh))
-				BUG();
-			mark_buffer_dirty(jl->j_commit_bh) ;
-			reiserfs_write_unlock(s);
-			sync_dirty_buffer(jl->j_commit_bh) ;
-			reiserfs_write_lock(s);
-		}
-	} else {
+	/* If there was a write error in the journal - we can't commit
+	 * this transaction - it will be invalid and, if successful,
+	 * will just end up propagating the write error out to
+	 * the file system. */
+	if (likely(!retval && !reiserfs_is_journal_aborted (journal))) {
+		if (buffer_dirty(jl->j_commit_bh))
+			BUG();
+		mark_buffer_dirty(jl->j_commit_bh) ;
 		reiserfs_write_unlock(s);
-		wait_on_buffer(jl->j_commit_bh);
+		if (reiserfs_barrier_flush(s))
+			__sync_dirty_buffer(jl->j_commit_bh, WRITE_FLUSH_FUA);
+		else
+			sync_dirty_buffer(jl->j_commit_bh);
 		reiserfs_write_lock(s);
 	}
-
-	check_barrier_completion(s, jl->j_commit_bh);
 
 	/* If there was a write error in the journal - we can't commit this
 	 * transaction - it will be invalid and, if successful, will just end
@@ -1201,7 +1136,6 @@ static int flush_commit_list(struct super_block *s,
 	if (retval)
 		reiserfs_abort(s, retval, "Journal write error in %s",
 			       __func__);
-	put_fs_excl();
 	return retval;
 }
 
@@ -1319,26 +1253,15 @@ static int _update_journal_header_block(struct super_block *sb,
 		jh->j_first_unflushed_offset = cpu_to_le32(offset);
 		jh->j_mount_id = cpu_to_le32(journal->j_mount_id);
 
-		if (reiserfs_barrier_flush(sb)) {
-			int ret;
-			lock_buffer(journal->j_header_bh);
-			ret = submit_barrier_buffer(journal->j_header_bh);
-			if (ret == -EOPNOTSUPP) {
-				set_buffer_uptodate(journal->j_header_bh);
-				disable_barrier(sb);
-				goto sync;
-			}
-			reiserfs_write_unlock(sb);
-			wait_on_buffer(journal->j_header_bh);
-			reiserfs_write_lock(sb);
-			check_barrier_completion(sb, journal->j_header_bh);
-		} else {
-		      sync:
-			set_buffer_dirty(journal->j_header_bh);
-			reiserfs_write_unlock(sb);
+		set_buffer_dirty(journal->j_header_bh);
+		reiserfs_write_unlock(sb);
+
+		if (reiserfs_barrier_flush(sb))
+			__sync_dirty_buffer(journal->j_header_bh, WRITE_FLUSH_FUA);
+		else
 			sync_dirty_buffer(journal->j_header_bh);
-			reiserfs_write_lock(sb);
-		}
+
+		reiserfs_write_lock(sb);
 		if (!buffer_uptodate(journal->j_header_bh)) {
 			reiserfs_warning(sb, "journal-837",
 					 "IO error during journal replay");
@@ -1440,8 +1363,6 @@ static int flush_journal_list(struct super_block *s,
 			       j_len_saved, jl->j_trans_id);
 		return 0;
 	}
-
-	get_fs_excl();
 
 	/* if all the work is already done, get out of here */
 	if (atomic_read(&(jl->j_nonzerolen)) <= 0 &&
@@ -1664,7 +1585,6 @@ static int flush_journal_list(struct super_block *s,
 	put_journal_list(s, jl);
 	if (flushall)
 		mutex_unlock(&journal->j_flush_mutex);
-	put_fs_excl();
 	return err;
 }
 
@@ -2618,8 +2538,6 @@ static int release_journal_dev(struct super_block *super,
 	result = 0;
 
 	if (journal->j_dev_bd != NULL) {
-		if (journal->j_dev_bd->bd_dev != super->s_dev)
-			bd_release(journal->j_dev_bd);
 		result = blkdev_put(journal->j_dev_bd, journal->j_dev_mode);
 		journal->j_dev_bd = NULL;
 	}
@@ -2637,7 +2555,7 @@ static int journal_init_dev(struct super_block *super,
 {
 	int result;
 	dev_t jdev;
-	fmode_t blkdev_mode = FMODE_READ | FMODE_WRITE;
+	fmode_t blkdev_mode = FMODE_READ | FMODE_WRITE | FMODE_EXCL;
 	char b[BDEVNAME_SIZE];
 
 	result = 0;
@@ -2651,7 +2569,10 @@ static int journal_init_dev(struct super_block *super,
 
 	/* there is no "jdev" option and journal is on separate device */
 	if ((!jdev_name || !jdev_name[0])) {
-		journal->j_dev_bd = open_by_devnum(jdev, blkdev_mode);
+		if (jdev == super->s_dev)
+			blkdev_mode &= ~FMODE_EXCL;
+		journal->j_dev_bd = blkdev_get_by_dev(jdev, blkdev_mode,
+						      journal);
 		journal->j_dev_mode = blkdev_mode;
 		if (IS_ERR(journal->j_dev_bd)) {
 			result = PTR_ERR(journal->j_dev_bd);
@@ -2660,22 +2581,14 @@ static int journal_init_dev(struct super_block *super,
 					 "cannot init journal device '%s': %i",
 					 __bdevname(jdev, b), result);
 			return result;
-		} else if (jdev != super->s_dev) {
-			result = bd_claim(journal->j_dev_bd, journal);
-			if (result) {
-				blkdev_put(journal->j_dev_bd, blkdev_mode);
-				return result;
-			}
-
+		} else if (jdev != super->s_dev)
 			set_blocksize(journal->j_dev_bd, super->s_blocksize);
-		}
 
 		return 0;
 	}
 
 	journal->j_dev_mode = blkdev_mode;
-	journal->j_dev_bd = open_bdev_exclusive(jdev_name,
-						blkdev_mode, journal);
+	journal->j_dev_bd = blkdev_get_by_path(jdev_name, blkdev_mode, journal);
 	if (IS_ERR(journal->j_dev_bd)) {
 		result = PTR_ERR(journal->j_dev_bd);
 		journal->j_dev_bd = NULL;
@@ -2764,28 +2677,19 @@ int journal_init(struct super_block *sb, const char *j_dev_name,
 	char b[BDEVNAME_SIZE];
 	int ret;
 
-	/*
-	 * Unlock here to avoid various RECLAIM-FS-ON <-> IN-RECLAIM-FS
-	 * dependency inversion warnings.
-	 */
-	reiserfs_write_unlock(sb);
-	journal = SB_JOURNAL(sb) = vmalloc(sizeof(struct reiserfs_journal));
+	journal = SB_JOURNAL(sb) = vzalloc(sizeof(struct reiserfs_journal));
 	if (!journal) {
 		reiserfs_warning(sb, "journal-1256",
 				 "unable to get memory for journal structure");
-		reiserfs_write_lock(sb);
 		return 1;
 	}
-	memset(journal, 0, sizeof(struct reiserfs_journal));
 	INIT_LIST_HEAD(&journal->j_bitmap_nodes);
 	INIT_LIST_HEAD(&journal->j_prealloc_list);
 	INIT_LIST_HEAD(&journal->j_working_list);
 	INIT_LIST_HEAD(&journal->j_journal_list);
 	journal->j_persistent_trans = 0;
-	ret = reiserfs_allocate_list_bitmaps(sb, journal->j_list_bitmap,
-					   reiserfs_bmap_count(sb));
-	reiserfs_write_lock(sb);
-	if (ret)
+	if (reiserfs_allocate_list_bitmaps(sb, journal->j_list_bitmap,
+					   reiserfs_bmap_count(sb)))
 		goto free_and_return;
 
 	allocate_bitmap_nodes(sb);
@@ -2799,7 +2703,7 @@ int journal_init(struct super_block *sb, const char *j_dev_name,
 						 REISERFS_DISK_OFFSET_IN_BYTES /
 						 sb->s_blocksize + 2);
 
-	/* Sanity check to see is the standard journal fitting withing first bitmap
+	/* Sanity check to see is the standard journal fitting within first bitmap
 	   (actual for small blocksizes) */
 	if (!SB_ONDISK_JOURNAL_DEVICE(sb) &&
 	    (SB_JOURNAL_1st_RESERVED_BLOCK(sb) +
@@ -2814,27 +2718,11 @@ int journal_init(struct super_block *sb, const char *j_dev_name,
 		goto free_and_return;
 	}
 
-	/*
-	 * We need to unlock here to avoid creating the following
-	 * dependency:
-	 * reiserfs_lock -> sysfs_mutex
-	 * Because the reiserfs mmap path creates the following dependency:
-	 * mm->mmap -> reiserfs_lock, hence we have
-	 * mm->mmap -> reiserfs_lock ->sysfs_mutex
-	 * This would ends up in a circular dependency with sysfs readdir path
-	 * which does sysfs_mutex -> mm->mmap_sem
-	 * This is fine because the reiserfs lock is useless in mount path,
-	 * at least until we call journal_begin. We keep it for paranoid
-	 * reasons.
-	 */
-	reiserfs_write_unlock(sb);
 	if (journal_init_dev(sb, journal, j_dev_name) != 0) {
-		reiserfs_write_lock(sb);
 		reiserfs_warning(sb, "sh-462",
 				 "unable to initialize jornal device");
 		goto free_and_return;
 	}
-	reiserfs_write_lock(sb);
 
 	rs = SB_DISK_SUPER_BLOCK(sb);
 
@@ -2916,9 +2804,7 @@ int journal_init(struct super_block *sb, const char *j_dev_name,
 	journal->j_mount_id = 10;
 	journal->j_state = 0;
 	atomic_set(&(journal->j_jlock), 0);
-	reiserfs_write_unlock(sb);
 	journal->j_cnode_free_list = allocate_cnodes(num_cnodes);
-	reiserfs_write_lock(sb);
 	journal->j_cnode_free_orig = journal->j_cnode_free_list;
 	journal->j_cnode_free = journal->j_cnode_free_list ? num_cnodes : 0;
 	journal->j_cnode_used = 0;
@@ -2935,24 +2821,37 @@ int journal_init(struct super_block *sb, const char *j_dev_name,
 
 	init_journal_hash(sb);
 	jl = journal->j_current_jl;
+
+	/*
+	 * get_list_bitmap() may call flush_commit_list() which
+	 * requires the lock. Calling flush_commit_list() shouldn't happen
+	 * this early but I like to be paranoid.
+	 */
+	reiserfs_write_lock(sb);
 	jl->j_list_bitmap = get_list_bitmap(sb, jl);
+	reiserfs_write_unlock(sb);
 	if (!jl->j_list_bitmap) {
 		reiserfs_warning(sb, "journal-2005",
 				 "get_list_bitmap failed for journal list 0");
 		goto free_and_return;
 	}
-	if (journal_read(sb) < 0) {
+
+	/*
+	 * Journal_read needs to be inspected in order to push down
+	 * the lock further inside (or even remove it).
+	 */
+	reiserfs_write_lock(sb);
+	ret = journal_read(sb);
+	reiserfs_write_unlock(sb);
+	if (ret < 0) {
 		reiserfs_warning(sb, "reiserfs-2006",
 				 "Replay Failure, unable to mount");
 		goto free_and_return;
 	}
 
 	reiserfs_mounted_fs_count++;
-	if (reiserfs_mounted_fs_count <= 1) {
-		reiserfs_write_unlock(sb);
-		commit_wq = create_workqueue("reiserfs");
-		reiserfs_write_lock(sb);
-	}
+	if (reiserfs_mounted_fs_count <= 1)
+		commit_wq = alloc_workqueue("reiserfs", WQ_MEM_RECLAIM, 0);
 
 	INIT_DELAYED_WORK(&journal->j_work, flush_async_commits);
 	journal->j_work_sb = sb;
@@ -2983,14 +2882,13 @@ int journal_transaction_should_end(struct reiserfs_transaction_handle *th,
 	    journal->j_cnode_free < (journal->j_trans_max * 3)) {
 		return 1;
 	}
-	/* protected by the BKL here */
+
 	journal->j_len_alloc += new_alloc;
 	th->t_blocks_allocated += new_alloc ;
 	return 0;
 }
 
-/* this must be called inside a transaction, and requires the
-** kernel_lock to be held
+/* this must be called inside a transaction
 */
 void reiserfs_block_writes(struct reiserfs_transaction_handle *th)
 {
@@ -3001,8 +2899,7 @@ void reiserfs_block_writes(struct reiserfs_transaction_handle *th)
 	return;
 }
 
-/* this must be called without a transaction started, and does not
-** require BKL
+/* this must be called without a transaction started
 */
 void reiserfs_allow_writes(struct super_block *s)
 {
@@ -3011,8 +2908,7 @@ void reiserfs_allow_writes(struct super_block *s)
 	wake_up(&journal->j_join_wait);
 }
 
-/* this must be called without a transaction started, and does not
-** require BKL
+/* this must be called without a transaction started
 */
 void reiserfs_wait_on_write_block(struct super_block *s)
 {
@@ -3182,7 +3078,6 @@ static int do_journal_begin_r(struct reiserfs_transaction_handle *th,
 	th->t_trans_id = journal->j_trans_id;
 	unlock_journal(sb);
 	INIT_LIST_HEAD(&th->t_list);
-	get_fs_excl();
 	return 0;
 
       out_fail:
@@ -4038,7 +3933,6 @@ static int do_journal_end(struct reiserfs_transaction_handle *th,
 	flush = flags & FLUSH_ALL;
 	wait_on_commit = flags & WAIT;
 
-	put_fs_excl();
 	current->journal_info = th->t_handle_save;
 	reiserfs_check_lock_depth(sb, "journal end");
 	if (journal->j_len == 0) {
@@ -4390,4 +4284,3 @@ void reiserfs_abort_journal(struct super_block *sb, int errno)
 	dump_stack();
 #endif
 }
-

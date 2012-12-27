@@ -53,15 +53,15 @@ void dccp_time_wait(struct sock *sk, int state, int timeo)
 	if (tw != NULL) {
 		const struct inet_connection_sock *icsk = inet_csk(sk);
 		const int rto = (icsk->icsk_rto << 2) - (icsk->icsk_rto >> 1);
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 		if (tw->tw_family == PF_INET6) {
 			const struct ipv6_pinfo *np = inet6_sk(sk);
 			struct inet6_timewait_sock *tw6;
 
 			tw->tw_ipv6_offset = inet6_tw_offset(sk->sk_prot);
 			tw6 = inet6_twsk((struct sock *)tw);
-			ipv6_addr_copy(&tw6->tw_v6_daddr, &np->daddr);
-			ipv6_addr_copy(&tw6->tw_v6_rcv_saddr, &np->rcv_saddr);
+			tw6->tw_v6_daddr = np->daddr;
+			tw6->tw_v6_rcv_saddr = np->rcv_saddr;
 			tw->tw_ipv6only = np->ipv6only;
 		}
 #endif
@@ -100,7 +100,7 @@ struct sock *dccp_create_openreq_child(struct sock *sk,
 	 *   (* Generate a new socket and switch to that socket *)
 	 *   Set S := new socket for this port pair
 	 */
-	struct sock *newsk = inet_csk_clone(sk, req, GFP_ATOMIC);
+	struct sock *newsk = inet_csk_clone_lock(sk, req, GFP_ATOMIC);
 
 	if (newsk != NULL) {
 		struct dccp_request_sock *dreq = dccp_rsk(req);
@@ -121,30 +121,20 @@ struct sock *dccp_create_openreq_child(struct sock *sk,
 		 *
 		 *    Choose S.ISS (initial seqno) or set from Init Cookies
 		 *    Initialize S.GAR := S.ISS
-		 *    Set S.ISR, S.GSR, S.SWL, S.SWH from packet or Init Cookies
+		 *    Set S.ISR, S.GSR from packet (or Init Cookies)
+		 *
+		 *    Setting AWL/AWH and SWL/SWH happens as part of the feature
+		 *    activation below, as these windows all depend on the local
+		 *    and remote Sequence Window feature values (7.5.2).
 		 */
-		newdp->dccps_gar = newdp->dccps_iss = dreq->dreq_iss;
-		dccp_update_gss(newsk, dreq->dreq_iss);
-
+		newdp->dccps_iss = dreq->dreq_iss;
+		newdp->dccps_gss = dreq->dreq_gss;
+		newdp->dccps_gar = newdp->dccps_iss;
 		newdp->dccps_isr = dreq->dreq_isr;
-		dccp_update_gsr(newsk, dreq->dreq_isr);
+		newdp->dccps_gsr = dreq->dreq_gsr;
 
 		/*
-		 * SWL and AWL are initially adjusted so that they are not less than
-		 * the initial Sequence Numbers received and sent, respectively:
-		 *	SWL := max(GSR + 1 - floor(W/4), ISR),
-		 *	AWL := max(GSS - W' + 1, ISS).
-		 * These adjustments MUST be applied only at the beginning of the
-		 * connection.
-		 */
-		dccp_set_seqno(&newdp->dccps_swl,
-			       max48(newdp->dccps_swl, newdp->dccps_isr));
-		dccp_set_seqno(&newdp->dccps_awl,
-			       max48(newdp->dccps_awl, newdp->dccps_iss));
-
-		/*
-		 * Activate features after initialising the sequence numbers,
-		 * since CCID initialisation may depend on GSS, ISR, ISS etc.
+		 * Activate features: initialise CCIDs, sequence windows etc.
 		 */
 		if (dccp_feat_activate_values(newsk, &dreq->dreq_featneg)) {
 			/* It is still raw copy of parent, so invalidate
@@ -176,9 +166,9 @@ struct sock *dccp_check_req(struct sock *sk, struct sk_buff *skb,
 	/* Check for retransmitted REQUEST */
 	if (dccp_hdr(skb)->dccph_type == DCCP_PKT_REQUEST) {
 
-		if (after48(DCCP_SKB_CB(skb)->dccpd_seq, dreq->dreq_isr)) {
+		if (after48(DCCP_SKB_CB(skb)->dccpd_seq, dreq->dreq_gsr)) {
 			dccp_pr_debug("Retransmitted REQUEST\n");
-			dreq->dreq_isr = DCCP_SKB_CB(skb)->dccpd_seq;
+			dreq->dreq_gsr = DCCP_SKB_CB(skb)->dccpd_seq;
 			/*
 			 * Send another RESPONSE packet
 			 * To protect against Request floods, increment retrans
@@ -198,12 +188,14 @@ struct sock *dccp_check_req(struct sock *sk, struct sk_buff *skb,
 		goto drop;
 
 	/* Invalid ACK */
-	if (DCCP_SKB_CB(skb)->dccpd_ack_seq != dreq->dreq_iss) {
+	if (!between48(DCCP_SKB_CB(skb)->dccpd_ack_seq,
+				dreq->dreq_iss, dreq->dreq_gss)) {
 		dccp_pr_debug("Invalid ACK number: ack_seq=%llu, "
-			      "dreq_iss=%llu\n",
+			      "dreq_iss=%llu, dreq_gss=%llu\n",
 			      (unsigned long long)
 			      DCCP_SKB_CB(skb)->dccpd_ack_seq,
-			      (unsigned long long) dreq->dreq_iss);
+			      (unsigned long long) dreq->dreq_iss,
+			      (unsigned long long) dreq->dreq_gss);
 		goto drop;
 	}
 

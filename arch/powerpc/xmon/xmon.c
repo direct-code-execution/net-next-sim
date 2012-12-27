@@ -18,7 +18,7 @@
 #include <linux/delay.h>
 #include <linux/kallsyms.h>
 #include <linux/cpumask.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/sysrq.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
@@ -39,9 +39,9 @@
 #include <asm/irq_regs.h>
 #include <asm/spu.h>
 #include <asm/spu_priv1.h>
-#include <asm/firmware.h>
 #include <asm/setjmp.h>
 #include <asm/reg.h>
+#include <asm/debug.h>
 
 #ifdef CONFIG_PPC64
 #include <asm/hvcall.h>
@@ -228,13 +228,11 @@ Commands:\n\
   t	print backtrace\n\
   x	exit monitor and recover\n\
   X	exit monitor and dont recover\n"
-#ifdef CONFIG_PPC64
+#if defined(CONFIG_PPC64) && !defined(CONFIG_PPC_BOOK3E)
 "  u	dump segment table or SLB\n"
-#endif
-#ifdef CONFIG_PPC_STD_MMU_32
+#elif defined(CONFIG_PPC_STD_MMU_32)
 "  u	dump segment registers\n"
-#endif
-#ifdef CONFIG_44x
+#elif defined(CONFIG_44x) || defined(CONFIG_PPC_BOOK3E)
 "  u	dump TLB\n"
 #endif
 "  ?	help\n"
@@ -334,14 +332,14 @@ static void release_output_lock(void)
 
 int cpus_are_in_xmon(void)
 {
-	return !cpus_empty(cpus_in_xmon);
+	return !cpumask_empty(&cpus_in_xmon);
 }
 #endif
 
 static inline int unrecoverable_excp(struct pt_regs *regs)
 {
-#ifdef CONFIG_4xx
-	/* We have no MSR_RI bit on 4xx, so we simply return false */
+#if defined(CONFIG_4xx) || defined(CONFIG_PPC_BOOK3E)
+	/* We have no MSR_RI bit on 4xx or Book3e, so we simply return false */
 	return 0;
 #else
 	return ((regs->msr & MSR_RI) == 0);
@@ -373,7 +371,7 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 
 #ifdef CONFIG_SMP
 	cpu = smp_processor_id();
-	if (cpu_isset(cpu, cpus_in_xmon)) {
+	if (cpumask_test_cpu(cpu, &cpus_in_xmon)) {
 		get_output_lock();
 		excprint(regs);
 		printf("cpu 0x%x: Exception %lx %s in xmon, "
@@ -396,10 +394,10 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 	}
 
 	xmon_fault_jmp[cpu] = recurse_jmp;
-	cpu_set(cpu, cpus_in_xmon);
+	cpumask_set_cpu(cpu, &cpus_in_xmon);
 
 	bp = NULL;
-	if ((regs->msr & (MSR_IR|MSR_PR|MSR_SF)) == (MSR_IR|MSR_SF))
+	if ((regs->msr & (MSR_IR|MSR_PR|MSR_64BIT)) == (MSR_IR|MSR_64BIT))
 		bp = at_breakpoint(regs->nip);
 	if (bp || unrecoverable_excp(regs))
 		fromipi = 0;
@@ -437,10 +435,10 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 		xmon_owner = cpu;
 		mb();
 		if (ncpus > 1) {
-			smp_send_debugger_break(MSG_ALL_BUT_SELF);
+			smp_send_debugger_break();
 			/* wait for other cpus to come in */
 			for (timeout = 100000000; timeout != 0; --timeout) {
-				if (cpus_weight(cpus_in_xmon) >= ncpus)
+				if (cpumask_weight(&cpus_in_xmon) >= ncpus)
 					break;
 				barrier();
 			}
@@ -484,7 +482,7 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 		}
 	}
  leave:
-	cpu_clear(cpu, cpus_in_xmon);
+	cpumask_clear_cpu(cpu, &cpus_in_xmon);
 	xmon_fault_jmp[cpu] = NULL;
 #else
 	/* UP is simple... */
@@ -529,7 +527,7 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 		}
 	}
 #else
-	if ((regs->msr & (MSR_IR|MSR_PR|MSR_SF)) == (MSR_IR|MSR_SF)) {
+	if ((regs->msr & (MSR_IR|MSR_PR|MSR_64BIT)) == (MSR_IR|MSR_64BIT)) {
 		bp = at_breakpoint(regs->nip);
 		if (bp != NULL) {
 			int stepped = emulate_step(regs, bp->instr[0]);
@@ -578,7 +576,7 @@ static int xmon_bpt(struct pt_regs *regs)
 	struct bpt *bp;
 	unsigned long offset;
 
-	if ((regs->msr & (MSR_IR|MSR_PR|MSR_SF)) != (MSR_IR|MSR_SF))
+	if ((regs->msr & (MSR_IR|MSR_PR|MSR_64BIT)) != (MSR_IR|MSR_64BIT))
 		return 0;
 
 	/* Are we at the trap at bp->instr[1] for some bp? */
@@ -609,7 +607,7 @@ static int xmon_sstep(struct pt_regs *regs)
 
 static int xmon_dabr_match(struct pt_regs *regs)
 {
-	if ((regs->msr & (MSR_IR|MSR_PR|MSR_SF)) != (MSR_IR|MSR_SF))
+	if ((regs->msr & (MSR_IR|MSR_PR|MSR_64BIT)) != (MSR_IR|MSR_64BIT))
 		return 0;
 	if (dabr.enabled == 0)
 		return 0;
@@ -619,7 +617,7 @@ static int xmon_dabr_match(struct pt_regs *regs)
 
 static int xmon_iabr_match(struct pt_regs *regs)
 {
-	if ((regs->msr & (MSR_IR|MSR_PR|MSR_SF)) != (MSR_IR|MSR_SF))
+	if ((regs->msr & (MSR_IR|MSR_PR|MSR_64BIT)) != (MSR_IR|MSR_64BIT))
 		return 0;
 	if (iabr == NULL)
 		return 0;
@@ -630,7 +628,7 @@ static int xmon_iabr_match(struct pt_regs *regs)
 static int xmon_ipi(struct pt_regs *regs)
 {
 #ifdef CONFIG_SMP
-	if (in_xmon && !cpu_isset(smp_processor_id(), cpus_in_xmon))
+	if (in_xmon && !cpumask_test_cpu(smp_processor_id(), &cpus_in_xmon))
 		xmon_core(regs, 1);
 #endif
 	return 0;
@@ -644,7 +642,7 @@ static int xmon_fault_handler(struct pt_regs *regs)
 	if (in_xmon && catch_memory_errors)
 		handle_fault(regs);	/* doesn't return */
 
-	if ((regs->msr & (MSR_IR|MSR_PR|MSR_SF)) == (MSR_IR|MSR_SF)) {
+	if ((regs->msr & (MSR_IR|MSR_PR|MSR_64BIT)) == (MSR_IR|MSR_64BIT)) {
 		bp = in_breakpoint_table(regs->nip, &offset);
 		if (bp != NULL) {
 			regs->nip = bp->address + offset;
@@ -821,7 +819,7 @@ cmds(struct pt_regs *excp)
 				memzcan();
 				break;
 			case 'i':
-				show_mem();
+				show_mem(0);
 				break;
 			default:
 				termch = cmd;
@@ -885,13 +883,11 @@ cmds(struct pt_regs *excp)
 		case 'u':
 			dump_segments();
 			break;
-#endif
-#ifdef CONFIG_4xx
+#elif defined(CONFIG_4xx)
 		case 'u':
 			dump_tlb_44x();
 			break;
-#endif
-#ifdef CONFIG_PPC_BOOK3E
+#elif defined(CONFIG_PPC_BOOK3E)
 		case 'u':
 			dump_tlb_book3e();
 			break;
@@ -929,7 +925,7 @@ static int do_step(struct pt_regs *regs)
 	int stepped;
 
 	/* check we are in 64-bit kernel mode, translation enabled */
-	if ((regs->msr & (MSR_SF|MSR_PR|MSR_IR)) == (MSR_SF|MSR_IR)) {
+	if ((regs->msr & (MSR_64BIT|MSR_PR|MSR_IR)) == (MSR_64BIT|MSR_IR)) {
 		if (mread(regs->nip, &instr, 4) == 4) {
 			stepped = emulate_step(regs, instr);
 			if (stepped < 0) {
@@ -976,7 +972,7 @@ static int cpu_cmd(void)
 		printf("cpus stopped:");
 		count = 0;
 		for (cpu = 0; cpu < NR_CPUS; ++cpu) {
-			if (cpu_isset(cpu, cpus_in_xmon)) {
+			if (cpumask_test_cpu(cpu, &cpus_in_xmon)) {
 				if (count == 0)
 					printf(" %x", cpu);
 				++count;
@@ -992,7 +988,7 @@ static int cpu_cmd(void)
 		return 0;
 	}
 	/* try to switch to cpu specified */
-	if (!cpu_isset(cpu, cpus_in_xmon)) {
+	if (!cpumask_test_cpu(cpu, &cpus_in_xmon)) {
 		printf("cpu 0x%x isn't in xmon\n", cpu);
 		return 0;
 	}
@@ -1441,7 +1437,8 @@ static void excprint(struct pt_regs *fp)
 
 	printf("  current = 0x%lx\n", current);
 #ifdef CONFIG_PPC64
-	printf("  paca    = 0x%lx\n", get_paca());
+	printf("  paca    = 0x%lx\t softe: %d\t irq_happened: 0x%02x\n",
+	       local_paca, local_paca->soft_enabled, local_paca->irq_happened);
 #endif
 	if (current) {
 		printf("    pid   = %ld, comm = %s\n",
@@ -1497,6 +1494,10 @@ static void prregs(struct pt_regs *fp)
 #endif
 	printf("pc  = ");
 	xmon_print_symbol(fp->nip, " ", "\n");
+	if (TRAP(fp) != 0xc00 && cpu_has_feature(CPU_FTR_CFAR)) {
+		printf("cfar= ");
+		xmon_print_symbol(fp->orig_gpr3, " ", "\n");
+	}
 	printf("lr  = ");
 	xmon_print_symbol(fp->link, " ", "\n");
 	printf("msr = "REG"   cr  = %.8lx\n", fp->msr, fp->ccr);
@@ -1634,25 +1635,6 @@ static void super_regs(void)
 		       mfspr(SPRN_DEC), mfspr(SPRN_SPRG2));
 		printf("sp   = "REG"  sprg3= "REG"\n", sp, mfspr(SPRN_SPRG3));
 		printf("toc  = "REG"  dar  = "REG"\n", toc, mfspr(SPRN_DAR));
-#ifdef CONFIG_PPC_ISERIES
-		if (firmware_has_feature(FW_FEATURE_ISERIES)) {
-			struct paca_struct *ptrPaca;
-			struct lppaca *ptrLpPaca;
-
-			/* Dump out relevant Paca data areas. */
-			printf("Paca: \n");
-			ptrPaca = get_paca();
-
-			printf("  Local Processor Control Area (LpPaca): \n");
-			ptrLpPaca = ptrPaca->lppaca_ptr;
-			printf("    Saved Srr0=%.16lx  Saved Srr1=%.16lx \n",
-			       ptrLpPaca->saved_srr0, ptrLpPaca->saved_srr1);
-			printf("    Saved Gpr3=%.16lx  Saved Gpr4=%.16lx \n",
-			       ptrLpPaca->saved_gpr3, ptrLpPaca->saved_gpr4);
-			printf("    Saved Gpr5=%.16lx \n",
-				ptrLpPaca->gpr5_dword.saved_gpr5);
-		}
-#endif
 
 		return;
 	}
@@ -2644,7 +2626,7 @@ static void dump_slb(void)
 static void dump_stab(void)
 {
 	int i;
-	unsigned long *tmp = (unsigned long *)get_paca()->stab_addr;
+	unsigned long *tmp = (unsigned long *)local_paca->stab_addr;
 
 	printf("Segment table contents of cpu %x\n", smp_processor_id());
 
@@ -2663,7 +2645,7 @@ static void dump_stab(void)
 
 void dump_segments(void)
 {
-	if (cpu_has_feature(CPU_FTR_SLB))
+	if (mmu_has_feature(MMU_FTR_SLB))
 		dump_slb();
 	else
 		dump_stab();
@@ -2855,10 +2837,6 @@ static void dump_tlb_book3e(void)
 
 static void xmon_init(int enable)
 {
-#ifdef CONFIG_PPC_ISERIES
-	if (firmware_has_feature(FW_FEATURE_ISERIES))
-		return;
-#endif
 	if (enable) {
 		__debugger = xmon;
 		__debugger_ipi = xmon_ipi;
@@ -2895,10 +2873,6 @@ static struct sysrq_key_op sysrq_xmon_op = {
 
 static int __init setup_xmon_sysrq(void)
 {
-#ifdef CONFIG_PPC_ISERIES
-	if (firmware_has_feature(FW_FEATURE_ISERIES))
-		return 0;
-#endif
 	register_sysrq_key('x', &sysrq_xmon_op);
 	return 0;
 }

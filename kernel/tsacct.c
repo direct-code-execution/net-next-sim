@@ -63,12 +63,10 @@ void bacct_add_tsk(struct taskstats *stats, struct task_struct *tsk)
 	stats->ac_ppid	 = pid_alive(tsk) ?
 				rcu_dereference(tsk->real_parent)->tgid : 0;
 	rcu_read_unlock();
-	stats->ac_utime	 = cputime_to_msecs(tsk->utime) * USEC_PER_MSEC;
-	stats->ac_stime	 = cputime_to_msecs(tsk->stime) * USEC_PER_MSEC;
-	stats->ac_utimescaled =
-		cputime_to_msecs(tsk->utimescaled) * USEC_PER_MSEC;
-	stats->ac_stimescaled =
-		cputime_to_msecs(tsk->stimescaled) * USEC_PER_MSEC;
+	stats->ac_utime = cputime_to_usecs(tsk->utime);
+	stats->ac_stime = cputime_to_usecs(tsk->stime);
+	stats->ac_utimescaled = cputime_to_usecs(tsk->utimescaled);
+	stats->ac_stimescaled = cputime_to_usecs(tsk->stimescaled);
 	stats->ac_minflt = tsk->min_flt;
 	stats->ac_majflt = tsk->maj_flt;
 
@@ -80,6 +78,7 @@ void bacct_add_tsk(struct taskstats *stats, struct task_struct *tsk)
 
 #define KB 1024
 #define MB (1024*KB)
+#define KB_MASK (~(KB-1))
 /*
  * fill in extended accounting fields
  */
@@ -97,14 +96,14 @@ void xacct_add_tsk(struct taskstats *stats, struct task_struct *p)
 		stats->hiwater_vm    = get_mm_hiwater_vm(mm)  * PAGE_SIZE / KB;
 		mmput(mm);
 	}
-	stats->read_char	= p->ioac.rchar;
-	stats->write_char	= p->ioac.wchar;
-	stats->read_syscalls	= p->ioac.syscr;
-	stats->write_syscalls	= p->ioac.syscw;
+	stats->read_char	= p->ioac.rchar & KB_MASK;
+	stats->write_char	= p->ioac.wchar & KB_MASK;
+	stats->read_syscalls	= p->ioac.syscr & KB_MASK;
+	stats->write_syscalls	= p->ioac.syscw & KB_MASK;
 #ifdef CONFIG_TASK_IO_ACCOUNTING
-	stats->read_bytes	= p->ioac.read_bytes;
-	stats->write_bytes	= p->ioac.write_bytes;
-	stats->cancelled_write_bytes = p->ioac.cancelled_write_bytes;
+	stats->read_bytes	= p->ioac.read_bytes & KB_MASK;
+	stats->write_bytes	= p->ioac.write_bytes & KB_MASK;
+	stats->cancelled_write_bytes = p->ioac.cancelled_write_bytes & KB_MASK;
 #else
 	stats->read_bytes	= 0;
 	stats->write_bytes	= 0;
@@ -128,7 +127,7 @@ void acct_update_integrals(struct task_struct *tsk)
 
 		local_irq_save(flags);
 		time = tsk->stime + tsk->utime;
-		dtime = cputime_sub(time, tsk->acct_timexpd);
+		dtime = time - tsk->acct_timexpd;
 		jiffies_to_timeval(cputime_to_jiffies(dtime), &value);
 		delta = value.tv_sec;
 		delta = delta * USEC_PER_SEC + value.tv_usec;

@@ -71,6 +71,8 @@
 #include <linux/timer.h>
 #include <linux/workqueue.h>
 #include <linux/input.h>
+#include <linux/semaphore.h>
+#include <linux/power_supply.h>
 
 /*
  * We parse each description item into this structure. Short items data
@@ -189,6 +191,7 @@ struct hid_item {
 #define HID_UP_UNDEFINED	0x00000000
 #define HID_UP_GENDESK		0x00010000
 #define HID_UP_SIMULATION	0x00020000
+#define HID_UP_GENDEVCTRLS	0x00060000
 #define HID_UP_KEYBOARD		0x00070000
 #define HID_UP_LED		0x00080000
 #define HID_UP_BUTTON		0x00090000
@@ -237,6 +240,8 @@ struct hid_item {
 #define HID_GD_DOWN		0x00010091
 #define HID_GD_RIGHT		0x00010092
 #define HID_GD_LEFT		0x00010093
+
+#define HID_DC_BATTERYSTRENGTH	0x00060020
 
 #define HID_DG_DIGITIZER	0x000d0001
 #define HID_DG_PEN		0x000d0002
@@ -312,10 +317,12 @@ struct hid_item {
 #define HID_QUIRK_BADPAD			0x00000020
 #define HID_QUIRK_MULTI_INPUT			0x00000040
 #define HID_QUIRK_HIDINPUT_FORCE		0x00000080
+#define HID_QUIRK_MULTITOUCH			0x00000100
 #define HID_QUIRK_SKIP_OUTPUT_REPORTS		0x00010000
 #define HID_QUIRK_FULLSPEED_INTERVAL		0x10000000
 #define HID_QUIRK_NO_INIT_REPORTS		0x20000000
 #define HID_QUIRK_NO_IGNORE			0x40000000
+#define HID_QUIRK_NO_INPUT_SYNC			0x80000000
 
 /*
  * This is the global environment of the parser. This information is
@@ -401,7 +408,7 @@ struct hid_field {
 	__u16 dpad;			/* dpad input code */
 };
 
-#define HID_MAX_FIELDS 64
+#define HID_MAX_FIELDS 128
 
 struct hid_report {
 	struct list_head list;
@@ -452,7 +459,8 @@ struct hid_input {
 
 enum hid_type {
 	HID_TYPE_OTHER = 0,
-	HID_TYPE_USBMOUSE
+	HID_TYPE_USBMOUSE,
+	HID_TYPE_USBNONE
 };
 
 struct hid_driver;
@@ -473,9 +481,23 @@ struct hid_device {							/* device report descriptor */
 	unsigned country;						/* HID country */
 	struct hid_report_enum report_enum[HID_REPORT_TYPES];
 
+	struct semaphore driver_lock;					/* protects the current driver */
 	struct device dev;						/* device */
 	struct hid_driver *driver;
 	struct hid_ll_driver *ll_driver;
+
+#ifdef CONFIG_HID_BATTERY_STRENGTH
+	/*
+	 * Power supply information for HID devices which report
+	 * battery strength. power_supply is registered iff
+	 * battery.name is non-NULL.
+	 */
+	struct power_supply battery;
+	__s32 battery_min;
+	__s32 battery_max;
+	__s32 battery_report_type;
+	__s32 battery_report_id;
+#endif
 
 	unsigned int status;						/* see STAT flags above */
 	unsigned claimed;						/* Claimed by hidinput, hiddev? */
@@ -502,6 +524,9 @@ struct hid_device {							/* device report descriptor */
 	void (*hiddev_hid_event) (struct hid_device *, struct hid_field *field,
 				  struct hid_usage *, __s32);
 	void (*hiddev_report_event) (struct hid_device *, struct hid_report *);
+
+	/* handler for raw input (Get_Report) data, used by hidraw */
+	int (*hid_get_raw_report) (struct hid_device *, unsigned char, __u8 *, size_t, unsigned char);
 
 	/* handler for raw output data, used by hidraw */
 	int (*hid_output_raw_report) (struct hid_device *, __u8 *, size_t, unsigned char);
@@ -592,6 +617,7 @@ struct hid_usage_id {
  * @report_fixup: called before report descriptor parsing (NULL means nop)
  * @input_mapping: invoked on input registering before mapping an usage
  * @input_mapped: invoked on input registering after mapping an usage
+ * @feature_mapping: invoked on feature registering
  * @suspend: invoked on suspend (NULL means nop)
  * @resume: invoked on resume if device was not reset (NULL means nop)
  * @reset_resume: invoked on resume if device was reset (NULL means nop)
@@ -626,8 +652,8 @@ struct hid_driver {
 	int (*event)(struct hid_device *hdev, struct hid_field *field,
 			struct hid_usage *usage, __s32 value);
 
-	void (*report_fixup)(struct hid_device *hdev, __u8 *buf,
-			unsigned int size);
+	__u8 *(*report_fixup)(struct hid_device *hdev, __u8 *buf,
+			unsigned int *size);
 
 	int (*input_mapping)(struct hid_device *hdev,
 			struct hid_input *hidinput, struct hid_field *field,
@@ -635,6 +661,9 @@ struct hid_driver {
 	int (*input_mapped)(struct hid_device *hdev,
 			struct hid_input *hidinput, struct hid_field *field,
 			struct hid_usage *usage, unsigned long **bit, int *max);
+	void (*feature_mapping)(struct hid_device *hdev,
+			struct hid_field *field,
+			struct hid_usage *usage);
 #ifdef CONFIG_PM
 	int (*suspend)(struct hid_device *hdev, pm_message_t message);
 	int (*resume)(struct hid_device *hdev);
@@ -685,10 +714,11 @@ extern void hid_destroy_device(struct hid_device *);
 
 extern int __must_check __hid_register_driver(struct hid_driver *,
 		struct module *, const char *mod_name);
-static inline int __must_check hid_register_driver(struct hid_driver *driver)
-{
-	return __hid_register_driver(driver, THIS_MODULE, KBUILD_MODNAME);
-}
+
+/* use a define to avoid include chaining to get THIS_MODULE & friends */
+#define hid_register_driver(driver) \
+	__hid_register_driver(driver, THIS_MODULE, KBUILD_MODNAME)
+
 extern void hid_unregister_driver(struct hid_driver *);
 
 extern void hidinput_hid_event(struct hid_device *, struct hid_field *, struct hid_usage *, __s32);
@@ -699,6 +729,8 @@ extern void hidinput_disconnect(struct hid_device *);
 int hid_set_field(struct hid_field *, unsigned, __s32);
 int hid_input_report(struct hid_device *, int type, u8 *, int, int);
 int hidinput_find_field(struct hid_device *hid, unsigned int type, unsigned int code, struct hid_field **field);
+struct hid_field *hidinput_get_led_field(struct hid_device *hid);
+unsigned int hidinput_count_leds(struct hid_device *hid);
 void hid_output_report(struct hid_report *report, __u8 *data);
 struct hid_device *hid_allocate_device(void);
 struct hid_report *hid_register_report(struct hid_device *device, unsigned type, unsigned id);
@@ -706,6 +738,8 @@ int hid_parse_report(struct hid_device *hid, __u8 *start, unsigned size);
 int hid_check_keys_pressed(struct hid_device *hid);
 int hid_connect(struct hid_device *hid, unsigned int connect_mask);
 void hid_disconnect(struct hid_device *hid);
+const struct hid_device_id *hid_match_id(struct hid_device *hdev,
+					 const struct hid_device_id *id);
 
 /**
  * hid_map_usage - map usage input bits
@@ -791,7 +825,7 @@ static inline int __must_check hid_parse(struct hid_device *hdev)
  *
  * Call this in probe function *after* hid_parse. This will setup HW buffers
  * and start the device (if not deffered to device open). hid_hw_stop must be
- * called if this was successfull.
+ * called if this was successful.
  */
 static inline int __must_check hid_hw_start(struct hid_device *hdev,
 		unsigned int connect_mask)
@@ -819,6 +853,49 @@ static inline void hid_hw_stop(struct hid_device *hdev)
 	hdev->ll_driver->stop(hdev);
 }
 
+/**
+ * hid_hw_open - signal underlaying HW to start delivering events
+ *
+ * @hdev: hid device
+ *
+ * Tell underlying HW to start delivering events from the device.
+ * This function should be called sometime after successful call
+ * to hid_hiw_start().
+ */
+static inline int __must_check hid_hw_open(struct hid_device *hdev)
+{
+	return hdev->ll_driver->open(hdev);
+}
+
+/**
+ * hid_hw_close - signal underlaying HW to stop delivering events
+ *
+ * @hdev: hid device
+ *
+ * This function indicates that we are not interested in the events
+ * from this device anymore. Delivery of events may or may not stop,
+ * depending on the number of users still outstanding.
+ */
+static inline void hid_hw_close(struct hid_device *hdev)
+{
+	hdev->ll_driver->close(hdev);
+}
+
+/**
+ * hid_hw_power - requests underlying HW to go into given power mode
+ *
+ * @hdev: hid device
+ * @level: requested power level (one of %PM_HINT_* defines)
+ *
+ * This function requests underlying hardware to enter requested power
+ * mode.
+ */
+
+static inline int hid_hw_power(struct hid_device *hdev, int level)
+{
+	return hdev->ll_driver->power ? hdev->ll_driver->power(hdev, level) : 0;
+}
+
 void hid_report_raw_event(struct hid_device *hid, int type, u8 *data, int size,
 		int interrupt);
 
@@ -837,12 +914,32 @@ int hid_pidff_init(struct hid_device *hid);
 #define hid_pidff_init NULL
 #endif
 
-#define dbg_hid(format, arg...) if (hid_debug) \
-				printk(KERN_DEBUG "%s: " format ,\
-				__FILE__ , ## arg)
-#define err_hid(format, arg...) printk(KERN_ERR "%s: " format "\n" , \
-		__FILE__ , ## arg)
-#endif /* HID_FF */
+#define dbg_hid(format, arg...)						\
+do {									\
+	if (hid_debug)							\
+		printk(KERN_DEBUG "%s: " format, __FILE__, ##arg);	\
+} while (0)
+
+#define hid_printk(level, hid, fmt, arg...)		\
+	dev_printk(level, &(hid)->dev, fmt, ##arg)
+#define hid_emerg(hid, fmt, arg...)			\
+	dev_emerg(&(hid)->dev, fmt, ##arg)
+#define hid_crit(hid, fmt, arg...)			\
+	dev_crit(&(hid)->dev, fmt, ##arg)
+#define hid_alert(hid, fmt, arg...)			\
+	dev_alert(&(hid)->dev, fmt, ##arg)
+#define hid_err(hid, fmt, arg...)			\
+	dev_err(&(hid)->dev, fmt, ##arg)
+#define hid_notice(hid, fmt, arg...)			\
+	dev_notice(&(hid)->dev, fmt, ##arg)
+#define hid_warn(hid, fmt, arg...)			\
+	dev_warn(&(hid)->dev, fmt, ##arg)
+#define hid_info(hid, fmt, arg...)			\
+	dev_info(&(hid)->dev, fmt, ##arg)
+#define hid_dbg(hid, fmt, arg...)			\
+	dev_dbg(&(hid)->dev, fmt, ##arg)
+
+#endif /* __KERNEL__ */
 
 #endif
 

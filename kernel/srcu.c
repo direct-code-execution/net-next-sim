@@ -24,13 +24,14 @@
  *
  */
 
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/mutex.h>
 #include <linux/percpu.h>
 #include <linux/preempt.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/smp.h>
+#include <linux/delay.h>
 #include <linux/srcu.h>
 
 static int init_srcu_struct_fields(struct srcu_struct *sp)
@@ -46,11 +47,9 @@ static int init_srcu_struct_fields(struct srcu_struct *sp)
 int __init_srcu_struct(struct srcu_struct *sp, const char *name,
 		       struct lock_class_key *key)
 {
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
 	/* Don't re-initialize a lock while it is held. */
 	debug_check_no_locks_freed((void *)sp, sizeof(*sp));
 	lockdep_init_map(&sp->dep_map, name, key, 0);
-#endif /* #ifdef CONFIG_DEBUG_LOCK_ALLOC */
 	return init_srcu_struct_fields(sp);
 }
 EXPORT_SYMBOL_GPL(__init_srcu_struct);
@@ -157,11 +156,27 @@ void __srcu_read_unlock(struct srcu_struct *sp, int idx)
 EXPORT_SYMBOL_GPL(__srcu_read_unlock);
 
 /*
+ * We use an adaptive strategy for synchronize_srcu() and especially for
+ * synchronize_srcu_expedited().  We spin for a fixed time period
+ * (defined below) to allow SRCU readers to exit their read-side critical
+ * sections.  If there are still some readers after 10 microseconds,
+ * we repeatedly block for 1-millisecond time periods.  This approach
+ * has done well in testing, so there is no need for a config parameter.
+ */
+#define SYNCHRONIZE_SRCU_READER_DELAY 10
+
+/*
  * Helper function for synchronize_srcu() and synchronize_srcu_expedited().
  */
 static void __synchronize_srcu(struct srcu_struct *sp, void (*sync_func)(void))
 {
 	int idx;
+
+	rcu_lockdep_assert(!lock_is_held(&sp->dep_map) &&
+			   !lock_is_held(&rcu_bh_lock_map) &&
+			   !lock_is_held(&rcu_lock_map) &&
+			   !lock_is_held(&rcu_sched_lock_map),
+			   "Illegal synchronize_srcu() in same-type SRCU (or RCU) read-side critical section");
 
 	idx = sp->completed;
 	mutex_lock(&sp->mutex);
@@ -205,9 +220,15 @@ static void __synchronize_srcu(struct srcu_struct *sp, void (*sync_func)(void))
 	 * all srcu_read_lock() calls using the old counters have completed.
 	 * Their corresponding critical sections might well be still
 	 * executing, but the srcu_read_lock() primitives themselves
-	 * will have finished executing.
+	 * will have finished executing.  We initially give readers
+	 * an arbitrarily chosen 10 microseconds to get out of their
+	 * SRCU read-side critical sections, then loop waiting 1/HZ
+	 * seconds per iteration.  The 10-microsecond value has done
+	 * very well in testing.
 	 */
 
+	if (srcu_readers_active_idx(sp, idx))
+		udelay(SYNCHRONIZE_SRCU_READER_DELAY);
 	while (srcu_readers_active_idx(sp, idx))
 		schedule_timeout_interruptible(1);
 
@@ -265,19 +286,26 @@ void synchronize_srcu(struct srcu_struct *sp)
 EXPORT_SYMBOL_GPL(synchronize_srcu);
 
 /**
- * synchronize_srcu_expedited - like synchronize_srcu, but less patient
+ * synchronize_srcu_expedited - Brute-force SRCU grace period
  * @sp: srcu_struct with which to synchronize.
  *
- * Flip the completed counter, and wait for the old count to drain to zero.
- * As with classic RCU, the updater must use some separate means of
- * synchronizing concurrent updates.  Can block; must be called from
- * process context.
+ * Wait for an SRCU grace period to elapse, but use a "big hammer"
+ * approach to force the grace period to end quickly.  This consumes
+ * significant time on all CPUs and is unfriendly to real-time workloads,
+ * so is thus not recommended for any sort of common-case code.  In fact,
+ * if you are using synchronize_srcu_expedited() in a loop, please
+ * restructure your code to batch your updates, and then use a single
+ * synchronize_srcu() instead.
  *
- * Note that it is illegal to call synchronize_srcu_expedited()
- * from the corresponding SRCU read-side critical section; doing so
- * will result in deadlock.  However, it is perfectly legal to call
- * synchronize_srcu_expedited() on one srcu_struct from some other
- * srcu_struct's read-side critical section.
+ * Note that it is illegal to call this function while holding any lock
+ * that is acquired by a CPU-hotplug notifier.  And yes, it is also illegal
+ * to call this function from a CPU-hotplug notifier.  Failing to observe
+ * these restriction will result in deadlock.  It is also illegal to call
+ * synchronize_srcu_expedited() from the corresponding SRCU read-side
+ * critical section; doing so will result in deadlock.  However, it is
+ * perfectly legal to call synchronize_srcu_expedited() on one srcu_struct
+ * from some other srcu_struct's read-side critical section, as long as
+ * the resulting graph of srcu_structs is acyclic.
  */
 void synchronize_srcu_expedited(struct srcu_struct *sp)
 {

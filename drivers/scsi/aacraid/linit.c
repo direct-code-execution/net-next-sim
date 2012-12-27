@@ -5,7 +5,8 @@
  * based on the old aacraid driver that is..
  * Adaptec aacraid device driver for Linux.
  *
- * Copyright (c) 2000-2007 Adaptec, Inc. (aacraid@adaptec.com)
+ * Copyright (c) 2000-2010 Adaptec, Inc.
+ *               2010 PMC-Sierra, Inc. (aacraid@pmc-sierra.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,8 +38,9 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/pci.h>
+#include <linux/pci-aspm.h>
 #include <linux/slab.h>
-#include <linux/smp_lock.h>
+#include <linux/mutex.h>
 #include <linux/spinlock.h>
 #include <linux/syscalls.h>
 #include <linux/delay.h>
@@ -54,11 +56,10 @@
 
 #include "aacraid.h"
 
-#define AAC_DRIVER_VERSION		"1.1-5"
+#define AAC_DRIVER_VERSION		"1.2-0"
 #ifndef AAC_DRIVER_BRANCH
 #define AAC_DRIVER_BRANCH		""
 #endif
-#define AAC_DRIVER_BUILD_DATE		__DATE__ " " __TIME__
 #define AAC_DRIVERNAME			"aacraid"
 
 #ifdef AAC_DRIVER_BUILD
@@ -66,7 +67,7 @@
 #define str(x) _str(x)
 #define AAC_DRIVER_FULL_VERSION	AAC_DRIVER_VERSION "[" str(AAC_DRIVER_BUILD) "]" AAC_DRIVER_BRANCH
 #else
-#define AAC_DRIVER_FULL_VERSION	AAC_DRIVER_VERSION AAC_DRIVER_BRANCH " " AAC_DRIVER_BUILD_DATE
+#define AAC_DRIVER_FULL_VERSION	AAC_DRIVER_VERSION AAC_DRIVER_BRANCH
 #endif
 
 MODULE_AUTHOR("Red Hat Inc and Adaptec");
@@ -76,6 +77,7 @@ MODULE_DESCRIPTION("Dell PERC2, 2/Si, 3/Si, 3/Di, "
 MODULE_LICENSE("GPL");
 MODULE_VERSION(AAC_DRIVER_FULL_VERSION);
 
+static DEFINE_MUTEX(aac_mutex);
 static LIST_HEAD(aac_devices);
 static int aac_cfg_major = -1;
 char aac_driver_version[] = AAC_DRIVER_FULL_VERSION;
@@ -160,6 +162,10 @@ static const struct pci_device_id aac_pci_tbl[] __devinitdata = {
 	{ 0x9005, 0x0285, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 59 }, /* Adaptec Catch All */
 	{ 0x9005, 0x0286, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 60 }, /* Adaptec Rocket Catch All */
 	{ 0x9005, 0x0288, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 61 }, /* Adaptec NEMER/ARK Catch All */
+	{ 0x9005, 0x028b, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 62 }, /* Adaptec PMC Series 6 (Tupelo) */
+	{ 0x9005, 0x028c, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 63 }, /* Adaptec PMC Series 7 (Denali) */
+	{ 0x9005, 0x028d, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 64 }, /* Adaptec PMC Series 8 */
+	{ 0x9005, 0x028f, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 65 }, /* Adaptec PMC Series 9 */
 	{ 0,}
 };
 MODULE_DEVICE_TABLE(pci, aac_pci_tbl);
@@ -234,7 +240,11 @@ static struct aac_driver_ident aac_drivers[] = {
 	{ aac_rx_init, "aacraid",  "Legend  ", "RAID            ", 2, AAC_QUIRK_31BIT | AAC_QUIRK_34SG | AAC_QUIRK_SCSI_32 }, /* Legend Catchall */
 	{ aac_rx_init, "aacraid",  "ADAPTEC ", "RAID            ", 2 }, /* Adaptec Catch All */
 	{ aac_rkt_init, "aacraid", "ADAPTEC ", "RAID            ", 2 }, /* Adaptec Rocket Catch All */
-	{ aac_nark_init, "aacraid", "ADAPTEC ", "RAID            ", 2 } /* Adaptec NEMER/ARK Catch All */
+	{ aac_nark_init, "aacraid", "ADAPTEC ", "RAID           ", 2 }, /* Adaptec NEMER/ARK Catch All */
+	{ aac_src_init, "aacraid", "ADAPTEC ", "RAID            ", 2 }, /* Adaptec PMC Series 6 (Tupelo) */
+	{ aac_srcv_init, "aacraid", "ADAPTEC ", "RAID            ", 2 }, /* Adaptec PMC Series 7 (Denali) */
+	{ aac_srcv_init, "aacraid", "ADAPTEC ", "RAID            ", 2 }, /* Adaptec PMC Series 8 */
+	{ aac_srcv_init, "aacraid", "ADAPTEC ", "RAID            ", 2 } /* Adaptec PMC Series 9 */
 };
 
 /**
@@ -247,7 +257,7 @@ static struct aac_driver_ident aac_drivers[] = {
  *	TODO: unify with aac_scsi_cmd().
  */
 
-static int aac_queuecommand(struct scsi_cmnd *cmd, void (*done)(struct scsi_cmnd *))
+static int aac_queuecommand_lck(struct scsi_cmnd *cmd, void (*done)(struct scsi_cmnd *))
 {
 	struct Scsi_Host *host = cmd->device->host;
 	struct aac_dev *dev = (struct aac_dev *)host->hostdata;
@@ -265,6 +275,8 @@ static int aac_queuecommand(struct scsi_cmnd *cmd, void (*done)(struct scsi_cmnd
 	cmd->SCp.phase = AAC_OWNER_LOWLEVEL;
 	return (aac_scsi_cmd(cmd) ? FAILED : 0);
 }
+
+static DEF_SCSI_QCMD(aac_queuecommand)
 
 /**
  *	aac_info		-	Returns the host adapter name
@@ -650,8 +662,10 @@ static int aac_eh_reset(struct scsi_cmnd* cmd)
 	 * This adapter needs a blind reset, only do so for Adapters that
 	 * support a register, instead of a commanded, reset.
 	 */
-	if ((aac->supplement_adapter_info.SupportedOptions2 &
-	   AAC_OPTION_MU_RESET) &&
+	if (((aac->supplement_adapter_info.SupportedOptions2 &
+	  AAC_OPTION_MU_RESET) ||
+	  (aac->supplement_adapter_info.SupportedOptions2 &
+	  AAC_OPTION_DOORBELL_RESET)) &&
 	  aac_check_reset &&
 	  ((aac_check_reset != 1) ||
 	   !(aac->supplement_adapter_info.SupportedOptions2 &
@@ -678,7 +692,7 @@ static int aac_cfg_open(struct inode *inode, struct file *file)
 	unsigned minor_number = iminor(inode);
 	int err = -ENODEV;
 
-	lock_kernel();  /* BKL pushdown: nothing else protects this list */
+	mutex_lock(&aac_mutex);  /* BKL pushdown: nothing else protects this list */
 	list_for_each_entry(aac, &aac_devices, entry) {
 		if (aac->id == minor_number) {
 			file->private_data = aac;
@@ -686,7 +700,7 @@ static int aac_cfg_open(struct inode *inode, struct file *file)
 			break;
 		}
 	}
-	unlock_kernel();
+	mutex_unlock(&aac_mutex);
 
 	return err;
 }
@@ -711,9 +725,9 @@ static long aac_cfg_ioctl(struct file *file,
 	int ret;
 	if (!capable(CAP_SYS_RAWIO))
 		return -EPERM;
-	lock_kernel();
+	mutex_lock(&aac_mutex);
 	ret = aac_do_ioctl(file->private_data, cmd, (void __user *)arg);
-	unlock_kernel();
+	mutex_unlock(&aac_mutex);
 
 	return ret;
 }
@@ -722,7 +736,7 @@ static long aac_cfg_ioctl(struct file *file,
 static long aac_compat_do_ioctl(struct aac_dev *dev, unsigned cmd, unsigned long arg)
 {
 	long ret;
-	lock_kernel();
+	mutex_lock(&aac_mutex);
 	switch (cmd) {
 	case FSACTL_MINIPORT_REV_CHECK:
 	case FSACTL_SENDFIB:
@@ -756,7 +770,7 @@ static long aac_compat_do_ioctl(struct aac_dev *dev, unsigned cmd, unsigned long
 		ret = -ENOIOCTLCMD;
 		break;
 	}
-	unlock_kernel();
+	mutex_unlock(&aac_mutex);
 	return ret;
 }
 
@@ -770,7 +784,7 @@ static long aac_compat_cfg_ioctl(struct file *file, unsigned cmd, unsigned long 
 {
 	if (!capable(CAP_SYS_RAWIO))
 		return -EPERM;
-	return aac_compat_do_ioctl((struct aac_dev *)file->private_data, cmd, arg);
+	return aac_compat_do_ioctl(file->private_data, cmd, arg);
 }
 #endif
 
@@ -887,16 +901,17 @@ static ssize_t aac_show_serial_number(struct device *device,
 	int len = 0;
 
 	if (le32_to_cpu(dev->adapter_info.serial[0]) != 0xBAD0)
-		len = snprintf(buf, PAGE_SIZE, "%06X\n",
+		len = snprintf(buf, 16, "%06X\n",
 		  le32_to_cpu(dev->adapter_info.serial[0]));
 	if (len &&
 	  !memcmp(&dev->supplement_adapter_info.MfgPcbaSerialNo[
 	    sizeof(dev->supplement_adapter_info.MfgPcbaSerialNo)-len],
 	  buf, len-1))
-		len = snprintf(buf, PAGE_SIZE, "%.*s\n",
+		len = snprintf(buf, 16, "%.*s\n",
 		  (int)sizeof(dev->supplement_adapter_info.MfgPcbaSerialNo),
 		  dev->supplement_adapter_info.MfgPcbaSerialNo);
-	return len;
+
+	return min(len, 16);
 }
 
 static ssize_t aac_show_max_channel(struct device *device,
@@ -1039,6 +1054,7 @@ static const struct file_operations aac_cfg_fops = {
 	.compat_ioctl   = aac_compat_cfg_ioctl,
 #endif
 	.open		= aac_cfg_open,
+	.llseek		= noop_llseek,
 };
 
 static struct scsi_host_template aac_driver_template = {
@@ -1092,6 +1108,7 @@ static int __devinit aac_probe_one(struct pci_dev *pdev,
 	int error = -ENODEV;
 	int unique_id = 0;
 	u64 dmamask;
+	extern int aac_sync_mode;
 
 	list_for_each_entry(aac, &aac_devices, entry) {
 		if (aac->id > unique_id)
@@ -1099,6 +1116,9 @@ static int __devinit aac_probe_one(struct pci_dev *pdev,
 		insert = &aac->entry;
 		unique_id++;
 	}
+
+	pci_disable_link_state(pdev, PCIE_LINK_STATE_L0S | PCIE_LINK_STATE_L1 |
+			       PCIE_LINK_STATE_CLKPM);
 
 	error = pci_enable_device(pdev);
 	if (error)
@@ -1148,6 +1168,21 @@ static int __devinit aac_probe_one(struct pci_dev *pdev,
 	aac->base_size = AAC_MIN_FOOTPRINT_SIZE;
 	if ((*aac_drivers[index].init)(aac))
 		goto out_unmap;
+
+	if (aac->sync_mode) {
+		if (aac_sync_mode)
+			printk(KERN_INFO "%s%d: Sync. mode enforced "
+				"by driver parameter. This will cause "
+				"a significant performance decrease!\n",
+				aac->name,
+				aac->id);
+		else
+			printk(KERN_INFO "%s%d: Async. mode not supported "
+				"by current driver, sync. mode enforced."
+				"\nPlease update driver to get full performance.\n",
+				aac->name,
+				aac->id);
+	}
 
 	/*
 	 *	Start any kernel threads needed

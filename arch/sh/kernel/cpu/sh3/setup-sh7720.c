@@ -1,5 +1,5 @@
 /*
- * SH7720 Setup
+ * Setup code for SH7720, SH7721.
  *
  *  Copyright (C) 2007  Markus Brunner, Mark Jonas
  *  Copyright (C) 2009  Paul Mundt
@@ -20,6 +20,7 @@
 #include <linux/serial_sci.h>
 #include <linux/sh_timer.h>
 #include <asm/rtc.h>
+#include <cpu/serial.h>
 
 static struct resource rtc_resources[] = {
 	[0] = {
@@ -51,8 +52,12 @@ static struct platform_device rtc_device = {
 static struct plat_sci_port scif0_platform_data = {
 	.mapbase	= 0xa4430000,
 	.flags		= UPF_BOOT_AUTOCONF,
+	.scscr		= SCSCR_RE | SCSCR_TE,
+	.scbrr_algo_id	= SCBRR_ALGO_4,
 	.type		= PORT_SCIF,
 	.irqs		= { 80, 80, 80, 80 },
+	.ops		= &sh7720_sci_port_ops,
+	.regtype	= SCIx_SH7705_SCIF_REGTYPE,
 };
 
 static struct platform_device scif0_device = {
@@ -66,8 +71,12 @@ static struct platform_device scif0_device = {
 static struct plat_sci_port scif1_platform_data = {
 	.mapbase	= 0xa4438000,
 	.flags		= UPF_BOOT_AUTOCONF,
+	.scscr		= SCSCR_RE | SCSCR_TE,
+	.scbrr_algo_id	= SCBRR_ALGO_4,
 	.type		= PORT_SCIF,
 	.irqs           = { 81, 81, 81, 81 },
+	.ops		= &sh7720_sci_port_ops,
+	.regtype	= SCIx_SH7705_SCIF_REGTYPE,
 };
 
 static struct platform_device scif1_device = {

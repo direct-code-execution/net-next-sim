@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2009 Atheros Communications Inc.
+ * Copyright (c) 2008-2011 Atheros Communications Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -19,7 +19,7 @@
 
 #define HAL_PROCESS_ANI           0x00000001
 
-#define DO_ANI(ah) (((ah)->proc_phyerr & HAL_PROCESS_ANI))
+#define DO_ANI(ah) (((ah)->proc_phyerr & HAL_PROCESS_ANI) && ah->curchan)
 
 #define BEACON_RSSI(ahp) (ahp->stats.avgbrssi)
 
@@ -122,21 +122,13 @@ struct ar5416AniState {
 	u8 firstepLevel;
 	u8 ofdmWeakSigDetectOff;
 	u8 cckWeakSigThreshold;
+	bool update_ani;
 	u32 listenTime;
-	u32 ofdmTrigHigh;
-	u32 ofdmTrigLow;
-	int32_t cckTrigHigh;
-	int32_t cckTrigLow;
 	int32_t rssiThrLow;
 	int32_t rssiThrHigh;
 	u32 noiseFloor;
-	u32 txFrameCount;
-	u32 rxFrameCount;
-	u32 cycleCount;
 	u32 ofdmPhyErrCount;
 	u32 cckPhyErrCount;
-	u32 ofdmPhyErrBase;
-	u32 cckPhyErrBase;
 	int16_t pktRssi[2];
 	int16_t ofdmErrRssi[2];
 	int16_t cckErrRssi[2];
@@ -157,8 +149,7 @@ struct ar5416Stats {
 	u32 ast_ani_ofdmerrs;
 	u32 ast_ani_cckerrs;
 	u32 ast_ani_reset;
-	u32 ast_ani_lzero;
-	u32 ast_ani_lneg;
+	u32 ast_ani_lneg_or_lzero;
 	u32 avgbrssi;
 	struct ath9k_mib_stats ast_mibstats;
 };
@@ -166,11 +157,7 @@ struct ar5416Stats {
 
 void ath9k_enable_mib_counters(struct ath_hw *ah);
 void ath9k_hw_disable_mib_counters(struct ath_hw *ah);
-u32 ath9k_hw_GetMibCycleCountsPct(struct ath_hw *ah, u32 *rxc_pcnt,
-				  u32 *rxf_pcnt, u32 *txf_pcnt);
 void ath9k_hw_ani_setup(struct ath_hw *ah);
 void ath9k_hw_ani_init(struct ath_hw *ah);
-int ath9k_hw_get_ani_channel_idx(struct ath_hw *ah,
-				 struct ath9k_channel *chan);
 
 #endif /* ANI_H */

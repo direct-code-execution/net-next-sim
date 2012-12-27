@@ -5,10 +5,12 @@
  * Copyright (C) 2009   Intel Corporation. All rights reserved.
  */
 
+#include <linux/export.h>
 #include <linux/etherdevice.h>
 #include <linux/if_arp.h>
 #include <linux/slab.h>
 #include <net/cfg80211.h>
+#include <net/cfg80211-wext.h>
 #include "wext-compat.h"
 #include "nl80211.h"
 
@@ -27,6 +29,9 @@ int cfg80211_mgd_wext_connect(struct cfg80211_registered_device *rdev,
 
 	wdev->wext.connect.ie = wdev->wext.ie;
 	wdev->wext.connect.ie_len = wdev->wext.ie_len;
+
+	/* Use default background scan period */
+	wdev->wext.connect.bg_scan_period = -1;
 
 	if (wdev->wext.keys) {
 		wdev->wext.keys->def = wdev->wext.default_key;
@@ -197,6 +202,8 @@ int cfg80211_mgd_wext_siwessid(struct net_device *dev,
 	wdev->wext.connect.ssid_len = len;
 
 	wdev->wext.connect.crypto.control_port = false;
+	wdev->wext.connect.crypto.control_port_ethertype =
+					cpu_to_be16(ETH_P_PAE);
 
 	err = cfg80211_mgd_wext_connect(rdev, wdev);
  out:
@@ -363,7 +370,6 @@ int cfg80211_wext_siwgenie(struct net_device *dev,
 	wdev_unlock(wdev);
 	return err;
 }
-EXPORT_SYMBOL_GPL(cfg80211_wext_siwgenie);
 
 int cfg80211_wext_siwmlme(struct net_device *dev,
 			  struct iw_request_info *info,
@@ -400,4 +406,3 @@ int cfg80211_wext_siwmlme(struct net_device *dev,
 
 	return err;
 }
-EXPORT_SYMBOL_GPL(cfg80211_wext_siwmlme);

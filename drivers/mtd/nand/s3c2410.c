@@ -55,7 +55,7 @@ static int hardware_ecc = 0;
 #endif
 
 #ifdef CONFIG_MTD_NAND_S3C2410_CLKSTOP
-static int clock_stop = 1;
+static const int clock_stop = 1;
 #else
 static const int clock_stop = 0;
 #endif
@@ -96,6 +96,12 @@ enum s3c_cpu_type {
 	TYPE_S3C2440,
 };
 
+enum s3c_nand_clk_state {
+	CLOCK_DISABLE	= 0,
+	CLOCK_ENABLE,
+	CLOCK_SUSPEND,
+};
+
 /* overview of the s3c2410 nand state */
 
 /**
@@ -111,6 +117,7 @@ enum s3c_cpu_type {
  * @mtd_count: The number of MTDs created from this controller.
  * @save_sel: The contents of @sel_reg to be saved over suspend.
  * @clk_rate: The clock rate from @clk.
+ * @clk_state: The current clock state.
  * @cpu_type: The exact type of this controller.
  */
 struct s3c2410_nand_info {
@@ -129,6 +136,7 @@ struct s3c2410_nand_info {
 	int				mtd_count;
 	unsigned long			save_sel;
 	unsigned long			clk_rate;
+	enum s3c_nand_clk_state		clk_state;
 
 	enum s3c_cpu_type		cpu_type;
 
@@ -159,9 +167,31 @@ static struct s3c2410_platform_nand *to_nand_plat(struct platform_device *dev)
 	return dev->dev.platform_data;
 }
 
-static inline int allow_clk_stop(struct s3c2410_nand_info *info)
+static inline int allow_clk_suspend(struct s3c2410_nand_info *info)
 {
 	return clock_stop;
+}
+
+/**
+ * s3c2410_nand_clk_set_state - Enable, disable or suspend NAND clock.
+ * @info: The controller instance.
+ * @new_state: State to which clock should be set.
+ */
+static void s3c2410_nand_clk_set_state(struct s3c2410_nand_info *info,
+		enum s3c_nand_clk_state new_state)
+{
+	if (!allow_clk_suspend(info) && new_state == CLOCK_SUSPEND)
+		return;
+
+	if (info->clk_state == CLOCK_ENABLE) {
+		if (new_state != CLOCK_ENABLE)
+			clk_disable(info->clk);
+	} else {
+		if (new_state == CLOCK_ENABLE)
+			clk_enable(info->clk);
+	}
+
+	info->clk_state = new_state;
 }
 
 /* timing calculations */
@@ -333,8 +363,8 @@ static void s3c2410_nand_select_chip(struct mtd_info *mtd, int chip)
 	nmtd = this->priv;
 	info = nmtd->info;
 
-	if (chip != -1 && allow_clk_stop(info))
-		clk_enable(info->clk);
+	if (chip != -1)
+		s3c2410_nand_clk_set_state(info, CLOCK_ENABLE);
 
 	cur = readl(info->sel_reg);
 
@@ -356,8 +386,8 @@ static void s3c2410_nand_select_chip(struct mtd_info *mtd, int chip)
 
 	writel(cur, info->sel_reg);
 
-	if (chip == -1 && allow_clk_stop(info))
-		clk_disable(info->clk);
+	if (chip == -1)
+		s3c2410_nand_clk_set_state(info, CLOCK_SUSPEND);
 }
 
 /* s3c2410_nand_hwcontrol
@@ -693,9 +723,8 @@ static int s3c24xx_nand_remove(struct platform_device *pdev)
 
 	/* free the common resources */
 
-	if (info->clk != NULL && !IS_ERR(info->clk)) {
-		if (!allow_clk_stop(info))
-			clk_disable(info->clk);
+	if (!IS_ERR(info->clk)) {
+		s3c2410_nand_clk_set_state(info, CLOCK_DISABLE);
 		clk_put(info->clk);
 	}
 
@@ -715,39 +744,16 @@ static int s3c24xx_nand_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_MTD_PARTITIONS
-const char *part_probes[] = { "cmdlinepart", NULL };
 static int s3c2410_nand_add_partition(struct s3c2410_nand_info *info,
 				      struct s3c2410_nand_mtd *mtd,
 				      struct s3c2410_nand_set *set)
 {
-	struct mtd_partition *part_info;
-	int nr_part = 0;
+	if (set)
+		mtd->mtd.name = set->name;
 
-	if (set == NULL)
-		return add_mtd_device(&mtd->mtd);
-
-	mtd->mtd.name = set->name;
-	nr_part = parse_mtd_partitions(&mtd->mtd, part_probes, &part_info, 0);
-
-	if (nr_part <= 0 && set->nr_partitions > 0) {
-		nr_part = set->nr_partitions;
-		part_info = set->partitions;
-	}
-
-	if (nr_part > 0 && part_info)
-		return add_mtd_partitions(&mtd->mtd, part_info, nr_part);
-
-	return add_mtd_device(&mtd->mtd);
+	return mtd_device_parse_register(&mtd->mtd, NULL, NULL,
+					 set->partitions, set->nr_partitions);
 }
-#else
-static int s3c2410_nand_add_partition(struct s3c2410_nand_info *info,
-				      struct s3c2410_nand_mtd *mtd,
-				      struct s3c2410_nand_set *set)
-{
-	return add_mtd_device(&mtd->mtd);
-}
-#endif
 
 /**
  * s3c2410_nand_init_chip - initialise a single instance of an chip
@@ -817,6 +823,7 @@ static void s3c2410_nand_init_chip(struct s3c2410_nand_info *info,
 		chip->ecc.calculate = s3c2410_nand_calculate_ecc;
 		chip->ecc.correct   = s3c2410_nand_correct_data;
 		chip->ecc.mode	    = NAND_ECC_HW;
+		chip->ecc.strength  = 1;
 
 		switch (info->cpu_type) {
 		case TYPE_S3C2410:
@@ -863,8 +870,10 @@ static void s3c2410_nand_init_chip(struct s3c2410_nand_info *info,
 	/* If you use u-boot BBT creation code, specifying this flag will
 	 * let the kernel fish out the BBT from the NAND, and also skip the
 	 * full NAND scan that can take 1/2s or so. Little things... */
-	if (set->flash_bbt)
-		chip->options |= NAND_USE_FLASH_BBT | NAND_SKIP_BBTSCAN;
+	if (set->flash_bbt) {
+		chip->bbt_options |= NAND_BBT_USE_FLASH;
+		chip->options |= NAND_SKIP_BBTSCAN;
+	}
 }
 
 /**
@@ -947,7 +956,7 @@ static int s3c24xx_nand_probe(struct platform_device *pdev)
 		goto exit_error;
 	}
 
-	clk_enable(info->clk);
+	s3c2410_nand_clk_set_state(info, CLOCK_ENABLE);
 
 	/* allocate and map the resource */
 
@@ -1026,9 +1035,9 @@ static int s3c24xx_nand_probe(struct platform_device *pdev)
 		goto exit_error;
 	}
 
-	if (allow_clk_stop(info)) {
+	if (allow_clk_suspend(info)) {
 		dev_info(&pdev->dev, "clock idle support enabled\n");
-		clk_disable(info->clk);
+		s3c2410_nand_clk_set_state(info, CLOCK_SUSPEND);
 	}
 
 	pr_debug("initialised ok\n");
@@ -1059,8 +1068,7 @@ static int s3c24xx_nand_suspend(struct platform_device *dev, pm_message_t pm)
 
 		writel(info->save_sel | info->sel_bit, info->sel_reg);
 
-		if (!allow_clk_stop(info))
-			clk_disable(info->clk);
+		s3c2410_nand_clk_set_state(info, CLOCK_DISABLE);
 	}
 
 	return 0;
@@ -1072,7 +1080,7 @@ static int s3c24xx_nand_resume(struct platform_device *dev)
 	unsigned long sel;
 
 	if (info) {
-		clk_enable(info->clk);
+		s3c2410_nand_clk_set_state(info, CLOCK_ENABLE);
 		s3c2410_nand_inithw(info);
 
 		/* Restore the state of the nFCE line. */
@@ -1082,8 +1090,7 @@ static int s3c24xx_nand_resume(struct platform_device *dev)
 		sel |= info->save_sel & info->sel_bit;
 		writel(sel, info->sel_reg);
 
-		if (allow_clk_stop(info))
-			clk_disable(info->clk);
+		s3c2410_nand_clk_set_state(info, CLOCK_SUSPEND);
 	}
 
 	return 0;

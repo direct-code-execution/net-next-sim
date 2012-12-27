@@ -23,7 +23,7 @@
 #include <linux/err.h>
 #include <linux/isa.h>
 #include <linux/ioport.h>
-#include <linux/moduleparam.h>
+#include <linux/module.h>
 #include <sound/core.h>
 #include <sound/sb.h>
 #include <sound/opl3.h>
@@ -36,7 +36,7 @@ MODULE_SUPPORTED_DEVICE("{{Creative Labs,SB 1.0/SB 2.0/SB Pro}}");
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
-static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE;	/* Enable this card */
+static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE;	/* Enable this card */
 static long port[SNDRV_CARDS] = SNDRV_DEFAULT_PORT;	/* 0x220,0x240,0x260 */
 static int irq[SNDRV_CARDS] = SNDRV_DEFAULT_IRQ;	/* 5,7,9,10 */
 static int dma8[SNDRV_CARDS] = SNDRV_DEFAULT_DMA;	/* 1,3 */
@@ -72,7 +72,7 @@ static irqreturn_t snd_sb8_interrupt(int irq, void *dev_id)
 
 static void snd_sb8_free(struct snd_card *card)
 {
-	struct snd_sb8 *acard = (struct snd_sb8 *)card->private_data;
+	struct snd_sb8 *acard = card->private_data;
 
 	if (acard == NULL)
 		return;

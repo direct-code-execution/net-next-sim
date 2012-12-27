@@ -23,7 +23,6 @@ ENTRY(u8500_secondary_startup)
 	ldmia	r4, {r5, r6}
 	sub	r4, r4, r5
 	add	r6, r6, r4
-	dsb
 pen:	ldr	r7, [r6]
 	cmp	r7, r0
 	bne	pen
@@ -33,6 +32,8 @@ pen:	ldr	r7, [r6]
 	 * should now contain the SVC stack for this core
 	 */
 	b	secondary_startup
+ENDPROC(u8500_secondary_startup)
 
+	.align 2
 1:	.long	.
 	.long	pen_release

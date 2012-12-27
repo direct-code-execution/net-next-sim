@@ -1,5 +1,5 @@
 /*
- *	iPAQ h1930/h1940/rx1950 battery controler driver
+ *	iPAQ h1930/h1940/rx1950 battery controller driver
  *	Copyright (c) Vasily Khoruzhick
  *	Based on h1940_battery.c by Arnaud Patard
  *
@@ -20,6 +20,7 @@
 #include <linux/s3c_adc_battery.h>
 #include <linux/errno.h>
 #include <linux/init.h>
+#include <linux/module.h>
 
 #include <plat/adc.h>
 
@@ -46,6 +47,22 @@ static void s3c_adc_bat_ext_power_changed(struct power_supply *psy)
 		msecs_to_jiffies(JITTER_DELAY));
 }
 
+static int gather_samples(struct s3c_adc_client *client, int num, int channel)
+{
+	int value, i;
+
+	/* default to 1 if nothing is set */
+	if (num < 1)
+		num = 1;
+
+	value = 0;
+	for (i = 0; i < num; i++)
+		value += s3c_adc_read(client, channel);
+	value /= num;
+
+	return value;
+}
+
 static enum power_supply_property s3c_adc_backup_bat_props[] = {
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_VOLTAGE_MIN,
@@ -66,7 +83,8 @@ static int s3c_adc_backup_bat_get_property(struct power_supply *psy,
 	if (bat->volt_value < 0 ||
 		jiffies_to_msecs(jiffies - bat->timestamp) >
 			BAT_POLL_INTERVAL) {
-		bat->volt_value = s3c_adc_read(bat->client,
+		bat->volt_value = gather_samples(bat->client,
+			bat->pdata->backup_volt_samples,
 			bat->pdata->backup_volt_channel);
 		bat->volt_value *= bat->pdata->backup_volt_mult;
 		bat->timestamp = jiffies;
@@ -112,6 +130,13 @@ static int calc_full_volt(int volt_val, int cur_val, int impedance)
 	return volt_val + cur_val * impedance / 1000;
 }
 
+static int charge_finished(struct s3c_adc_bat *bat)
+{
+	return bat->pdata->gpio_inverted ?
+		!gpio_get_value(bat->pdata->gpio_charge_finished) :
+		gpio_get_value(bat->pdata->gpio_charge_finished);
+}
+
 static int s3c_adc_bat_get_property(struct power_supply *psy,
 				    enum power_supply_property psp,
 				    union power_supply_propval *val)
@@ -131,16 +156,18 @@ static int s3c_adc_bat_get_property(struct power_supply *psy,
 	if (bat->volt_value < 0 || bat->cur_value < 0 ||
 		jiffies_to_msecs(jiffies - bat->timestamp) >
 			BAT_POLL_INTERVAL) {
-		bat->volt_value = s3c_adc_read(bat->client,
+		bat->volt_value = gather_samples(bat->client,
+			bat->pdata->volt_samples,
 			bat->pdata->volt_channel) * bat->pdata->volt_mult;
-		bat->cur_value = s3c_adc_read(bat->client,
+		bat->cur_value = gather_samples(bat->client,
+			bat->pdata->current_samples,
 			bat->pdata->current_channel) * bat->pdata->current_mult;
 		bat->timestamp = jiffies;
 	}
 
 	if (bat->cable_plugged &&
 		((bat->pdata->gpio_charge_finished < 0) ||
-		!gpio_get_value(bat->pdata->gpio_charge_finished))) {
+		!charge_finished(bat))) {
 		lut = bat->pdata->lut_acin;
 		lut_size = bat->pdata->lut_acin_cnt;
 	}
@@ -236,8 +263,7 @@ static void s3c_adc_bat_work(struct work_struct *work)
 		}
 	} else {
 		if ((bat->pdata->gpio_charge_finished >= 0) && is_plugged) {
-			is_charged = gpio_get_value(
-				main_bat.pdata->gpio_charge_finished);
+			is_charged = charge_finished(&main_bat);
 			if (is_charged) {
 				if (bat->pdata->disable_charger)
 					bat->pdata->disable_charger();
@@ -260,7 +286,7 @@ static irqreturn_t s3c_adc_bat_charged(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static int __init s3c_adc_bat_probe(struct platform_device *pdev)
+static int __devinit s3c_adc_bat_probe(struct platform_device *pdev)
 {
 	struct s3c_adc_client	*client;
 	struct s3c_adc_bat_pdata *pdata = pdev->dev.platform_data;
@@ -400,8 +426,8 @@ static int s3c_adc_bat_resume(struct platform_device *pdev)
 	return 0;
 }
 #else
-#define s3c_adc_battery_suspend NULL
-#define s3c_adc_battery_resume NULL
+#define s3c_adc_bat_suspend NULL
+#define s3c_adc_bat_resume NULL
 #endif
 
 static struct platform_driver s3c_adc_bat_driver = {
@@ -414,18 +440,8 @@ static struct platform_driver s3c_adc_bat_driver = {
 	.resume		= s3c_adc_bat_resume,
 };
 
-static int __init s3c_adc_bat_init(void)
-{
-	return platform_driver_register(&s3c_adc_bat_driver);
-}
-module_init(s3c_adc_bat_init);
-
-static void __exit s3c_adc_bat_exit(void)
-{
-	platform_driver_unregister(&s3c_adc_bat_driver);
-}
-module_exit(s3c_adc_bat_exit);
+module_platform_driver(s3c_adc_bat_driver);
 
 MODULE_AUTHOR("Vasily Khoruzhick <anarsoul@gmail.com>");
-MODULE_DESCRIPTION("iPAQ H1930/H1940/RX1950 battery controler driver");
+MODULE_DESCRIPTION("iPAQ H1930/H1940/RX1950 battery controller driver");
 MODULE_LICENSE("GPL");

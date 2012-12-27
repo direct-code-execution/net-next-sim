@@ -2,7 +2,7 @@
  *  ipmi_bt_sm.c
  *
  *  The state machine for an Open IPMI BT sub-driver under ipmi_si.c, part
- *  of the driver architecture at http://sourceforge.net/project/openipmi
+ *  of the driver architecture at http://sourceforge.net/projects/openipmi 
  *
  *  Author:	Rocky Craig <first.last@hp.com>
  *
@@ -560,7 +560,7 @@ static enum si_sm_result bt_event(struct si_sm_data *bt, long time)
 		BT_CONTROL(BT_H_BUSY);		/* set */
 
 		/*
-		 * Uncached, ordered writes should just proceeed serially but
+		 * Uncached, ordered writes should just proceed serially but
 		 * some BMCs don't clear B2H_ATN with one hit.  Fast-path a
 		 * workaround without too much penalty to the general case.
 		 */

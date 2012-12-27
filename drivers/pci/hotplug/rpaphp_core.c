@@ -37,7 +37,7 @@
 				/* and pci_do_scan_bus */
 #include "rpaphp.h"
 
-int rpaphp_debug;
+bool rpaphp_debug;
 LIST_HEAD(rpaphp_slot_head);
 
 #define DRIVER_VERSION	"0.1"
@@ -290,7 +290,7 @@ static int is_php_dn(struct device_node *dn, const int **indexes,
  * @dn: device node of slot
  *
  * This subroutine will register a hotplugable slot with the
- * PCI hotplug infrastructure. This routine is typicaly called
+ * PCI hotplug infrastructure. This routine is typically called
  * during boot time, if the hotplug slots are present at boot time,
  * or is called later, by the dlpar add code, if the slot is
  * being dynamically added during runtime.

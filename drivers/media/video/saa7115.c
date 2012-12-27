@@ -47,7 +47,6 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-chip-ident.h>
-#include <media/v4l2-i2c-drv.h>
 #include <media/saa7115.h>
 #include <asm/div64.h>
 
@@ -58,7 +57,7 @@ MODULE_AUTHOR(  "Maxim Yevtyushkin, Kevin Thayer, Chris Kennedy, "
 		"Hans Verkuil, Mauro Carvalho Chehab");
 MODULE_LICENSE("GPL");
 
-static int debug;
+static bool debug;
 module_param(debug, bool, 0644);
 
 MODULE_PARM_DESC(debug, "Debug level (0-1)");
@@ -758,8 +757,8 @@ static int saa711x_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	switch (ctrl->id) {
 	case V4L2_CID_CHROMA_AGC:
 		/* chroma gain cluster */
-		if (state->agc->cur.val)
-			state->gain->cur.val =
+		if (state->agc->val)
+			state->gain->val =
 				saa711x_read(sd, R_0F_CHROMA_GAIN_CNTL) & 0x7f;
 		break;
 	}
@@ -794,7 +793,6 @@ static int saa711x_s_ctrl(struct v4l2_ctrl *ctrl)
 			saa711x_write(sd, R_0F_CHROMA_GAIN_CNTL, state->gain->val);
 		else
 			saa711x_write(sd, R_0F_CHROMA_GAIN_CNTL, state->gain->val | 0x80);
-		v4l2_ctrl_activate(state->gain, !state->agc->val);
 		break;
 
 	default:
@@ -1346,26 +1344,57 @@ static int saa711x_g_vbi_data(struct v4l2_subdev *sd, struct v4l2_sliced_vbi_dat
 static int saa711x_querystd(struct v4l2_subdev *sd, v4l2_std_id *std)
 {
 	struct saa711x_state *state = to_state(sd);
-	int reg1e;
+	int reg1f, reg1e;
 
-	*std = V4L2_STD_ALL;
+	/*
+	 * The V4L2 core already initializes std with all supported
+	 * Standards. All driver needs to do is to mask it, to remove
+	 * standards that don't apply from the mask
+	 */
+
+	reg1f = saa711x_read(sd, R_1F_STATUS_BYTE_2_VD_DEC);
+	v4l2_dbg(1, debug, sd, "Status byte 2 (0x1f)=0x%02x\n", reg1f);
+
+	/* horizontal/vertical not locked */
+	if (reg1f & 0x40)
+		goto ret;
+
+	if (reg1f & 0x20)
+		*std &= V4L2_STD_525_60;
+	else
+		*std &= V4L2_STD_625_50;
+
 	if (state->ident != V4L2_IDENT_SAA7115)
-		return 0;
+		goto ret;
+
 	reg1e = saa711x_read(sd, R_1E_STATUS_BYTE_1_VD_DEC);
 
 	switch (reg1e & 0x03) {
 	case 1:
-		*std = V4L2_STD_NTSC;
+		*std &= V4L2_STD_NTSC;
 		break;
 	case 2:
-		*std = V4L2_STD_PAL;
+		/*
+		 * V4L2_STD_PAL just cover the european PAL standards.
+		 * This is wrong, as the device could also be using an
+		 * other PAL standard.
+		 */
+		*std &= V4L2_STD_PAL   | V4L2_STD_PAL_N  | V4L2_STD_PAL_Nc |
+			V4L2_STD_PAL_M | V4L2_STD_PAL_60;
 		break;
 	case 3:
-		*std = V4L2_STD_SECAM;
+		*std &= V4L2_STD_SECAM;
 		break;
 	default:
+		/* Can't detect anything */
 		break;
 	}
+
+	v4l2_dbg(1, debug, sd, "Status byte 1 (0x1e)=0x%02x\n", reg1e);
+
+ret:
+	v4l2_dbg(1, debug, sd, "detected std mask = %08Lx\n", *std);
+
 	return 0;
 }
 
@@ -1557,7 +1586,7 @@ static int saa711x_probe(struct i2c_client *client,
 	chip_id = name[5];
 
 	/* Check whether this chip is part of the saa711x series */
-	if (memcmp(name, "1f711", 5)) {
+	if (memcmp(name + 1, "f711", 4)) {
 		v4l_dbg(1, debug, client, "chip found @ 0x%x (ID %s) does not match a known saa711x chip.\n",
 			client->addr << 1, name);
 		return -ENODEV;
@@ -1593,7 +1622,6 @@ static int saa711x_probe(struct i2c_client *client,
 			V4L2_CID_CHROMA_AGC, 0, 1, 1, 1);
 	state->gain = v4l2_ctrl_new_std(hdl, &saa711x_ctrl_ops,
 			V4L2_CID_CHROMA_GAIN, 0, 127, 1, 40);
-	state->gain->is_volatile = 1;
 	sd->ctrl_handler = hdl;
 	if (hdl->error) {
 		int err = hdl->error;
@@ -1602,8 +1630,7 @@ static int saa711x_probe(struct i2c_client *client,
 		kfree(state);
 		return err;
 	}
-	state->agc->flags |= V4L2_CTRL_FLAG_UPDATE;
-	v4l2_ctrl_cluster(2, &state->agc);
+	v4l2_ctrl_auto_cluster(2, &state->agc, 0, true);
 
 	state->input = -1;
 	state->output = SAA7115_IPORT_ON;
@@ -1676,7 +1703,7 @@ static int saa711x_remove(struct i2c_client *client)
 	return 0;
 }
 
-static const struct i2c_device_id saa7115_id[] = {
+static const struct i2c_device_id saa711x_id[] = {
 	{ "saa7115_auto", 1 }, /* autodetect */
 	{ "saa7111", 0 },
 	{ "saa7113", 0 },
@@ -1685,11 +1712,16 @@ static const struct i2c_device_id saa7115_id[] = {
 	{ "saa7118", 0 },
 	{ }
 };
-MODULE_DEVICE_TABLE(i2c, saa7115_id);
+MODULE_DEVICE_TABLE(i2c, saa711x_id);
 
-static struct v4l2_i2c_driver_data v4l2_i2c_data = {
-	.name = "saa7115",
-	.probe = saa711x_probe,
-	.remove = saa711x_remove,
-	.id_table = saa7115_id,
+static struct i2c_driver saa711x_driver = {
+	.driver = {
+		.owner	= THIS_MODULE,
+		.name	= "saa7115",
+	},
+	.probe		= saa711x_probe,
+	.remove		= saa711x_remove,
+	.id_table	= saa711x_id,
 };
+
+module_i2c_driver(saa711x_driver);

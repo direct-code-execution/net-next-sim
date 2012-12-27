@@ -104,13 +104,12 @@ static struct platform_device dm9000_device2 = {
 #endif
 
 
-#if defined(CONFIG_SPI_BFIN) || defined(CONFIG_SPI_BFIN_MODULE)
+#if defined(CONFIG_SPI_BFIN5XX) || defined(CONFIG_SPI_BFIN5XX_MODULE)
 /* all SPI peripherals info goes here */
 
 #if defined(CONFIG_MMC_SPI) || defined(CONFIG_MMC_SPI_MODULE)
 static struct bfin5xx_spi_chip mmc_spi_chip_info = {
 	.enable_dma = 0,		/* if 1 - block!!! */
-	.bits_per_word = 8,
 };
 #endif
 
@@ -152,8 +151,13 @@ static struct resource bfin_uart0_resources[] = {
 		.flags = IORESOURCE_MEM,
 	},
 	{
+		.start = IRQ_UART0_TX,
+		.end = IRQ_UART0_TX,
+		.flags = IORESOURCE_IRQ,
+	},
+	{
 		.start = IRQ_UART0_RX,
-		.end = IRQ_UART0_RX + 1,
+		.end = IRQ_UART0_RX,
 		.flags = IORESOURCE_IRQ,
 	},
 	{
@@ -173,7 +177,7 @@ static struct resource bfin_uart0_resources[] = {
 	},
 };
 
-unsigned short bfin_uart0_peripherals[] = {
+static unsigned short bfin_uart0_peripherals[] = {
 	P_UART0_TX, P_UART0_RX, 0
 };
 
@@ -231,7 +235,7 @@ static struct resource isp1362_hcd_resources[] = {
 	},{
 		.start = IRQ_PF11,
 		.end   = IRQ_PF11,
-		.flags = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHLEVEL,
+		.flags = IORESOURCE_IRQ | IORESOURCE_IRQ_LOWEDGE,
 	},
 };
 
@@ -266,7 +270,7 @@ static struct platform_device *ip0x_devices[] __initdata = {
 #endif
 #endif
 
-#if defined(CONFIG_SPI_BFIN) || defined(CONFIG_SPI_BFIN_MODULE)
+#if defined(CONFIG_SPI_BFIN5XX) || defined(CONFIG_SPI_BFIN5XX_MODULE)
 	&spi_bfin_master_device,
 #endif
 
@@ -289,20 +293,10 @@ static struct platform_device *ip0x_devices[] __initdata = {
 
 static int __init ip0x_init(void)
 {
-	int i;
-
 	printk(KERN_INFO "%s(): registering device resources\n", __func__);
 	platform_add_devices(ip0x_devices, ARRAY_SIZE(ip0x_devices));
 
-#if defined(CONFIG_SPI_BFIN) || defined(CONFIG_SPI_BFIN_MODULE)
-	for (i = 0; i < ARRAY_SIZE(bfin_spi_board_info); ++i) {
-		int j = 1 << bfin_spi_board_info[i].chip_select;
-		/* set spi cs to 1 */
-		bfin_write_FIO_DIR(bfin_read_FIO_DIR() | j);
-		bfin_write_FIO_FLAG_S(j);
-	}
 	spi_register_board_info(bfin_spi_board_info, ARRAY_SIZE(bfin_spi_board_info));
-#endif
 
 	return 0;
 }

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2010, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -47,7 +47,7 @@
 
 #define _COMPONENT          ACPI_EVENTS
 ACPI_MODULE_NAME("evevent")
-
+#if (!ACPI_REDUCED_HARDWARE)	/* Entire module */
 /* Local prototypes */
 static acpi_status acpi_ev_fixed_event_initialize(void);
 
@@ -70,6 +70,12 @@ acpi_status acpi_ev_initialize_events(void)
 	acpi_status status;
 
 	ACPI_FUNCTION_TRACE(ev_initialize_events);
+
+	/* If Hardware Reduced flag is set, there are no fixed events */
+
+	if (acpi_gbl_reduced_hardware) {
+		return_ACPI_STATUS(AE_OK);
+	}
 
 	/*
 	 * Initialize the Fixed and General Purpose Events. This is done prior to
@@ -95,47 +101,6 @@ acpi_status acpi_ev_initialize_events(void)
 
 /*******************************************************************************
  *
- * FUNCTION:    acpi_ev_install_fadt_gpes
- *
- * PARAMETERS:  None
- *
- * RETURN:      Status
- *
- * DESCRIPTION: Completes initialization of the FADT-defined GPE blocks
- *              (0 and 1). The HW must be fully initialized at this point,
- *              including global lock support.
- *
- ******************************************************************************/
-
-acpi_status acpi_ev_install_fadt_gpes(void)
-{
-	acpi_status status;
-
-	ACPI_FUNCTION_TRACE(ev_install_fadt_gpes);
-
-	/* Namespace must be locked */
-
-	status = acpi_ut_acquire_mutex(ACPI_MTX_NAMESPACE);
-	if (ACPI_FAILURE(status)) {
-		return (status);
-	}
-
-	/* FADT GPE Block 0 */
-
-	(void)acpi_ev_initialize_gpe_block(acpi_gbl_fadt_gpe_device,
-					   acpi_gbl_gpe_fadt_blocks[0]);
-
-	/* FADT GPE Block 1 */
-
-	(void)acpi_ev_initialize_gpe_block(acpi_gbl_fadt_gpe_device,
-					   acpi_gbl_gpe_fadt_blocks[1]);
-
-	(void)acpi_ut_release_mutex(ACPI_MTX_NAMESPACE);
-	return_ACPI_STATUS(AE_OK);
-}
-
-/*******************************************************************************
- *
  * FUNCTION:    acpi_ev_install_xrupt_handlers
  *
  * PARAMETERS:  None
@@ -151,6 +116,12 @@ acpi_status acpi_ev_install_xrupt_handlers(void)
 	acpi_status status;
 
 	ACPI_FUNCTION_TRACE(ev_install_xrupt_handlers);
+
+	/* If Hardware Reduced flag is set, there is no ACPI h/w */
+
+	if (acpi_gbl_reduced_hardware) {
+		return_ACPI_STATUS(AE_OK);
+	}
 
 	/* Install the SCI handler */
 
@@ -258,9 +229,17 @@ u32 acpi_ev_fixed_event_detect(void)
 		     status_bit_mask)
 		    && (fixed_enable & acpi_gbl_fixed_event_info[i].
 			enable_bit_mask)) {
+			/*
+			 * Found an active (signalled) event. Invoke global event
+			 * handler if present.
+			 */
+			acpi_fixed_event_count[i]++;
+			if (acpi_gbl_global_event_handler) {
+				acpi_gbl_global_event_handler
+				    (ACPI_EVENT_TYPE_FIXED, NULL, i,
+				     acpi_gbl_global_event_handler_context);
+			}
 
-			/* Found an active (signalled) event */
-			acpi_os_fixed_event_count(i);
 			int_status |= acpi_ev_fixed_event_dispatch(i);
 		}
 	}
@@ -312,3 +291,5 @@ static u32 acpi_ev_fixed_event_dispatch(u32 event)
 	return ((acpi_gbl_fixed_event_handlers[event].
 		 handler) (acpi_gbl_fixed_event_handlers[event].context));
 }
+
+#endif				/* !ACPI_REDUCED_HARDWARE */

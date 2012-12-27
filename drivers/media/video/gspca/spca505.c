@@ -19,6 +19,8 @@
  *
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #define MODULE_NAME "spca505"
 
 #include "gspca.h"
@@ -368,10 +370,6 @@ static const u8 spca505b_init_data[][3] = {
 	{0x08, 0x00, 0x00},
 	{0x08, 0x00, 0x01},
 	{0x08, 0x00, 0x02},
-	{0x00, 0x01, 0x00},
-	{0x00, 0x01, 0x01},
-	{0x00, 0x01, 0x34},
-	{0x00, 0x01, 0x35},
 	{0x06, 0x18, 0x08},
 	{0x06, 0xfc, 0x09},
 	{0x06, 0xfc, 0x0a},
@@ -582,7 +580,7 @@ static int reg_write(struct usb_device *dev,
 	PDEBUG(D_USBO, "reg write: 0x%02x,0x%02x:0x%02x, %d",
 		req, index, value, ret);
 	if (ret < 0)
-		PDEBUG(D_ERR, "reg write: error %d", ret);
+		pr_err("reg write: error %d\n", ret);
 	return ret;
 }
 
@@ -689,9 +687,8 @@ static int sd_start(struct gspca_dev *gspca_dev)
 		return ret;
 	}
 	if (ret != 0x0101) {
-		PDEBUG(D_ERR|D_CONF,
-			"After vector read returns 0x%04x should be 0x0101",
-			ret);
+		pr_err("After vector read returns 0x%04x should be 0x0101\n",
+		       ret);
 	}
 
 	ret = reg_write(gspca_dev->dev, 0x06, 0x16, 0x0a);
@@ -791,7 +788,7 @@ static const struct sd_desc sd_desc = {
 };
 
 /* -- module initialisation -- */
-static const __devinitdata struct usb_device_id device_table[] = {
+static const struct usb_device_id device_table[] = {
 	{USB_DEVICE(0x041e, 0x401d), .driver_info = Nxultra},
 	{USB_DEVICE(0x0733, 0x0430), .driver_info = IntelPCCameraPro},
 /*fixme: may be UsbGrabberPV321 BRIDGE_SPCA506 SENSOR_SAA7113 */
@@ -818,22 +815,4 @@ static struct usb_driver sd_driver = {
 #endif
 };
 
-/* -- module insert / remove -- */
-static int __init sd_mod_init(void)
-{
-	int ret;
-
-	ret = usb_register(&sd_driver);
-	if (ret < 0)
-		return ret;
-	PDEBUG(D_PROBE, "registered");
-	return 0;
-}
-static void __exit sd_mod_exit(void)
-{
-	usb_deregister(&sd_driver);
-	PDEBUG(D_PROBE, "deregistered");
-}
-
-module_init(sd_mod_init);
-module_exit(sd_mod_exit);
+module_usb_driver(sd_driver);

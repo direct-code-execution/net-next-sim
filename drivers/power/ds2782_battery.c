@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2009 Bluewater Systems Ltd
  *
- * Author: Ryan Mallon <ryan@bluewatersys.com>
+ * Author: Ryan Mallon
  *
  * DS2786 added by Yulia Vilensky <vilensky@compulab.co.il>
  *
@@ -44,8 +44,8 @@ struct ds278x_info;
 
 struct ds278x_battery_ops {
 	int (*get_battery_current)(struct ds278x_info *info, int *current_uA);
-	int (*get_battery_voltage)(struct ds278x_info *info, int *voltage_uA);
-	int (*get_battery_capacity)(struct ds278x_info *info, int *capacity_uA);
+	int (*get_battery_voltage)(struct ds278x_info *info, int *voltage_uV);
+	int (*get_battery_capacity)(struct ds278x_info *info, int *capacity);
 };
 
 #define to_ds278x_info(x) container_of(x, struct ds278x_info, battery)
@@ -137,7 +137,7 @@ static int ds2782_get_current(struct ds278x_info *info, int *current_uA)
 	return 0;
 }
 
-static int ds2782_get_voltage(struct ds278x_info *info, int *voltage_uA)
+static int ds2782_get_voltage(struct ds278x_info *info, int *voltage_uV)
 {
 	s16 raw;
 	int err;
@@ -149,7 +149,7 @@ static int ds2782_get_voltage(struct ds278x_info *info, int *voltage_uA)
 	err = ds278x_read_reg16(info, DS278x_REG_VOLT_MSB, &raw);
 	if (err)
 		return err;
-	*voltage_uA = (raw / 32) * 4800;
+	*voltage_uV = (raw / 32) * 4800;
 	return 0;
 }
 
@@ -177,7 +177,7 @@ static int ds2786_get_current(struct ds278x_info *info, int *current_uA)
 	return 0;
 }
 
-static int ds2786_get_voltage(struct ds278x_info *info, int *voltage_uA)
+static int ds2786_get_voltage(struct ds278x_info *info, int *voltage_uV)
 {
 	s16 raw;
 	int err;
@@ -189,7 +189,7 @@ static int ds2786_get_voltage(struct ds278x_info *info, int *voltage_uA)
 	err = ds278x_read_reg16(info, DS278x_REG_VOLT_MSB, &raw);
 	if (err)
 		return err;
-	*voltage_uA = (raw / 8) * 1220;
+	*voltage_uV = (raw / 8) * 1220;
 	return 0;
 }
 
@@ -393,6 +393,7 @@ static const struct i2c_device_id ds278x_id[] = {
 	{"ds2786", DS2786},
 	{},
 };
+MODULE_DEVICE_TABLE(i2c, ds278x_id);
 
 static struct i2c_driver ds278x_battery_driver = {
 	.driver 	= {
@@ -402,19 +403,8 @@ static struct i2c_driver ds278x_battery_driver = {
 	.remove		= ds278x_battery_remove,
 	.id_table	= ds278x_id,
 };
+module_i2c_driver(ds278x_battery_driver);
 
-static int __init ds278x_init(void)
-{
-	return i2c_add_driver(&ds278x_battery_driver);
-}
-module_init(ds278x_init);
-
-static void __exit ds278x_exit(void)
-{
-	i2c_del_driver(&ds278x_battery_driver);
-}
-module_exit(ds278x_exit);
-
-MODULE_AUTHOR("Ryan Mallon <ryan@bluewatersys.com>");
+MODULE_AUTHOR("Ryan Mallon");
 MODULE_DESCRIPTION("Maxim/Dallas DS2782 Stand-Alone Fuel Gauage IC driver");
 MODULE_LICENSE("GPL");

@@ -82,6 +82,22 @@ ifdef CONFIG_CC_STACKPROTECTOR
         endif
 endif
 
+ifdef CONFIG_X86_X32
+	x32_ld_ok := $(call try-run,\
+			/bin/echo -e '1: .quad 1b' | \
+			$(CC) $(KBUILD_AFLAGS) -c -xassembler -o "$$TMP" - && \
+			$(OBJCOPY) -O elf32-x86-64 "$$TMP" "$$TMPO" && \
+			$(LD) -m elf32_x86_64 "$$TMPO" -o "$$TMP",y,n)
+        ifeq ($(x32_ld_ok),y)
+                CONFIG_X86_X32_ABI := y
+                KBUILD_AFLAGS += -DCONFIG_X86_X32_ABI
+                KBUILD_CFLAGS += -DCONFIG_X86_X32_ABI
+        else
+                $(warning CONFIG_X86_X32 enabled but no binutils support)
+        endif
+endif
+export CONFIG_X86_X32_ABI
+
 # Don't unroll struct assignments with kmemcheck enabled
 ifeq ($(CONFIG_KMEMCHECK),y)
 	KBUILD_CFLAGS += $(call cc-option,-fno-builtin-memcpy)
@@ -96,8 +112,12 @@ cfi := $(call as-instr,.cfi_startproc\n.cfi_rel_offset $(sp-y)$(comma)0\n.cfi_en
 # is .cfi_signal_frame supported too?
 cfi-sigframe := $(call as-instr,.cfi_startproc\n.cfi_signal_frame\n.cfi_endproc,-DCONFIG_AS_CFI_SIGNAL_FRAME=1)
 cfi-sections := $(call as-instr,.cfi_sections .debug_frame,-DCONFIG_AS_CFI_SECTIONS=1)
-KBUILD_AFLAGS += $(cfi) $(cfi-sigframe) $(cfi-sections)
-KBUILD_CFLAGS += $(cfi) $(cfi-sigframe) $(cfi-sections)
+
+# does binutils support specific instructions?
+asinstr := $(call as-instr,fxsaveq (%rax),-DCONFIG_AS_FXSAVEQ=1)
+
+KBUILD_AFLAGS += $(cfi) $(cfi-sigframe) $(cfi-sections) $(asinstr)
+KBUILD_CFLAGS += $(cfi) $(cfi-sigframe) $(cfi-sections) $(asinstr)
 
 LDFLAGS := -m elf_$(UTS_MACHINE)
 
@@ -109,9 +129,19 @@ KBUILD_CFLAGS += -Wno-sign-compare
 KBUILD_CFLAGS += -fno-asynchronous-unwind-tables
 # prevent gcc from generating any FP code by mistake
 KBUILD_CFLAGS += $(call cc-option,-mno-sse -mno-mmx -mno-sse2 -mno-3dnow,)
+KBUILD_CFLAGS += $(call cc-option,-mno-avx,)
 
 KBUILD_CFLAGS += $(mflags-y)
 KBUILD_AFLAGS += $(mflags-y)
+
+archscripts:
+	$(Q)$(MAKE) $(build)=arch/x86/tools relocs
+
+###
+# Syscall table generation
+
+archheaders:
+	$(Q)$(MAKE) $(build)=arch/x86/syscalls all
 
 ###
 # Kernel objects

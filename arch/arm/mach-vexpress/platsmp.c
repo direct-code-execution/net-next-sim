@@ -10,107 +10,158 @@
  */
 #include <linux/init.h>
 #include <linux/errno.h>
-#include <linux/delay.h>
-#include <linux/device.h>
-#include <linux/jiffies.h>
 #include <linux/smp.h>
 #include <linux/io.h>
+#include <linux/of_fdt.h>
 
-#include <asm/cacheflush.h>
-#include <asm/localtimer.h>
 #include <asm/smp_scu.h>
-#include <asm/unified.h>
+#include <asm/hardware/gic.h>
+#include <asm/mach/map.h>
 
-#include <mach/ct-ca9x4.h>
 #include <mach/motherboard.h>
-#define V2M_PA_CS7 0x10000000
 
 #include "core.h"
 
-extern void vexpress_secondary_startup(void);
+extern void versatile_secondary_startup(void);
 
-/*
- * control for which core is the next to come out of the secondary
- * boot "holding pen"
- */
-volatile int __cpuinitdata pen_release = -1;
+#if defined(CONFIG_OF)
 
-static void __iomem *scu_base_addr(void)
+static enum {
+	GENERIC_SCU,
+	CORTEX_A9_SCU,
+} vexpress_dt_scu __initdata = GENERIC_SCU;
+
+static struct map_desc vexpress_dt_cortex_a9_scu_map __initdata = {
+	.virtual	= V2T_PERIPH,
+	/* .pfn	set in vexpress_dt_init_cortex_a9_scu() */
+	.length		= SZ_128,
+	.type		= MT_DEVICE,
+};
+
+static void *vexpress_dt_cortex_a9_scu_base __initdata;
+
+const static char *vexpress_dt_cortex_a9_match[] __initconst = {
+	"arm,cortex-a5-scu",
+	"arm,cortex-a9-scu",
+	NULL
+};
+
+static int __init vexpress_dt_find_scu(unsigned long node,
+		const char *uname, int depth, void *data)
 {
-	return MMIO_P2V(A9_MPCORE_SCU);
-}
+	if (of_flat_dt_match(node, vexpress_dt_cortex_a9_match)) {
+		phys_addr_t phys_addr;
+		__be32 *reg = of_get_flat_dt_prop(node, "reg", NULL);
 
-static DEFINE_SPINLOCK(boot_lock);
+		if (WARN_ON(!reg))
+			return -EINVAL;
 
-void __cpuinit platform_secondary_init(unsigned int cpu)
-{
-	trace_hardirqs_off();
+		phys_addr = be32_to_cpup(reg);
+		vexpress_dt_scu = CORTEX_A9_SCU;
 
-	/*
-	 * if any interrupts are already enabled for the primary
-	 * core (e.g. timer irq), then they will not have been enabled
-	 * for us: do so
-	 */
-	gic_cpu_init(0, gic_cpu_base_addr);
-
-	/*
-	 * let the primary processor know we're out of the
-	 * pen, then head off into the C entry point
-	 */
-	pen_release = -1;
-	smp_wmb();
-
-	/*
-	 * Synchronise with the boot thread.
-	 */
-	spin_lock(&boot_lock);
-	spin_unlock(&boot_lock);
-}
-
-int __cpuinit boot_secondary(unsigned int cpu, struct task_struct *idle)
-{
-	unsigned long timeout;
-
-	/*
-	 * Set synchronisation state between this boot processor
-	 * and the secondary one
-	 */
-	spin_lock(&boot_lock);
-
-	/*
-	 * This is really belt and braces; we hold unintended secondary
-	 * CPUs in the holding pen until we're ready for them.  However,
-	 * since we haven't sent them a soft interrupt, they shouldn't
-	 * be there.
-	 */
-	pen_release = cpu;
-	__cpuc_flush_dcache_area((void *)&pen_release, sizeof(pen_release));
-	outer_clean_range(__pa(&pen_release), __pa(&pen_release + 1));
-
-	/*
-	 * Send the secondary CPU a soft interrupt, thereby causing
-	 * the boot monitor to read the system wide flags register,
-	 * and branch to the address found there.
-	 */
-	smp_cross_call(cpumask_of(cpu));
-
-	timeout = jiffies + (1 * HZ);
-	while (time_before(jiffies, timeout)) {
-		smp_rmb();
-		if (pen_release == -1)
-			break;
-
-		udelay(10);
+		vexpress_dt_cortex_a9_scu_map.pfn = __phys_to_pfn(phys_addr);
+		iotable_init(&vexpress_dt_cortex_a9_scu_map, 1);
+		vexpress_dt_cortex_a9_scu_base = ioremap(phys_addr, SZ_256);
+		if (WARN_ON(!vexpress_dt_cortex_a9_scu_base))
+			return -EFAULT;
 	}
 
-	/*
-	 * now the secondary core is starting up let it run its
-	 * calibrations, then wait for it to finish
-	 */
-	spin_unlock(&boot_lock);
-
-	return pen_release != -1 ? -ENOSYS : 0;
+	return 0;
 }
+
+void __init vexpress_dt_smp_map_io(void)
+{
+	if (initial_boot_params)
+		WARN_ON(of_scan_flat_dt(vexpress_dt_find_scu, NULL));
+}
+
+static int __init vexpress_dt_cpus_num(unsigned long node, const char *uname,
+		int depth, void *data)
+{
+	static int prev_depth = -1;
+	static int nr_cpus = -1;
+
+	if (prev_depth > depth && nr_cpus > 0)
+		return nr_cpus;
+
+	if (nr_cpus < 0 && strcmp(uname, "cpus") == 0)
+		nr_cpus = 0;
+
+	if (nr_cpus >= 0) {
+		const char *device_type = of_get_flat_dt_prop(node,
+				"device_type", NULL);
+
+		if (device_type && strcmp(device_type, "cpu") == 0)
+			nr_cpus++;
+	}
+
+	prev_depth = depth;
+
+	return 0;
+}
+
+static void __init vexpress_dt_smp_init_cpus(void)
+{
+	int ncores = 0, i;
+
+	switch (vexpress_dt_scu) {
+	case GENERIC_SCU:
+		ncores = of_scan_flat_dt(vexpress_dt_cpus_num, NULL);
+		break;
+	case CORTEX_A9_SCU:
+		ncores = scu_get_core_count(vexpress_dt_cortex_a9_scu_base);
+		break;
+	default:
+		WARN_ON(1);
+		break;
+	}
+
+	if (ncores < 2)
+		return;
+
+	if (ncores > nr_cpu_ids) {
+		pr_warn("SMP: %u cores greater than maximum (%u), clipping\n",
+				ncores, nr_cpu_ids);
+		ncores = nr_cpu_ids;
+	}
+
+	for (i = 0; i < ncores; ++i)
+		set_cpu_possible(i, true);
+
+	set_smp_cross_call(gic_raise_softirq);
+}
+
+static void __init vexpress_dt_smp_prepare_cpus(unsigned int max_cpus)
+{
+	int i;
+
+	switch (vexpress_dt_scu) {
+	case GENERIC_SCU:
+		for (i = 0; i < max_cpus; i++)
+			set_cpu_present(i, true);
+		break;
+	case CORTEX_A9_SCU:
+		scu_enable(vexpress_dt_cortex_a9_scu_base);
+		break;
+	default:
+		WARN_ON(1);
+		break;
+	}
+}
+
+#else
+
+static void __init vexpress_dt_smp_init_cpus(void)
+{
+	WARN_ON(1);
+}
+
+void __init vexpress_dt_smp_prepare_cpus(unsigned int max_cpus)
+{
+	WARN_ON(1);
+}
+
+#endif
 
 /*
  * Initialise the CPU possible map early - this describes the CPUs
@@ -118,73 +169,29 @@ int __cpuinit boot_secondary(unsigned int cpu, struct task_struct *idle)
  */
 void __init smp_init_cpus(void)
 {
-	void __iomem *scu_base = scu_base_addr();
-	unsigned int i, ncores;
+	if (ct_desc)
+		ct_desc->init_cpu_map();
+	else
+		vexpress_dt_smp_init_cpus();
 
-	ncores = scu_base ? scu_get_core_count(scu_base) : 1;
-
-	/* sanity check */
-	if (ncores == 0) {
-		printk(KERN_ERR
-		       "vexpress: strange CM count of 0? Default to 1\n");
-
-		ncores = 1;
-	}
-
-	if (ncores > NR_CPUS) {
-		printk(KERN_WARNING
-		       "vexpress: no. of cores (%d) greater than configured "
-		       "maximum of %d - clipping\n",
-		       ncores, NR_CPUS);
-		ncores = NR_CPUS;
-	}
-
-	for (i = 0; i < ncores; i++)
-		set_cpu_possible(i, true);
 }
 
-void __init smp_prepare_cpus(unsigned int max_cpus)
+void __init platform_smp_prepare_cpus(unsigned int max_cpus)
 {
-	unsigned int ncores = num_possible_cpus();
-	unsigned int cpu = smp_processor_id();
-	int i;
-
-	smp_store_cpu_info(cpu);
-
-	/*
-	 * are we trying to boot more cores than exist?
-	 */
-	if (max_cpus > ncores)
-		max_cpus = ncores;
-
 	/*
 	 * Initialise the present map, which describes the set of CPUs
 	 * actually populated at the present time.
 	 */
-	for (i = 0; i < max_cpus; i++)
-		set_cpu_present(i, true);
+	if (ct_desc)
+		ct_desc->smp_enable(max_cpus);
+	else
+		vexpress_dt_smp_prepare_cpus(max_cpus);
 
 	/*
-	 * Initialise the SCU if there are more than one CPU and let
-	 * them know where to start.
+	 * Write the address of secondary startup into the
+	 * system-wide flags register. The boot monitor waits
+	 * until it receives a soft interrupt, and then the
+	 * secondary CPU branches to this address.
 	 */
-	if (max_cpus > 1) {
-		/*
-		 * Enable the local timer or broadcast device for the
-		 * boot CPU, but only if we have more than one CPU.
-		 */
-		percpu_timer_setup();
-
-		scu_enable(scu_base_addr());
-
-		/*
-		 * Write the address of secondary startup into the
-		 * system-wide flags register. The boot monitor waits
-		 * until it receives a soft interrupt, and then the
-		 * secondary CPU branches to this address.
-		 */
-		writel(~0, MMIO_P2V(V2M_SYS_FLAGSCLR));
-		writel(BSYM(virt_to_phys(vexpress_secondary_startup)),
-			MMIO_P2V(V2M_SYS_FLAGSSET));
-	}
+	v2m_flags_set(virt_to_phys(versatile_secondary_startup));
 }

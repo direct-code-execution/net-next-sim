@@ -3,7 +3,8 @@ if ETRAX_ARCH_V32
 config ETRAX_ETHERNET
 	bool "Ethernet support"
 	depends on ETRAX_ARCH_V32
-	select NET_ETHERNET
+	select ETHERNET
+	select NET_CORE
 	select MII
 	help
 	  This option enables the ETRAX FS built-in 10/100Mbit Ethernet
@@ -405,8 +406,6 @@ config ETRAX_AXISFLASHMAP
 	select MTD_JEDECPROBE
 	select MTD_CHAR
 	select MTD_BLOCK
-	select MTD_PARTITIONS
-	select MTD_CONCAT
 	select MTD_COMPLEX_MAPPINGS
 	help
 	  This option enables MTD mapping of flash devices.  Needed to use

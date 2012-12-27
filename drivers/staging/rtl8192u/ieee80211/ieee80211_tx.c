@@ -723,7 +723,7 @@ int ieee80211_xmit(struct sk_buff *skb, struct net_device *dev)
 		(CFG_IEEE80211_COMPUTE_FCS | CFG_IEEE80211_RESERVE_FCS))
 			bytes_per_frag -= IEEE80211_FCS_LEN;
 
-		/* Each fragment may need to have room for encryptiong pre/postfix */
+		/* Each fragment may need to have room for encryption pre/postfix */
 		if (encrypt)
 			bytes_per_frag -= crypt->ops->extra_prefix_len +
 				crypt->ops->extra_postfix_len;
@@ -754,7 +754,7 @@ int ieee80211_xmit(struct sk_buff *skb, struct net_device *dev)
 		{
 			txb->queue_index = UP2AC(skb->priority);
 		} else {
-			txb->queue_index = WME_AC_BK;;
+			txb->queue_index = WME_AC_BK;
 		}
 
 

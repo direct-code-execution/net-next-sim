@@ -8,11 +8,6 @@
  *	it under the terms of the GNU General Public License as published by
  *	the Free Software Foundation; either version 2 of the License, or
  *	(at your option) any later version.
- *
- *	This program is distributed in the hope that it will be useful,
- *	but WITHOUT ANY WARRANTY; without even the implied warranty of
- *	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *	GNU General Public License for more details.
  */
 
 #ifndef __LINUX_USB_GADGET_IMX_H
@@ -23,9 +18,6 @@
 /* Helper macros */
 #define EP_NO(ep)	((ep->bEndpointAddress) & ~USB_DIR_IN) /* IN:1, OUT:0 */
 #define EP_DIR(ep)	((ep->bEndpointAddress) & USB_DIR_IN ? 1 : 0)
-#define irq_to_ep(irq)	(((irq) >= USBD_INT0) || ((irq) <= USBD_INT6) \
-		? ((irq) - USBD_INT0) : (USBD_INT6)) /*should not happen*/
-#define ep_to_irq(ep)	(EP_NO((ep)) + USBD_INT0)
 #define IMX_USB_NB_EP	6
 
 /* Driver structures */

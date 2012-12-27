@@ -39,6 +39,7 @@ dts=
 cacheit=
 binary=
 gzip=.gz
+pie=
 
 # cross-compilation prefix
 CROSS=
@@ -143,6 +144,7 @@ tmp=$tmpdir/zImage.$$.o
 ksection=.kernel:vmlinux.strip
 isection=.kernel:initrd
 link_address='0x400000'
+make_space=y
 
 case "$platform" in
 pseries)
@@ -157,11 +159,12 @@ pmac|chrp)
     platformo=$object/of.o
     ;;
 coff)
-    platformo=$object/of.o
+    platformo="$object/crt0.o $object/of.o"
     lds=$object/zImage.coff.lds
     link_address='0x500000'
+    pie=
     ;;
-miboot|uboot)
+miboot|uboot*)
     # miboot and U-boot want just the bare bits, not an ELF binary
     ext=bin
     objflags="-O binary"
@@ -208,6 +211,8 @@ ps3)
     ksection=.kernel:vmlinux.bin
     isection=.kernel:initrd
     link_address=''
+    make_space=n
+    pie=
     ;;
 ep88xc|ep405|ep8248e)
     platformo="$object/fixed-head.o $object/$platform.o"
@@ -241,8 +246,15 @@ gamecube|wii)
     link_address='0x600000'
     platformo="$object/$platform-head.o $object/$platform.o"
     ;;
+treeboot-currituck)
+    link_address='0x1000000'
+    ;;
 treeboot-iss4xx-mpic)
     platformo="$object/treeboot-iss4xx.o"
+    ;;
+epapr)
+    link_address='0x20000000'
+    pie=-pie
     ;;
 esac
 
@@ -250,8 +262,10 @@ vmz="$tmpdir/`basename \"$kernel\"`.$ext"
 if [ -z "$cacheit" -o ! -f "$vmz$gzip" -o "$vmz$gzip" -ot "$kernel" ]; then
     ${CROSS}objcopy $objflags "$kernel" "$vmz.$$"
 
+    strip_size=$(stat -c %s $vmz.$$)
+
     if [ -n "$gzip" ]; then
-        gzip -f -9 "$vmz.$$"
+        gzip -n -f -9 "$vmz.$$"
     fi
 
     if [ -n "$cacheit" ]; then
@@ -259,6 +273,26 @@ if [ -z "$cacheit" -o ! -f "$vmz$gzip" -o "$vmz$gzip" -ot "$kernel" ]; then
     else
 	vmz="$vmz.$$"
     fi
+else
+    # Calculate the vmlinux.strip size
+    ${CROSS}objcopy $objflags "$kernel" "$vmz.$$"
+    strip_size=$(stat -c %s $vmz.$$)
+    rm -f $vmz.$$
+fi
+
+if [ "$make_space" = "y" ]; then
+	# Round the size to next higher MB limit
+	round_size=$(((strip_size + 0xfffff) & 0xfff00000))
+
+	round_size=0x$(printf "%x" $round_size)
+	link_addr=$(printf "%d" $link_address)
+
+	if [ $link_addr -lt $strip_size ]; then
+	    echo "INFO: Uncompressed kernel (size 0x$(printf "%x\n" $strip_size))" \
+			"overlaps the address of the wrapper($link_address)"
+	    echo "INFO: Fixing the link_address of wrapper to ($round_size)"
+	    link_address=$round_size
+	fi
 fi
 
 vmz="$vmz$gzip"
@@ -279,6 +313,26 @@ uboot)
     rm -f "$ofile"
     ${MKIMAGE} -A ppc -O linux -T kernel -C gzip -a $membase -e $membase \
 	$uboot_version -d "$vmz" "$ofile"
+    if [ -z "$cacheit" ]; then
+	rm -f "$vmz"
+    fi
+    exit 0
+    ;;
+uboot-obs600)
+    rm -f "$ofile"
+    # obs600 wants a multi image with an initrd, so we need to put a fake
+    # one in even when building a "normal" image.
+    if [ -n "$initrd" ]; then
+	real_rd="$initrd"
+    else
+	real_rd=`mktemp`
+	echo "\0" >>"$real_rd"
+    fi
+    ${MKIMAGE} -A ppc -O linux -T multi -C gzip -a $membase -e $membase \
+	$uboot_version -d "$vmz":"$real_rd":"$dtb" "$ofile"
+    if [ -z "$initrd" ]; then
+	rm -f "$real_rd"
+    fi
     if [ -z "$cacheit" ]; then
 	rm -f "$vmz"
     fi
@@ -310,9 +364,9 @@ fi
 
 if [ "$platform" != "miboot" ]; then
     if [ -n "$link_address" ] ; then
-        text_start="-Ttext $link_address --defsym _start=$link_address"
+        text_start="-Ttext $link_address"
     fi
-    ${CROSS}ld -m elf32ppc -T $lds $text_start -o "$ofile" \
+    ${CROSS}ld -m elf32ppc -T $lds $text_start $pie -o "$ofile" \
 	$platformo $tmp $object/wrapper.a
     rm $tmp
 fi
@@ -336,7 +390,7 @@ coff)
     $objbin/hack-coff "$ofile"
     ;;
 cuboot*)
-    gzip -f -9 "$ofile"
+    gzip -n -f -9 "$ofile"
     ${MKIMAGE} -A ppc -O linux -T kernel -C gzip -a "$base" -e "$entry" \
             $uboot_version -d "$ofile".gz "$ofile"
     ;;
@@ -383,6 +437,6 @@ ps3)
 
     odir="$(dirname "$ofile.bin")"
     rm -f "$odir/otheros.bld"
-    gzip --force -9 --stdout "$ofile.bin" > "$odir/otheros.bld"
+    gzip -n --force -9 --stdout "$ofile.bin" > "$odir/otheros.bld"
     ;;
 esac

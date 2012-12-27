@@ -30,6 +30,7 @@
 #include "nouveau_encoder.h"
 #include "nouveau_connector.h"
 #include "nouveau_crtc.h"
+#include "nouveau_gpio.h"
 #include "nouveau_hw.h"
 #include "nv17_tv.h"
 
@@ -37,7 +38,6 @@ static uint32_t nv42_tv_sample_load(struct drm_encoder *encoder)
 {
 	struct drm_device *dev = encoder->dev;
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
-	struct nouveau_gpio_engine *gpio = &dev_priv->engine.gpio;
 	uint32_t testval, regoffset = nv04_dac_output_offset(encoder);
 	uint32_t gpio0, gpio1, fp_htotal, fp_hsync_start, fp_hsync_end,
 		fp_control, test_ctrl, dacclk, ctv_14, ctv_1c, ctv_6c;
@@ -53,8 +53,8 @@ static uint32_t nv42_tv_sample_load(struct drm_encoder *encoder)
 	head = (dacclk & 0x100) >> 8;
 
 	/* Save the previous state. */
-	gpio1 = gpio->get(dev, DCB_GPIO_TVDAC1);
-	gpio0 = gpio->get(dev, DCB_GPIO_TVDAC0);
+	gpio1 = nouveau_gpio_func_get(dev, DCB_GPIO_TVDAC1);
+	gpio0 = nouveau_gpio_func_get(dev, DCB_GPIO_TVDAC0);
 	fp_htotal = NVReadRAMDAC(dev, head, NV_PRAMDAC_FP_HTOTAL);
 	fp_hsync_start = NVReadRAMDAC(dev, head, NV_PRAMDAC_FP_HSYNC_START);
 	fp_hsync_end = NVReadRAMDAC(dev, head, NV_PRAMDAC_FP_HSYNC_END);
@@ -65,8 +65,8 @@ static uint32_t nv42_tv_sample_load(struct drm_encoder *encoder)
 	ctv_6c = NVReadRAMDAC(dev, head, 0x680c6c);
 
 	/* Prepare the DAC for load detection.  */
-	gpio->set(dev, DCB_GPIO_TVDAC1, true);
-	gpio->set(dev, DCB_GPIO_TVDAC0, true);
+	nouveau_gpio_func_set(dev, DCB_GPIO_TVDAC1, true);
+	nouveau_gpio_func_set(dev, DCB_GPIO_TVDAC0, true);
 
 	NVWriteRAMDAC(dev, head, NV_PRAMDAC_FP_HTOTAL, 1343);
 	NVWriteRAMDAC(dev, head, NV_PRAMDAC_FP_HSYNC_START, 1047);
@@ -111,8 +111,8 @@ static uint32_t nv42_tv_sample_load(struct drm_encoder *encoder)
 	NVWriteRAMDAC(dev, head, NV_PRAMDAC_FP_HSYNC_END, fp_hsync_end);
 	NVWriteRAMDAC(dev, head, NV_PRAMDAC_FP_HSYNC_START, fp_hsync_start);
 	NVWriteRAMDAC(dev, head, NV_PRAMDAC_FP_HTOTAL, fp_htotal);
-	gpio->set(dev, DCB_GPIO_TVDAC1, gpio1);
-	gpio->set(dev, DCB_GPIO_TVDAC0, gpio0);
+	nouveau_gpio_func_set(dev, DCB_GPIO_TVDAC1, gpio1);
+	nouveau_gpio_func_set(dev, DCB_GPIO_TVDAC0, gpio0);
 
 	return sample;
 }
@@ -193,55 +193,58 @@ nv17_tv_detect(struct drm_encoder *encoder, struct drm_connector *connector)
 	}
 }
 
-static const struct {
-	int hdisplay;
-	int vdisplay;
-} modes[] = {
-	{ 640, 400 },
-	{ 640, 480 },
-	{ 720, 480 },
-	{ 720, 576 },
-	{ 800, 600 },
-	{ 1024, 768 },
-	{ 1280, 720 },
-	{ 1280, 1024 },
-	{ 1920, 1080 }
-};
-
-static int nv17_tv_get_modes(struct drm_encoder *encoder,
-			     struct drm_connector *connector)
+static int nv17_tv_get_ld_modes(struct drm_encoder *encoder,
+				struct drm_connector *connector)
 {
 	struct nv17_tv_norm_params *tv_norm = get_tv_norm(encoder);
-	struct drm_display_mode *mode;
-	struct drm_display_mode *output_mode;
+	const struct drm_display_mode *tv_mode;
 	int n = 0;
-	int i;
 
-	if (tv_norm->kind != CTV_ENC_MODE) {
-		struct drm_display_mode *tv_mode;
+	for (tv_mode = nv17_tv_modes; tv_mode->hdisplay; tv_mode++) {
+		struct drm_display_mode *mode;
 
-		for (tv_mode = nv17_tv_modes; tv_mode->hdisplay; tv_mode++) {
-			mode = drm_mode_duplicate(encoder->dev, tv_mode);
+		mode = drm_mode_duplicate(encoder->dev, tv_mode);
 
-			mode->clock = tv_norm->tv_enc_mode.vrefresh *
-						mode->htotal / 1000 *
-						mode->vtotal / 1000;
+		mode->clock = tv_norm->tv_enc_mode.vrefresh *
+			mode->htotal / 1000 *
+			mode->vtotal / 1000;
 
-			if (mode->flags & DRM_MODE_FLAG_DBLSCAN)
-				mode->clock *= 2;
+		if (mode->flags & DRM_MODE_FLAG_DBLSCAN)
+			mode->clock *= 2;
 
-			if (mode->hdisplay == tv_norm->tv_enc_mode.hdisplay &&
-			    mode->vdisplay == tv_norm->tv_enc_mode.vdisplay)
-				mode->type |= DRM_MODE_TYPE_PREFERRED;
+		if (mode->hdisplay == tv_norm->tv_enc_mode.hdisplay &&
+		    mode->vdisplay == tv_norm->tv_enc_mode.vdisplay)
+			mode->type |= DRM_MODE_TYPE_PREFERRED;
 
-			drm_mode_probed_add(connector, mode);
-			n++;
-		}
-		return n;
+		drm_mode_probed_add(connector, mode);
+		n++;
 	}
 
-	/* tv_norm->kind == CTV_ENC_MODE */
-	output_mode = &tv_norm->ctv_enc_mode.mode;
+	return n;
+}
+
+static int nv17_tv_get_hd_modes(struct drm_encoder *encoder,
+				struct drm_connector *connector)
+{
+	struct nv17_tv_norm_params *tv_norm = get_tv_norm(encoder);
+	struct drm_display_mode *output_mode = &tv_norm->ctv_enc_mode.mode;
+	struct drm_display_mode *mode;
+	const struct {
+		int hdisplay;
+		int vdisplay;
+	} modes[] = {
+		{ 640, 400 },
+		{ 640, 480 },
+		{ 720, 480 },
+		{ 720, 576 },
+		{ 800, 600 },
+		{ 1024, 768 },
+		{ 1280, 720 },
+		{ 1280, 1024 },
+		{ 1920, 1080 }
+	};
+	int i, n = 0;
+
 	for (i = 0; i < ARRAY_SIZE(modes); i++) {
 		if (modes[i].hdisplay > output_mode->hdisplay ||
 		    modes[i].vdisplay > output_mode->vdisplay)
@@ -251,11 +254,12 @@ static int nv17_tv_get_modes(struct drm_encoder *encoder,
 		    modes[i].vdisplay == output_mode->vdisplay) {
 			mode = drm_mode_duplicate(encoder->dev, output_mode);
 			mode->type |= DRM_MODE_TYPE_PREFERRED;
+
 		} else {
 			mode = drm_cvt_mode(encoder->dev, modes[i].hdisplay,
-				modes[i].vdisplay, 60, false,
-				output_mode->flags & DRM_MODE_FLAG_INTERLACE,
-				false);
+					    modes[i].vdisplay, 60, false,
+					    (output_mode->flags &
+					     DRM_MODE_FLAG_INTERLACE), false);
 		}
 
 		/* CVT modes are sometimes unsuitable... */
@@ -266,6 +270,7 @@ static int nv17_tv_get_modes(struct drm_encoder *encoder,
 					     - mode->hdisplay) * 9 / 10) & ~7;
 			mode->hsync_end = mode->hsync_start + 8;
 		}
+
 		if (output_mode->vdisplay >= 1024) {
 			mode->vtotal = output_mode->vtotal;
 			mode->vsync_start = output_mode->vsync_start;
@@ -276,7 +281,19 @@ static int nv17_tv_get_modes(struct drm_encoder *encoder,
 		drm_mode_probed_add(connector, mode);
 		n++;
 	}
+
 	return n;
+}
+
+static int nv17_tv_get_modes(struct drm_encoder *encoder,
+			     struct drm_connector *connector)
+{
+	struct nv17_tv_norm_params *tv_norm = get_tv_norm(encoder);
+
+	if (tv_norm->kind == CTV_ENC_MODE)
+		return nv17_tv_get_hd_modes(encoder, connector);
+	else
+		return nv17_tv_get_ld_modes(encoder, connector);
 }
 
 static int nv17_tv_mode_valid(struct drm_encoder *encoder,
@@ -340,8 +357,6 @@ static bool nv17_tv_mode_fixup(struct drm_encoder *encoder,
 static void  nv17_tv_dpms(struct drm_encoder *encoder, int mode)
 {
 	struct drm_device *dev = encoder->dev;
-	struct drm_nouveau_private *dev_priv = dev->dev_private;
-	struct nouveau_gpio_engine *gpio = &dev_priv->engine.gpio;
 	struct nv17_tv_state *regs = &to_tv_enc(encoder)->state;
 	struct nv17_tv_norm_params *tv_norm = get_tv_norm(encoder);
 
@@ -366,8 +381,8 @@ static void  nv17_tv_dpms(struct drm_encoder *encoder, int mode)
 
 	nv_load_ptv(dev, regs, 200);
 
-	gpio->set(dev, DCB_GPIO_TVDAC1, mode == DRM_MODE_DPMS_ON);
-	gpio->set(dev, DCB_GPIO_TVDAC0, mode == DRM_MODE_DPMS_ON);
+	nouveau_gpio_func_set(dev, DCB_GPIO_TVDAC1, mode == DRM_MODE_DPMS_ON);
+	nouveau_gpio_func_set(dev, DCB_GPIO_TVDAC0, mode == DRM_MODE_DPMS_ON);
 
 	nv04_dac_update_dacclk(encoder, mode == DRM_MODE_DPMS_ON);
 }
@@ -408,15 +423,8 @@ static void nv17_tv_prepare(struct drm_encoder *encoder)
 
 	}
 
-	/* Some NV4x have unknown values (0x3f, 0x50, 0x54, 0x6b, 0x79, 0x7f)
-	 * at LCD__INDEX which we don't alter
-	 */
-	if (!(*cr_lcd & 0x44)) {
-		if (tv_norm->kind == CTV_ENC_MODE)
-			*cr_lcd = 0x1 | (head ? 0x0 : 0x8);
-		else
-			*cr_lcd = 0;
-	}
+	if (tv_norm->kind == CTV_ENC_MODE)
+		*cr_lcd |= 0x1 | (head ? 0x0 : 0x8);
 
 	/* Set the DACCLK register */
 	dacclk = (NVReadRAMDAC(dev, 0, dacclk_off) & ~0x30) | 0x1;

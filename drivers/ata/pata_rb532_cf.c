@@ -60,10 +60,10 @@ static irqreturn_t rb532_pata_irq_handler(int irq, void *dev_instance)
 	struct rb532_cf_info *info = ah->private_data;
 
 	if (gpio_get_value(info->gpio_line)) {
-		set_irq_type(info->irq, IRQ_TYPE_LEVEL_LOW);
+		irq_set_irq_type(info->irq, IRQ_TYPE_LEVEL_LOW);
 		ata_sff_interrupt(info->irq, dev_instance);
 	} else {
-		set_irq_type(info->irq, IRQ_TYPE_LEVEL_HIGH);
+		irq_set_irq_type(info->irq, IRQ_TYPE_LEVEL_HIGH);
 	}
 
 	return IRQ_HANDLED;
@@ -91,7 +91,6 @@ static void rb532_pata_setup_ports(struct ata_host *ah)
 
 	ap->ops		= &rb532_pata_port_ops;
 	ap->pio_mask	= ATA_PIO4;
-	ap->flags	= ATA_FLAG_NO_LEGACY | ATA_FLAG_MMIO;
 
 	ap->ioaddr.cmd_addr	= info->iobase + RB500_CF_REG_BASE;
 	ap->ioaddr.ctl_addr	= info->iobase + RB500_CF_REG_CTRL;
@@ -189,9 +188,6 @@ static __devexit int rb532_pata_driver_remove(struct platform_device *pdev)
 	return 0;
 }
 
-/* work with hotplug and coldplug */
-MODULE_ALIAS("platform:" DRV_NAME);
-
 static struct platform_driver rb532_pata_platform_driver = {
 	.probe		= rb532_pata_driver_probe,
 	.remove		= __devexit_p(rb532_pata_driver_remove),
@@ -201,27 +197,13 @@ static struct platform_driver rb532_pata_platform_driver = {
 	},
 };
 
-/* ------------------------------------------------------------------------ */
-
 #define DRV_INFO DRV_DESC " version " DRV_VERSION
 
-static int __init rb532_pata_module_init(void)
-{
-	printk(KERN_INFO DRV_INFO "\n");
-
-	return platform_driver_register(&rb532_pata_platform_driver);
-}
-
-static void __exit rb532_pata_module_exit(void)
-{
-	platform_driver_unregister(&rb532_pata_platform_driver);
-}
+module_platform_driver(rb532_pata_platform_driver);
 
 MODULE_AUTHOR("Gabor Juhos <juhosg at openwrt.org>");
 MODULE_AUTHOR("Florian Fainelli <florian@openwrt.org>");
 MODULE_DESCRIPTION(DRV_DESC);
 MODULE_VERSION(DRV_VERSION);
 MODULE_LICENSE("GPL");
-
-module_init(rb532_pata_module_init);
-module_exit(rb532_pata_module_exit);
+MODULE_ALIAS("platform:" DRV_NAME);

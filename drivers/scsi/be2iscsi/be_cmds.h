@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2005 - 2010 ServerEngines
+ * Copyright (C) 2005 - 2011 Emulex
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -8,11 +8,11 @@
  * Public License is included in this distribution in the file called COPYING.
  *
  * Contact Information:
- * linux-drivers@serverengines.com
+ * linux-drivers@emulex.com
  *
- * ServerEngines
- * 209 N. Fair Oaks Ave
- * Sunnyvale, CA 94085
+ * Emulex
+ * 3333 Susan Street
+ * Costa Mesa, CA 92626
  */
 
 #ifndef BEISCSI_CMDS_H
@@ -561,6 +561,8 @@ int be_cmd_iscsi_post_sgl_pages(struct be_ctrl_info *ctrl,
 				struct be_dma_mem *q_mem, u32 page_offset,
 				u32 num_pages);
 
+int beiscsi_cmd_reset_function(struct beiscsi_hba *phba);
+
 int be_cmd_wrbq_create(struct be_ctrl_info *ctrl, struct be_dma_mem *q_mem,
 		       struct be_queue_info *wrbq);
 
@@ -877,7 +879,7 @@ struct be_all_if_id {
 						 */
 #define CXN_KILLED_PDU_SIZE_EXCEEDS_DSL 3	/* Connection got invalidated
 						 * internally
-						 * due to a recieved PDU
+						 * due to a received PDU
 						 * size > DSL
 						 */
 #define CXN_KILLED_BURST_LEN_MISMATCH   4	/* Connection got invalidated
@@ -886,7 +888,7 @@ struct be_all_if_id {
 						 * FBL/MBL.
 						 */
 #define CXN_KILLED_AHS_RCVD		5	/* Connection got invalidated
-						 * internally due to a recieved
+						 * internally due to a received
 						 * PDU Hdr that has
 						 * AHS */
 #define CXN_KILLED_HDR_DIGEST_ERR	6	/* Connection got invalidated
@@ -899,12 +901,12 @@ struct be_all_if_id {
 						 * pdu hdr
 						 */
 #define CXN_KILLED_STALE_ITT_TTT_RCVD	8	/* Connection got invalidated
-						 * internally due to a recieved
+						 * internally due to a received
 						 * ITT/TTT that does not belong
 						 * to this Connection
 						 */
 #define CXN_KILLED_INVALID_ITT_TTT_RCVD 9	/* Connection got invalidated
-						 * internally due to recieved
+						 * internally due to received
 						 * ITT/TTT value > Max
 						 * Supported ITTs/TTTs
 						 */
@@ -936,21 +938,21 @@ struct be_all_if_id {
 						 * index.
 						 */
 #define CXN_KILLED_OVER_RUN_RESIDUAL	16	/* Command got invalidated
-						 * internally due to recived
+						 * internally due to received
 						 * command has residual
 						 * over run bytes.
 						 */
 #define CXN_KILLED_UNDER_RUN_RESIDUAL	17	/* Command got invalidated
-						 * internally due to recived
+						 * internally due to received
 						 * command has residual under
 						 * run bytes.
 						 */
 #define CMD_KILLED_INVALID_STATSN_RCVD	18	/* Command got invalidated
-						 * internally due to a recieved
+						 * internally due to a received
 						 * PDU has an invalid StatusSN
 						 */
 #define CMD_KILLED_INVALID_R2T_RCVD	19	/* Command got invalidated
-						 * internally due to a recieved
+						 * internally due to a received
 						 * an R2T with some invalid
 						 * fields in it
 						 */
@@ -973,7 +975,7 @@ struct be_all_if_id {
 						 */
 #define CMD_CXN_KILLED_INVALID_DATASN_RCVD 24	/* Command got invalidated
 						 * internally due to a
-						 * recieved PDU has an invalid
+						 * received PDU has an invalid
 						 * DataSN
 						 */
 #define CXN_INVALIDATE_NOTIFY		25	/* Connection invalidation

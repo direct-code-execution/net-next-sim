@@ -1,8 +1,8 @@
 /*
- * QLogic Fibre Channel HBA Driver
- * Copyright (c)  2003-2008 QLogic Corporation
+ * QLogic iSCSI HBA Driver
+ * Copyright (c)  2003-2010 QLogic Corporation
  *
- * See LICENSE.qla2xxx for copyright and licensing details.
+ * See LICENSE.qla4xxx for copyright and licensing details.
  */
 #ifndef __QLA_NX_H
 #define __QLA_NX_H
@@ -19,13 +19,28 @@
 #define PHAN_PEG_RCV_INITIALIZED	0xff01
 
 /*CRB_RELATED*/
-#define QLA82XX_CRB_BASE	QLA82XX_CAM_RAM(0x200)
-#define QLA82XX_REG(X)		(QLA82XX_CRB_BASE+(X))
-
+#define QLA82XX_CRB_BASE		(QLA82XX_CAM_RAM(0x200))
+#define QLA82XX_REG(X)			(QLA82XX_CRB_BASE+(X))
 #define CRB_CMDPEG_STATE		QLA82XX_REG(0x50)
 #define CRB_RCVPEG_STATE		QLA82XX_REG(0x13c)
-#define BOOT_LOADER_DIMM_STATUS		QLA82XX_REG(0x54)
 #define CRB_DMA_SHIFT			QLA82XX_REG(0xcc)
+#define CRB_TEMP_STATE			QLA82XX_REG(0x1b4)
+
+#define qla82xx_get_temp_val(x)		((x) >> 16)
+#define qla82xx_get_temp_state(x)	((x) & 0xffff)
+#define qla82xx_encode_temp(val, state)	(((val) << 16) | (state))
+
+/*
+ * Temperature control.
+ */
+enum {
+	QLA82XX_TEMP_NORMAL = 0x1,	/* Normal operating range */
+	QLA82XX_TEMP_WARN,	/* Sound alert, temperature getting high */
+	QLA82XX_TEMP_PANIC	/* Fatal error, hardware has shut down. */
+};
+
+#define CRB_NIU_XG_PAUSE_CTL_P0		0x1
+#define CRB_NIU_XG_PAUSE_CTL_P1		0x8
 
 #define QLA82XX_HW_H0_CH_HUB_ADR	0x05
 #define QLA82XX_HW_H1_CH_HUB_ADR	0x0E
@@ -529,12 +544,12 @@
 # define QLA82XX_CAM_RAM_BASE	(QLA82XX_CRB_CAM + 0x02000)
 # define QLA82XX_CAM_RAM(reg)	(QLA82XX_CAM_RAM_BASE + (reg))
 
-#define QLA82XX_PEG_TUNE_MN_SPD_ZEROED	0x80000000
-#define QLA82XX_BOOT_LOADER_MN_ISSUE	0xff00ffff
 #define QLA82XX_PORT_MODE_ADDR		(QLA82XX_CAM_RAM(0x24))
 #define QLA82XX_PEG_HALT_STATUS1	(QLA82XX_CAM_RAM(0xa8))
 #define QLA82XX_PEG_HALT_STATUS2	(QLA82XX_CAM_RAM(0xac))
 #define QLA82XX_PEG_ALIVE_COUNTER	(QLA82XX_CAM_RAM(0xb0))
+#define QLA82XX_CAM_RAM_DB1		(QLA82XX_CAM_RAM(0x1b0))
+#define QLA82XX_CAM_RAM_DB2		(QLA82XX_CAM_RAM(0x1b4))
 
 #define HALT_STATUS_UNRECOVERABLE	0x80000000
 #define HALT_STATUS_RECOVERABLE		0x40000000
@@ -608,6 +623,7 @@ struct crb_addr_pair {
 
 #define ADDR_ERROR	((unsigned long) 0xffffffff)
 #define MAX_CTL_CHECK	1000
+#define QLA82XX_FWERROR_CODE(code)	((code >> 8) & 0x1fffff)
 
 /***************************************************************************
  *		PCI related defines.

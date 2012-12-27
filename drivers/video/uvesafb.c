@@ -44,11 +44,11 @@ static struct fb_fix_screeninfo uvesafb_fix __devinitdata = {
 };
 
 static int mtrr		__devinitdata = 3; /* enable mtrr by default */
-static int blank	= 1;		   /* enable blanking by default */
+static bool blank	= 1;		   /* enable blanking by default */
 static int ypan		= 1; 		 /* 0: scroll, 1: ypan, 2: ywrap */
 static bool pmi_setpal	__devinitdata = true; /* use PMI for palette changes */
-static int nocrtc	__devinitdata; /* ignore CRTC settings */
-static int noedid	__devinitdata; /* don't try DDC transfers */
+static bool nocrtc	__devinitdata; /* ignore CRTC settings */
+static bool noedid	__devinitdata; /* don't try DDC transfers */
 static int vram_remap	__devinitdata; /* set amt. of memory to be used */
 static int vram_total	__devinitdata; /* set total amount of memory */
 static u16 maxclk	__devinitdata; /* maximum pixel clock */
@@ -73,7 +73,7 @@ static void uvesafb_cn_callback(struct cn_msg *msg, struct netlink_skb_parms *ns
 	struct uvesafb_task *utask;
 	struct uvesafb_ktask *task;
 
-	if (!cap_raised(nsp->eff_cap, CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN))
 		return;
 
 	if (msg->seq >= UVESAFB_TASKS_MAX)
@@ -121,7 +121,7 @@ static int uvesafb_helper_start(void)
 		NULL,
 	};
 
-	return call_usermodehelper(v86d_path, argv, envp, 1);
+	return call_usermodehelper(v86d_path, argv, envp, UMH_WAIT_PROC);
 }
 
 /*
@@ -362,7 +362,7 @@ static u8 *uvesafb_vbe_state_save(struct uvesafb_par *par)
 
 	state = kmalloc(par->vbe_state_size, GFP_KERNEL);
 	if (!state)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	task = uvesafb_prep();
 	if (!task) {
@@ -815,8 +815,15 @@ static int __devinit uvesafb_vbe_init(struct fb_info *info)
 	par->pmi_setpal = pmi_setpal;
 	par->ypan = ypan;
 
-	if (par->pmi_setpal || par->ypan)
-		uvesafb_vbe_getpmi(task, par);
+	if (par->pmi_setpal || par->ypan) {
+		if (__supported_pte_mask & _PAGE_NX) {
+			par->pmi_setpal = par->ypan = 0;
+			printk(KERN_WARNING "uvesafb: NX protection is actively."
+				"We have better not to use the PMI.\n");
+		} else {
+			uvesafb_vbe_getpmi(task, par);
+		}
+	}
 #else
 	/* The protected mode interface is not available on non-x86. */
 	par->pmi_setpal = par->ypan = 0;
@@ -1172,9 +1179,17 @@ static int uvesafb_open(struct fb_info *info, int user)
 {
 	struct uvesafb_par *par = info->par;
 	int cnt = atomic_read(&par->ref_count);
+	u8 *buf = NULL;
 
-	if (!cnt && par->vbe_state_size)
-		par->vbe_state_orig = uvesafb_vbe_state_save(par);
+	if (!cnt && par->vbe_state_size) {
+		buf =  uvesafb_vbe_state_save(par);
+		if (IS_ERR(buf)) {
+			printk(KERN_WARNING "uvesafb: save hardware state"
+				"failed, error code is %ld!\n", PTR_ERR(buf));
+		} else {
+			par->vbe_state_orig = buf;
+		}
+	}
 
 	atomic_inc(&par->ref_count);
 	return 0;
@@ -1552,8 +1567,7 @@ static void __devinit uvesafb_init_mtrr(struct fb_info *info)
 			int rc;
 
 			/* Find the largest power-of-two */
-			while (temp_size & (temp_size - 1))
-				temp_size &= (temp_size - 1);
+			temp_size = roundup_pow_of_two(temp_size);
 
 			/* Try and find a power of two to add */
 			do {
@@ -1566,6 +1580,28 @@ static void __devinit uvesafb_init_mtrr(struct fb_info *info)
 #endif /* CONFIG_MTRR */
 }
 
+static void __devinit uvesafb_ioremap(struct fb_info *info)
+{
+#ifdef CONFIG_X86
+	switch (mtrr) {
+	case 1: /* uncachable */
+		info->screen_base = ioremap_nocache(info->fix.smem_start, info->fix.smem_len);
+		break;
+	case 2: /* write-back */
+		info->screen_base = ioremap_cache(info->fix.smem_start, info->fix.smem_len);
+		break;
+	case 3: /* write-combining */
+		info->screen_base = ioremap_wc(info->fix.smem_start, info->fix.smem_len);
+		break;
+	case 4: /* write-through */
+	default:
+		info->screen_base = ioremap(info->fix.smem_start, info->fix.smem_len);
+		break;
+	}
+#else
+	info->screen_base = ioremap(info->fix.smem_start, info->fix.smem_len);
+#endif /* CONFIG_X86 */
+}
 
 static ssize_t uvesafb_show_vbe_ver(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -1736,15 +1772,22 @@ static int __devinit uvesafb_probe(struct platform_device *dev)
 
 	uvesafb_init_info(info, mode);
 
+	if (!request_region(0x3c0, 32, "uvesafb")) {
+		printk(KERN_ERR "uvesafb: request region 0x3c0-0x3e0 failed\n");
+		err = -EIO;
+		goto out_mode;
+	}
+
 	if (!request_mem_region(info->fix.smem_start, info->fix.smem_len,
 				"uvesafb")) {
 		printk(KERN_ERR "uvesafb: cannot reserve video memory at "
 				"0x%lx\n", info->fix.smem_start);
 		err = -EIO;
-		goto out_mode;
+		goto out_reg;
 	}
 
-	info->screen_base = ioremap(info->fix.smem_start, info->fix.smem_len);
+	uvesafb_init_mtrr(info);
+	uvesafb_ioremap(info);
 
 	if (!info->screen_base) {
 		printk(KERN_ERR
@@ -1755,20 +1798,13 @@ static int __devinit uvesafb_probe(struct platform_device *dev)
 		goto out_mem;
 	}
 
-	if (!request_region(0x3c0, 32, "uvesafb")) {
-		printk(KERN_ERR "uvesafb: request region 0x3c0-0x3e0 failed\n");
-		err = -EIO;
-		goto out_unmap;
-	}
-
-	uvesafb_init_mtrr(info);
 	platform_set_drvdata(dev, info);
 
 	if (register_framebuffer(info) < 0) {
 		printk(KERN_ERR
 			"uvesafb: failed to register framebuffer device\n");
 		err = -EINVAL;
-		goto out_reg;
+		goto out_unmap;
 	}
 
 	printk(KERN_INFO "uvesafb: framebuffer at 0x%lx, mapped to 0x%p, "
@@ -1785,12 +1821,12 @@ static int __devinit uvesafb_probe(struct platform_device *dev)
 
 	return 0;
 
-out_reg:
-	release_region(0x3c0, 32);
 out_unmap:
 	iounmap(info->screen_base);
 out_mem:
 	release_mem_region(info->fix.smem_start, info->fix.smem_len);
+out_reg:
+	release_region(0x3c0, 32);
 out_mode:
 	if (!list_empty(&info->modelist))
 		fb_destroy_modelist(&info->modelist);

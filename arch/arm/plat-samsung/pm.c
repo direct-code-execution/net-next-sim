@@ -20,6 +20,7 @@
 #include <linux/io.h>
 
 #include <asm/cacheflush.h>
+#include <asm/suspend.h>
 #include <mach/hardware.h>
 #include <mach/map.h>
 
@@ -136,15 +137,15 @@ static void s3c_pm_restore_uarts(void) { }
 unsigned long s3c_irqwake_intmask	= 0xffffffffL;
 unsigned long s3c_irqwake_eintmask	= 0xffffffffL;
 
-int s3c_irqext_wake(unsigned int irqno, unsigned int state)
+int s3c_irqext_wake(struct irq_data *data, unsigned int state)
 {
-	unsigned long bit = 1L << IRQ_EINT_BIT(irqno);
+	unsigned long bit = 1L << IRQ_EINT_BIT(data->irq);
 
 	if (!(s3c_irqwake_eintallow & bit))
 		return -ENOENT;
 
 	printk(KERN_INFO "wake %s for irq %d\n",
-	       state ? "enabled" : "disabled", irqno);
+	       state ? "enabled" : "disabled", data->irq);
 
 	if (!state)
 		s3c_irqwake_eintmask |= bit;
@@ -214,8 +215,9 @@ void s3c_pm_do_restore_core(struct sleep_save *ptr, int count)
  *
  * print any IRQs asserted at resume time (ie, we woke from)
 */
-static void s3c_pm_show_resume_irqs(int start, unsigned long which,
-				    unsigned long mask)
+static void __maybe_unused s3c_pm_show_resume_irqs(int start,
+						   unsigned long which,
+						   unsigned long mask)
 {
 	int i;
 
@@ -230,7 +232,7 @@ static void s3c_pm_show_resume_irqs(int start, unsigned long which,
 
 
 void (*pm_cpu_prep)(void);
-void (*pm_cpu_sleep)(void);
+int (*pm_cpu_sleep)(unsigned long);
 
 #define any_allowed(mask, allow) (((mask) & (allow)) != (allow))
 
@@ -241,8 +243,6 @@ void (*pm_cpu_sleep)(void);
 
 static int s3c_pm_enter(suspend_state_t state)
 {
-	static unsigned long regs_save[16];
-
 	/* ensure the debug is initialised (if enabled) */
 
 	s3c_pm_debug_init();
@@ -266,15 +266,10 @@ static int s3c_pm_enter(suspend_state_t state)
 		return -EINVAL;
 	}
 
-	/* store the physical address of the register recovery block */
-
-	s3c_sleep_save_phys = virt_to_phys(regs_save);
-
-	S3C_PMDBG("s3c_sleep_save_phys=0x%08lx\n", s3c_sleep_save_phys);
-
 	/* save all necessary core registers not covered by the drivers */
 
-	s3c_pm_save_gpios();
+	samsung_pm_save_gpios();
+	samsung_pm_saved_gpios();
 	s3c_pm_save_uarts();
 	s3c_pm_save_core();
 
@@ -301,21 +296,18 @@ static int s3c_pm_enter(suspend_state_t state)
 
 	s3c_pm_arch_stop_clocks();
 
-	/* s3c_cpu_save will also act as our return point from when
+	/* this will also act as our return point from when
 	 * we resume as it saves its own register state and restores it
 	 * during the resume.  */
 
-	s3c_cpu_save(regs_save);
-
-	/* restore the cpu state using the kernel's cpu init code. */
-
-	cpu_init();
+	cpu_suspend(0, pm_cpu_sleep);
 
 	/* restore the system state */
 
 	s3c_pm_restore_core();
 	s3c_pm_restore_uarts();
-	s3c_pm_restore_gpios();
+	samsung_pm_restore_gpios();
+	s3c_pm_restored_gpios();
 
 	s3c_pm_debug_init();
 
@@ -336,12 +328,6 @@ static int s3c_pm_enter(suspend_state_t state)
 	return 0;
 }
 
-/* callback from assembly code */
-void s3c_pm_cb_flushcache(void)
-{
-	flush_cache_all();
-}
-
 static int s3c_pm_prepare(void)
 {
 	/* prepare check area if configured */
@@ -355,7 +341,7 @@ static void s3c_pm_finish(void)
 	s3c_pm_check_cleanup();
 }
 
-static struct platform_suspend_ops s3c_pm_ops = {
+static const struct platform_suspend_ops s3c_pm_ops = {
 	.enter		= s3c_pm_enter,
 	.prepare	= s3c_pm_prepare,
 	.finish		= s3c_pm_finish,

@@ -176,7 +176,7 @@ config USB_SERIAL_VISOR
 	help
 	  Say Y here if you want to connect to your HandSpring Visor, Palm
 	  m500 or m505 through its USB docking station. See
-	  <http://usbvisor.sourceforge.net/> for more information on using this
+	  <http://usbvisor.sourceforge.net/index.php3> for more information on using this
 	  driver.
 
 	  To compile this driver as a module, choose M here: the
@@ -238,6 +238,15 @@ config USB_SERIAL_EDGEPORT_TI
 	  To compile this driver as a module, choose M here: the
 	  module will be called io_ti.
 
+config USB_SERIAL_F81232
+	tristate "USB Fintek F81232 Single Port Serial Driver"
+	help
+	  Say Y here if you want to use the Fintek F81232 single
+	  port usb to serial adapter.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called f81232.
+
 config USB_SERIAL_GARMIN
        tristate "USB Garmin GPS driver"
        help
@@ -252,6 +261,7 @@ config USB_SERIAL_GARMIN
 
 config USB_SERIAL_IPW
         tristate "USB IPWireless (3G UMTS TDD) Driver"
+	select USB_SERIAL_WWAN
 	help
 	  Say Y here if you want to use a IPWireless USB modem such as
 	  the ones supplied by Axity3G/Sentech South Africa.
@@ -289,7 +299,7 @@ config USB_SERIAL_KEYSPAN
 	  and was developed with their support.  You must also include
 	  firmware to support your particular device(s).
 
-	  See <http://misc.nu/hugh/keyspan.html> for more information.
+	  See <http://blemings.org/hugh/keyspan.html> for more information.
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called keyspan.
@@ -415,6 +425,14 @@ config USB_SERIAL_MCT_U232
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called mct_u232.
+
+config USB_SERIAL_METRO
+	tristate "USB Metrologic Instruments USB-POS Barcode Scanner Driver"
+	---help---
+	  Say Y here if you want to use a USB POS Metrologic barcode scanner.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called metro-usb.
 
 config USB_SERIAL_MOS7720
 	tristate "USB Moschip 7720 Serial Driver"

@@ -13,6 +13,7 @@
  */
 #include <linux/init.h>
 #include <linux/interrupt.h>
+#include <linux/irq.h>
 #include <asm/time.h>
 #include <asm/txx9tmr.h>
 
@@ -50,8 +51,7 @@ void __init txx9_clocksource_init(unsigned long baseaddr,
 {
 	struct txx9_tmr_reg __iomem *tmrptr;
 
-	clocksource_set_clock(&txx9_clocksource.cs, TIMER_CLK(imbusclk));
-	clocksource_register(&txx9_clocksource.cs);
+	clocksource_register_hz(&txx9_clocksource.cs, TIMER_CLK(imbusclk));
 
 	tmrptr = ioremap(baseaddr, sizeof(struct txx9_tmr_reg));
 	__raw_writel(TCR_BASE, &tmrptr->tcr);
@@ -146,7 +146,7 @@ static irqreturn_t txx9tmr_interrupt(int irq, void *dev_id)
 
 static struct irqaction txx9tmr_irq = {
 	.handler	= txx9tmr_interrupt,
-	.flags		= IRQF_DISABLED | IRQF_PERCPU | IRQF_TIMER,
+	.flags		= IRQF_PERCPU | IRQF_TIMER,
 	.name		= "txx9tmr",
 	.dev_id		= &txx9_clock_event_device,
 };

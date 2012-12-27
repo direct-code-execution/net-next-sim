@@ -55,12 +55,6 @@ static const u32 PIE_BIT_DEF[MAX_PIE_NUM][2] = {
 	{ MAX_PIE_FREQ,	RTC_SAM7_BIT },
 };
 
-/* Those are the bits from a classic RTC we want to mimic */
-#define RTC_IRQF	0x80	/* any of the following 3 is active */
-#define RTC_PF		0x40	/* Periodic interrupt */
-#define RTC_AF		0x20	/* Alarm interrupt */
-#define RTC_UF		0x10	/* Update interrupt for 1Hz RTC */
-
 #define MXC_RTC_TIME	0
 #define MXC_RTC_ALARM	1
 
@@ -161,7 +155,6 @@ static int rtc_update_alarm(struct device *dev, struct rtc_time *alrm)
 {
 	struct rtc_time alarm_tm, now_tm;
 	unsigned long now, time;
-	int ret;
 	struct platform_device *pdev = to_platform_device(dev);
 	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
 	void __iomem *ioaddr = pdata->ioaddr;
@@ -174,21 +167,33 @@ static int rtc_update_alarm(struct device *dev, struct rtc_time *alrm)
 	alarm_tm.tm_hour = alrm->tm_hour;
 	alarm_tm.tm_min = alrm->tm_min;
 	alarm_tm.tm_sec = alrm->tm_sec;
-	rtc_tm_to_time(&now_tm, &now);
 	rtc_tm_to_time(&alarm_tm, &time);
-
-	if (time < now) {
-		time += 60 * 60 * 24;
-		rtc_time_to_tm(time, &alarm_tm);
-	}
-
-	ret = rtc_tm_to_time(&alarm_tm, &time);
 
 	/* clear all the interrupt status bits */
 	writew(readw(ioaddr + RTC_RTCISR), ioaddr + RTC_RTCISR);
 	set_alarm_or_time(dev, MXC_RTC_ALARM, time);
 
-	return ret;
+	return 0;
+}
+
+static void mxc_rtc_irq_enable(struct device *dev, unsigned int bit,
+				unsigned int enabled)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
+	void __iomem *ioaddr = pdata->ioaddr;
+	u32 reg;
+
+	spin_lock_irq(&pdata->rtc->irq_lock);
+	reg = readw(ioaddr + RTC_RTCIENR);
+
+	if (enabled)
+		reg |= bit;
+	else
+		reg &= ~bit;
+
+	writew(reg, ioaddr + RTC_RTCIENR);
+	spin_unlock_irq(&pdata->rtc->irq_lock);
 }
 
 /* This function is the RTC interrupt service routine. */
@@ -205,22 +210,18 @@ static irqreturn_t mxc_rtc_interrupt(int irq, void *dev_id)
 	/* clear interrupt sources */
 	writew(status, ioaddr + RTC_RTCISR);
 
-	/* clear alarm interrupt if it has occurred */
-	if (status & RTC_ALM_BIT)
-		status &= ~RTC_ALM_BIT;
-
 	/* update irq data & counter */
-	if (status & RTC_ALM_BIT)
+	if (status & RTC_ALM_BIT) {
 		events |= (RTC_AF | RTC_IRQF);
+		/* RTC alarm should be one-shot */
+		mxc_rtc_irq_enable(&pdev->dev, RTC_ALM_BIT, 0);
+	}
 
 	if (status & RTC_1HZ_BIT)
 		events |= (RTC_UF | RTC_IRQF);
 
 	if (status & PIT_ALL_ON)
 		events |= (RTC_PF | RTC_IRQF);
-
-	if ((status & RTC_ALM_BIT) && rtc_valid_tm(&pdata->g_rtc_alarm))
-		rtc_update_alarm(&pdev->dev, &pdata->g_rtc_alarm);
 
 	rtc_update_irq(pdata->rtc, 1, events);
 	spin_unlock_irq(&pdata->rtc->irq_lock);
@@ -248,35 +249,9 @@ static void mxc_rtc_release(struct device *dev)
 	spin_unlock_irq(&pdata->rtc->irq_lock);
 }
 
-static void mxc_rtc_irq_enable(struct device *dev, unsigned int bit,
-				unsigned int enabled)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
-	void __iomem *ioaddr = pdata->ioaddr;
-	u32 reg;
-
-	spin_lock_irq(&pdata->rtc->irq_lock);
-	reg = readw(ioaddr + RTC_RTCIENR);
-
-	if (enabled)
-		reg |= bit;
-	else
-		reg &= ~bit;
-
-	writew(reg, ioaddr + RTC_RTCIENR);
-	spin_unlock_irq(&pdata->rtc->irq_lock);
-}
-
 static int mxc_rtc_alarm_irq_enable(struct device *dev, unsigned int enabled)
 {
 	mxc_rtc_irq_enable(dev, RTC_ALM_BIT, enabled);
-	return 0;
-}
-
-static int mxc_rtc_update_irq_enable(struct device *dev, unsigned int enabled)
-{
-	mxc_rtc_irq_enable(dev, RTC_1HZ_BIT, enabled);
 	return 0;
 }
 
@@ -302,6 +277,17 @@ static int mxc_rtc_read_time(struct device *dev, struct rtc_time *tm)
  */
 static int mxc_rtc_set_mmss(struct device *dev, unsigned long time)
 {
+	/*
+	 * TTC_DAYR register is 9-bit in MX1 SoC, save time and day of year only
+	 */
+	if (cpu_is_mx1()) {
+		struct rtc_time tm;
+
+		rtc_time_to_tm(time, &tm);
+		tm.tm_year = 70;
+		rtc_tm_to_time(&tm, &time);
+	}
+
 	/* Avoid roll-over from reading the different registers */
 	do {
 		set_alarm_or_time(dev, MXC_RTC_TIME, time);
@@ -336,21 +322,7 @@ static int mxc_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
 	int ret;
 
-	if (rtc_valid_tm(&alrm->time)) {
-		if (alrm->time.tm_sec > 59 ||
-		    alrm->time.tm_hour > 23 ||
-		    alrm->time.tm_min > 59)
-			return -EINVAL;
-
-		ret = rtc_update_alarm(dev, &alrm->time);
-	} else {
-		ret = rtc_valid_tm(&alrm->time);
-		if (ret)
-			return ret;
-
-		ret = rtc_update_alarm(dev, &alrm->time);
-	}
-
+	ret = rtc_update_alarm(dev, &alrm->time);
 	if (ret)
 		return ret;
 
@@ -368,7 +340,6 @@ static struct rtc_class_ops mxc_rtc_ops = {
 	.read_alarm		= mxc_rtc_read_alarm,
 	.set_alarm		= mxc_rtc_set_alarm,
 	.alarm_irq_enable	= mxc_rtc_alarm_irq_enable,
-	.update_irq_enable	= mxc_rtc_update_irq_enable,
 };
 
 static int __init mxc_rtc_probe(struct platform_device *pdev)
@@ -425,14 +396,6 @@ static int __init mxc_rtc_probe(struct platform_device *pdev)
 		goto exit_put_clk;
 	}
 
-	rtc = rtc_device_register(pdev->name, &pdev->dev, &mxc_rtc_ops,
-				  THIS_MODULE);
-	if (IS_ERR(rtc)) {
-		ret = PTR_ERR(rtc);
-		goto exit_put_clk;
-	}
-
-	pdata->rtc = rtc;
 	platform_set_drvdata(pdev, pdata);
 
 	/* Configure and enable the RTC */
@@ -445,8 +408,22 @@ static int __init mxc_rtc_probe(struct platform_device *pdev)
 		pdata->irq = -1;
 	}
 
+	if (pdata->irq >=0)
+		device_init_wakeup(&pdev->dev, 1);
+
+	rtc = rtc_device_register(pdev->name, &pdev->dev, &mxc_rtc_ops,
+				  THIS_MODULE);
+	if (IS_ERR(rtc)) {
+		ret = PTR_ERR(rtc);
+		goto exit_clr_drvdata;
+	}
+
+	pdata->rtc = rtc;
+
 	return 0;
 
+exit_clr_drvdata:
+	platform_set_drvdata(pdev, NULL);
 exit_put_clk:
 	clk_disable(pdata->clk);
 	clk_put(pdata->clk);
@@ -469,9 +446,39 @@ static int __exit mxc_rtc_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM
+static int mxc_rtc_suspend(struct device *dev)
+{
+	struct rtc_plat_data *pdata = dev_get_drvdata(dev);
+
+	if (device_may_wakeup(dev))
+		enable_irq_wake(pdata->irq);
+
+	return 0;
+}
+
+static int mxc_rtc_resume(struct device *dev)
+{
+	struct rtc_plat_data *pdata = dev_get_drvdata(dev);
+
+	if (device_may_wakeup(dev))
+		disable_irq_wake(pdata->irq);
+
+	return 0;
+}
+
+static struct dev_pm_ops mxc_rtc_pm_ops = {
+	.suspend	= mxc_rtc_suspend,
+	.resume		= mxc_rtc_resume,
+};
+#endif
+
 static struct platform_driver mxc_rtc_driver = {
 	.driver = {
 		   .name	= "mxc_rtc",
+#ifdef CONFIG_PM
+		   .pm		= &mxc_rtc_pm_ops,
+#endif
 		   .owner	= THIS_MODULE,
 	},
 	.remove		= __exit_p(mxc_rtc_remove),

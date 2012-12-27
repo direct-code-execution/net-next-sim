@@ -83,7 +83,7 @@ static void xor_vectors(unsigned char *in1, unsigned char *in2,
 }
 /*
  * Returns DEFAULT_BLK_SZ bytes of random data per call
- * returns 0 if generation succeded, <0 if something went wrong
+ * returns 0 if generation succeeded, <0 if something went wrong
  */
 static int _get_more_prng_bytes(struct prng_context *ctx, int cont_test)
 {
@@ -414,9 +414,17 @@ static int fips_cprng_get_random(struct crypto_rng *tfm, u8 *rdata,
 static int fips_cprng_reset(struct crypto_rng *tfm, u8 *seed, unsigned int slen)
 {
 	u8 rdata[DEFAULT_BLK_SZ];
+	u8 *key = seed + DEFAULT_BLK_SZ;
 	int rc;
 
 	struct prng_context *prng = crypto_rng_ctx(tfm);
+
+	if (slen < DEFAULT_PRNG_KSZ + DEFAULT_BLK_SZ)
+		return -EINVAL;
+
+	/* fips strictly requires seed != key */
+	if (!memcmp(seed, key, DEFAULT_PRNG_KSZ))
+		return -EINVAL;
 
 	rc = cprng_reset(tfm, seed, slen);
 

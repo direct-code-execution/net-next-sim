@@ -19,7 +19,7 @@
 #include <linux/major.h>
 #include <linux/delay.h>
 #include <linux/irq.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
@@ -31,8 +31,7 @@
 #include <linux/fs_enet_pd.h>
 #include <linux/fs_uart_pd.h>
 
-#include <asm/system.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/time.h>
@@ -41,6 +40,7 @@
 #include <sysdev/fsl_soc.h>
 #include <mm/mmu_decl.h>
 #include <asm/cpm2.h>
+#include <asm/fsl_hcalls.h>	/* For the Freescale hypervisor */
 
 extern void init_fcc_ioports(struct fs_platform_info*);
 extern void init_fec_ioports(struct fs_platform_info*);
@@ -209,186 +209,29 @@ static int __init of_add_fixed_phys(void)
 arch_initcall(of_add_fixed_phys);
 #endif /* CONFIG_FIXED_PHY */
 
-static enum fsl_usb2_phy_modes determine_usb_phy(const char *phy_type)
-{
-	if (!phy_type)
-		return FSL_USB2_PHY_NONE;
-	if (!strcasecmp(phy_type, "ulpi"))
-		return FSL_USB2_PHY_ULPI;
-	if (!strcasecmp(phy_type, "utmi"))
-		return FSL_USB2_PHY_UTMI;
-	if (!strcasecmp(phy_type, "utmi_wide"))
-		return FSL_USB2_PHY_UTMI_WIDE;
-	if (!strcasecmp(phy_type, "serial"))
-		return FSL_USB2_PHY_SERIAL;
-
-	return FSL_USB2_PHY_NONE;
-}
-
-static int __init fsl_usb_of_init(void)
-{
-	struct device_node *np;
-	unsigned int i = 0;
-	struct platform_device *usb_dev_mph = NULL, *usb_dev_dr_host = NULL,
-		*usb_dev_dr_client = NULL;
-	int ret;
-
-	for_each_compatible_node(np, NULL, "fsl-usb2-mph") {
-		struct resource r[2];
-		struct fsl_usb2_platform_data usb_data;
-		const unsigned char *prop = NULL;
-
-		memset(&r, 0, sizeof(r));
-		memset(&usb_data, 0, sizeof(usb_data));
-
-		ret = of_address_to_resource(np, 0, &r[0]);
-		if (ret)
-			goto err;
-
-		of_irq_to_resource(np, 0, &r[1]);
-
-		usb_dev_mph =
-		    platform_device_register_simple("fsl-ehci", i, r, 2);
-		if (IS_ERR(usb_dev_mph)) {
-			ret = PTR_ERR(usb_dev_mph);
-			goto err;
-		}
-
-		usb_dev_mph->dev.coherent_dma_mask = 0xffffffffUL;
-		usb_dev_mph->dev.dma_mask = &usb_dev_mph->dev.coherent_dma_mask;
-
-		usb_data.operating_mode = FSL_USB2_MPH_HOST;
-
-		prop = of_get_property(np, "port0", NULL);
-		if (prop)
-			usb_data.port_enables |= FSL_USB2_PORT0_ENABLED;
-
-		prop = of_get_property(np, "port1", NULL);
-		if (prop)
-			usb_data.port_enables |= FSL_USB2_PORT1_ENABLED;
-
-		prop = of_get_property(np, "phy_type", NULL);
-		usb_data.phy_mode = determine_usb_phy(prop);
-
-		ret =
-		    platform_device_add_data(usb_dev_mph, &usb_data,
-					     sizeof(struct
-						    fsl_usb2_platform_data));
-		if (ret)
-			goto unreg_mph;
-		i++;
-	}
-
-	for_each_compatible_node(np, NULL, "fsl-usb2-dr") {
-		struct resource r[2];
-		struct fsl_usb2_platform_data usb_data;
-		const unsigned char *prop = NULL;
-
-		if (!of_device_is_available(np))
-			continue;
-
-		memset(&r, 0, sizeof(r));
-		memset(&usb_data, 0, sizeof(usb_data));
-
-		ret = of_address_to_resource(np, 0, &r[0]);
-		if (ret)
-			goto unreg_mph;
-
-		of_irq_to_resource(np, 0, &r[1]);
-
-		prop = of_get_property(np, "dr_mode", NULL);
-
-		if (!prop || !strcmp(prop, "host")) {
-			usb_data.operating_mode = FSL_USB2_DR_HOST;
-			usb_dev_dr_host = platform_device_register_simple(
-					"fsl-ehci", i, r, 2);
-			if (IS_ERR(usb_dev_dr_host)) {
-				ret = PTR_ERR(usb_dev_dr_host);
-				goto err;
-			}
-		} else if (prop && !strcmp(prop, "peripheral")) {
-			usb_data.operating_mode = FSL_USB2_DR_DEVICE;
-			usb_dev_dr_client = platform_device_register_simple(
-					"fsl-usb2-udc", i, r, 2);
-			if (IS_ERR(usb_dev_dr_client)) {
-				ret = PTR_ERR(usb_dev_dr_client);
-				goto err;
-			}
-		} else if (prop && !strcmp(prop, "otg")) {
-			usb_data.operating_mode = FSL_USB2_DR_OTG;
-			usb_dev_dr_host = platform_device_register_simple(
-					"fsl-ehci", i, r, 2);
-			if (IS_ERR(usb_dev_dr_host)) {
-				ret = PTR_ERR(usb_dev_dr_host);
-				goto err;
-			}
-			usb_dev_dr_client = platform_device_register_simple(
-					"fsl-usb2-udc", i, r, 2);
-			if (IS_ERR(usb_dev_dr_client)) {
-				ret = PTR_ERR(usb_dev_dr_client);
-				goto err;
-			}
-		} else {
-			ret = -EINVAL;
-			goto err;
-		}
-
-		prop = of_get_property(np, "phy_type", NULL);
-		usb_data.phy_mode = determine_usb_phy(prop);
-
-		if (usb_dev_dr_host) {
-			usb_dev_dr_host->dev.coherent_dma_mask = 0xffffffffUL;
-			usb_dev_dr_host->dev.dma_mask = &usb_dev_dr_host->
-				dev.coherent_dma_mask;
-			if ((ret = platform_device_add_data(usb_dev_dr_host,
-						&usb_data, sizeof(struct
-						fsl_usb2_platform_data))))
-				goto unreg_dr;
-		}
-		if (usb_dev_dr_client) {
-			usb_dev_dr_client->dev.coherent_dma_mask = 0xffffffffUL;
-			usb_dev_dr_client->dev.dma_mask = &usb_dev_dr_client->
-				dev.coherent_dma_mask;
-			if ((ret = platform_device_add_data(usb_dev_dr_client,
-						&usb_data, sizeof(struct
-						fsl_usb2_platform_data))))
-				goto unreg_dr;
-		}
-		i++;
-	}
-	return 0;
-
-unreg_dr:
-	if (usb_dev_dr_host)
-		platform_device_unregister(usb_dev_dr_host);
-	if (usb_dev_dr_client)
-		platform_device_unregister(usb_dev_dr_client);
-unreg_mph:
-	if (usb_dev_mph)
-		platform_device_unregister(usb_dev_mph);
-err:
-	return ret;
-}
-
-arch_initcall(fsl_usb_of_init);
-
 #if defined(CONFIG_FSL_SOC_BOOKE) || defined(CONFIG_PPC_86xx)
 static __be32 __iomem *rstcr;
 
 static int __init setup_rstcr(void)
 {
 	struct device_node *np;
-	np = of_find_node_by_name(NULL, "global-utilities");
-	if ((np && of_get_property(np, "fsl,has-rstcr", NULL))) {
-		rstcr = of_iomap(np, 0) + 0xb0;
-		if (!rstcr)
-			printk (KERN_EMERG "Error: reset control register "
-					"not mapped!\n");
-	} else if (ppc_md.restart == fsl_rstcr_restart)
+
+	for_each_node_by_name(np, "global-utilities") {
+		if ((of_get_property(np, "fsl,has-rstcr", NULL))) {
+			rstcr = of_iomap(np, 0) + 0xb0;
+			if (!rstcr)
+				printk (KERN_ERR "Error: reset control "
+						"register not mapped!\n");
+			break;
+		}
+	}
+
+	if (!rstcr && ppc_md.restart == fsl_rstcr_restart)
 		printk(KERN_ERR "No RSTCR register, warm reboot won't work\n");
 
 	if (np)
 		of_node_put(np);
+
 	return 0;
 }
 
@@ -409,3 +252,29 @@ void fsl_rstcr_restart(char *cmd)
 struct platform_diu_data_ops diu_ops;
 EXPORT_SYMBOL(diu_ops);
 #endif
+
+/*
+ * Restart the current partition
+ *
+ * This function should be assigned to the ppc_md.restart function pointer,
+ * to initiate a partition restart when we're running under the Freescale
+ * hypervisor.
+ */
+void fsl_hv_restart(char *cmd)
+{
+	pr_info("hv restart\n");
+	fh_partition_restart(-1);
+}
+
+/*
+ * Halt the current partition
+ *
+ * This function should be assigned to the ppc_md.power_off and ppc_md.halt
+ * function pointers, to shut down the partition when we're running under
+ * the Freescale hypervisor.
+ */
+void fsl_hv_halt(void)
+{
+	pr_info("hv exit\n");
+	fh_partition_stop(-1);
+}

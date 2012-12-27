@@ -28,9 +28,7 @@ enum {
 
 /* Different peripheral ids */
 #define OMAP_TAG_CLOCK		0x4f01
-#define OMAP_TAG_LCD		0x4f05
 #define OMAP_TAG_GPIO_SWITCH	0x4f06
-#define OMAP_TAG_FBMEM		0x4f08
 #define OMAP_TAG_STI_CONSOLE	0x4f09
 #define OMAP_TAG_CAMERA_SENSOR	0x4f0a
 
@@ -151,14 +149,14 @@ struct omap_board_config_kernel {
 	const void *data;
 };
 
-extern const void *__omap_get_config(u16 tag, size_t len, int nr);
+extern const void *__init __omap_get_config(u16 tag, size_t len, int nr);
 
 #define omap_get_config(tag, type) \
 	((const type *) __omap_get_config((tag), sizeof(type), 0))
 #define omap_get_nr_config(tag, type, nr) \
 	((const type *) __omap_get_config((tag), sizeof(type), (nr)))
 
-extern const void *omap_get_var_config(u16 tag, size_t *len);
+extern const void *__init omap_get_var_config(u16 tag, size_t *len);
 
 extern struct omap_board_config_kernel *omap_board_config;
 extern int omap_board_config_size;

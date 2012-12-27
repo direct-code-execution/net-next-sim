@@ -103,7 +103,7 @@ asmlinkage long mipsmt_sys_sched_setaffinity(pid_t pid, unsigned int len,
 	if (!check_same_owner(p) && !capable(CAP_SYS_NICE))
 		goto out_unlock;
 
-	retval = security_task_setscheduler(p, 0, NULL);
+	retval = security_task_setscheduler(p);
 	if (retval)
 		goto out_unlock;
 
@@ -173,7 +173,7 @@ asmlinkage long mipsmt_sys_sched_getaffinity(pid_t pid, unsigned int len,
 	if (retval)
 		goto out_unlock;
 
-	cpus_and(mask, p->thread.user_cpus_allowed, cpu_possible_map);
+	cpumask_and(&mask, &p->thread.user_cpus_allowed, cpu_possible_mask);
 
 out_unlock:
 	read_unlock(&tasklist_lock);

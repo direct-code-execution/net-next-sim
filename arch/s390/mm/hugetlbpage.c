@@ -13,7 +13,6 @@ void set_huge_pte_at(struct mm_struct *mm, unsigned long addr,
 				   pte_t *pteptr, pte_t pteval)
 {
 	pmd_t *pmdp = (pmd_t *) pteptr;
-	pte_t shadow_pteval = pteval;
 	unsigned long mask;
 
 	if (!MACHINE_HAS_HPAGE) {
@@ -21,18 +20,9 @@ void set_huge_pte_at(struct mm_struct *mm, unsigned long addr,
 		mask = pte_val(pteval) &
 				(_SEGMENT_ENTRY_INV | _SEGMENT_ENTRY_RO);
 		pte_val(pteval) = (_SEGMENT_ENTRY + __pa(pteptr)) | mask;
-		if (mm->context.noexec) {
-			pteptr += PTRS_PER_PTE;
-			pte_val(shadow_pteval) =
-					(_SEGMENT_ENTRY + __pa(pteptr)) | mask;
-		}
 	}
 
 	pmd_val(*pmdp) = pte_val(pteval);
-	if (mm->context.noexec) {
-		pmdp = get_shadow_table(pmdp);
-		pmd_val(*pmdp) = pte_val(shadow_pteval);
-	}
 }
 
 int arch_prepare_hugepage(struct page *page)
@@ -45,7 +35,7 @@ int arch_prepare_hugepage(struct page *page)
 	if (MACHINE_HAS_HPAGE)
 		return 0;
 
-	ptep = (pte_t *) pte_alloc_one(&init_mm, address);
+	ptep = (pte_t *) pte_alloc_one(&init_mm, addr);
 	if (!ptep)
 		return -ENOMEM;
 
@@ -68,7 +58,7 @@ void arch_release_hugepage(struct page *page)
 	ptep = (pte_t *) page[1].index;
 	if (!ptep)
 		return;
-	pte_free(&init_mm, ptep);
+	page_table_free(&init_mm, (unsigned long *) ptep);
 	page[1].index = 0;
 }
 

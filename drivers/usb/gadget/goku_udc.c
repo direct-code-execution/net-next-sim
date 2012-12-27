@@ -38,11 +38,11 @@
 #include <linux/device.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
+#include <linux/prefetch.h>
 
 #include <asm/byteorder.h>
 #include <asm/io.h>
 #include <asm/irq.h>
-#include <asm/system.h>
 #include <asm/unaligned.h>
 
 
@@ -234,6 +234,7 @@ static void ep_reset(struct goku_udc_regs __iomem *regs, struct goku_ep *ep)
 
 	ep->ep.maxpacket = MAX_FIFO_SIZE;
 	ep->desc = NULL;
+	ep->ep.desc = NULL;
 	ep->stopped = 1;
 	ep->irqs = 0;
 	ep->dma = 0;
@@ -309,12 +310,9 @@ done(struct goku_ep *ep, struct goku_request *req, int status)
 		status = req->req.status;
 
 	dev = ep->dev;
-	if (req->mapped) {
-		pci_unmap_single(dev->pdev, req->req.dma, req->req.length,
-			ep->is_in ? PCI_DMA_TODEVICE : PCI_DMA_FROMDEVICE);
-		req->req.dma = DMA_ADDR_INVALID;
-		req->mapped = 0;
-	}
+
+	if (ep->dma)
+		usb_gadget_unmap_request(&dev->gadget, &req->req, ep->is_in);
 
 #ifndef USB_TRACE
 	if (status && status != -ESHUTDOWN)
@@ -735,10 +733,11 @@ goku_queue(struct usb_ep *_ep, struct usb_request *_req, gfp_t gfp_flags)
 		return -EBUSY;
 
 	/* set up dma mapping in case the caller didn't */
-	if (ep->dma && _req->dma == DMA_ADDR_INVALID) {
-		_req->dma = pci_map_single(dev->pdev, _req->buf, _req->length,
-			ep->is_in ? PCI_DMA_TODEVICE : PCI_DMA_FROMDEVICE);
-		req->mapped = 1;
+	if (ep->dma) {
+		status = usb_gadget_map_request(&dev->gadget, &req->req,
+				ep->is_in);
+		if (status)
+			return status;
 	}
 
 #ifdef USB_TRACE
@@ -995,8 +994,14 @@ static int goku_get_frame(struct usb_gadget *_gadget)
 	return -EOPNOTSUPP;
 }
 
+static int goku_start(struct usb_gadget_driver *driver,
+		int (*bind)(struct usb_gadget *));
+static int goku_stop(struct usb_gadget_driver *driver);
+
 static const struct usb_gadget_ops goku_ops = {
 	.get_frame	= goku_get_frame,
+	.start		= goku_start,
+	.stop		= goku_stop,
 	// no remote wakeup
 	// not selfpowered
 };
@@ -1343,14 +1348,15 @@ static struct goku_udc	*the_controller;
  * disconnect is reported.  then a host may connect again, or
  * the driver might get unbound.
  */
-int usb_gadget_register_driver(struct usb_gadget_driver *driver)
+static int goku_start(struct usb_gadget_driver *driver,
+		int (*bind)(struct usb_gadget *))
 {
 	struct goku_udc	*dev = the_controller;
 	int			retval;
 
 	if (!driver
-			|| driver->speed < USB_SPEED_FULL
-			|| !driver->bind
+			|| driver->max_speed < USB_SPEED_FULL
+			|| !bind
 			|| !driver->disconnect
 			|| !driver->setup)
 		return -EINVAL;
@@ -1363,7 +1369,7 @@ int usb_gadget_register_driver(struct usb_gadget_driver *driver)
 	driver->driver.bus = NULL;
 	dev->driver = driver;
 	dev->gadget.dev.driver = &driver->driver;
-	retval = driver->bind(&dev->gadget);
+	retval = bind(&dev->gadget);
 	if (retval) {
 		DBG(dev, "bind to driver %s --> error %d\n",
 				driver->driver.name, retval);
@@ -1380,7 +1386,6 @@ int usb_gadget_register_driver(struct usb_gadget_driver *driver)
 	DBG(dev, "registered gadget driver '%s'\n", driver->driver.name);
 	return 0;
 }
-EXPORT_SYMBOL(usb_gadget_register_driver);
 
 static void
 stop_activity(struct goku_udc *dev, struct usb_gadget_driver *driver)
@@ -1406,7 +1411,7 @@ stop_activity(struct goku_udc *dev, struct usb_gadget_driver *driver)
 		udc_enable(dev);
 }
 
-int usb_gadget_unregister_driver(struct usb_gadget_driver *driver)
+static int goku_stop(struct usb_gadget_driver *driver)
 {
 	struct goku_udc	*dev = the_controller;
 	unsigned long	flags;
@@ -1427,8 +1432,6 @@ int usb_gadget_unregister_driver(struct usb_gadget_driver *driver)
 	DBG(dev, "unregistered driver '%s'\n", driver->driver.name);
 	return 0;
 }
-EXPORT_SYMBOL(usb_gadget_unregister_driver);
-
 
 /*-------------------------------------------------------------------------*/
 
@@ -1728,6 +1731,8 @@ static void goku_remove(struct pci_dev *pdev)
 
 	DBG(dev, "%s\n", __func__);
 
+	usb_del_gadget_udc(&dev->gadget);
+
 	BUG_ON(dev->driver);
 
 #ifdef CONFIG_USB_GADGET_DEBUG_FILES
@@ -1744,7 +1749,8 @@ static void goku_remove(struct pci_dev *pdev)
 				pci_resource_len (pdev, 0));
 	if (dev->enabled)
 		pci_disable_device(pdev);
-	device_unregister(&dev->gadget.dev);
+	if (dev->registered)
+		device_unregister(&dev->gadget.dev);
 
 	pci_set_drvdata(pdev, NULL);
 	dev->regs = NULL;
@@ -1774,7 +1780,7 @@ static int goku_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (!pdev->irq) {
 		printk(KERN_ERR "Check PCI %s IRQ setup!\n", pci_name(pdev));
 		retval = -ENODEV;
-		goto done;
+		goto err;
 	}
 
 	/* alloc, and start init */
@@ -1782,12 +1788,13 @@ static int goku_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (dev == NULL){
 		pr_debug("enomem %s\n", pci_name(pdev));
 		retval = -ENOMEM;
-		goto done;
+		goto err;
 	}
 
 	spin_lock_init(&dev->lock);
 	dev->pdev = pdev;
 	dev->gadget.ops = &goku_ops;
+	dev->gadget.max_speed = USB_SPEED_FULL;
 
 	/* the "gadget" abstracts/virtualizes the controller */
 	dev_set_name(&dev->gadget.dev, "gadget");
@@ -1800,7 +1807,7 @@ static int goku_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	retval = pci_enable_device(pdev);
 	if (retval < 0) {
 		DBG(dev, "can't enable, %d\n", retval);
-		goto done;
+		goto err;
 	}
 	dev->enabled = 1;
 
@@ -1809,7 +1816,7 @@ static int goku_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (!request_mem_region(resource, len, driver_name)) {
 		DBG(dev, "controller already in use\n");
 		retval = -EBUSY;
-		goto done;
+		goto err;
 	}
 	dev->got_region = 1;
 
@@ -1817,7 +1824,7 @@ static int goku_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (base == NULL) {
 		DBG(dev, "can't map memory\n");
 		retval = -EFAULT;
-		goto done;
+		goto err;
 	}
 	dev->regs = (struct goku_udc_regs __iomem *) base;
 
@@ -1833,7 +1840,7 @@ static int goku_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 			driver_name, dev) != 0) {
 		DBG(dev, "request interrupt %d failed\n", pdev->irq);
 		retval = -EBUSY;
-		goto done;
+		goto err;
 	}
 	dev->got_irq = 1;
 	if (use_dma)
@@ -1844,13 +1851,20 @@ static int goku_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	create_proc_read_entry(proc_node_name, 0, NULL, udc_proc_read, dev);
 #endif
 
-	/* done */
 	the_controller = dev;
 	retval = device_register(&dev->gadget.dev);
-	if (retval == 0)
-		return 0;
+	if (retval) {
+		put_device(&dev->gadget.dev);
+		goto err;
+	}
+	dev->registered = 1;
+	retval = usb_add_gadget_udc(&pdev->dev, &dev->gadget);
+	if (retval)
+		goto err;
 
-done:
+	return 0;
+
+err:
 	if (dev)
 		goku_remove (pdev);
 	return retval;

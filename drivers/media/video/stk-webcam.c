@@ -27,7 +27,6 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
-#include <linux/smp_lock.h>
 
 #include <linux/usb.h>
 #include <linux/mm.h>
@@ -39,11 +38,11 @@
 #include "stk-webcam.h"
 
 
-static int hflip = 1;
+static bool hflip = 1;
 module_param(hflip, bool, 0444);
 MODULE_PARM_DESC(hflip, "Horizontal image flip (mirror). Defaults to 1");
 
-static int vflip = 1;
+static bool vflip = 1;
 module_param(vflip, bool, 0444);
 MODULE_PARM_DESC(vflip, "Vertical image flip. Defaults to 1");
 
@@ -56,6 +55,8 @@ MODULE_AUTHOR("Jaime Velasco Juan <jsagarribay@gmail.com> and Nicolas VIVIEN");
 MODULE_DESCRIPTION("Syntek DC1125 webcam driver");
 
 
+/* bool for webcam LED management */
+int first_init = 1;
 
 /* Some cameras have audio interfaces, we aren't interested in those */
 static struct usb_device_id stkwebcam_table[] = {
@@ -231,120 +232,6 @@ static int stk_initialise(struct stk_camera *dev)
 		return -1;
 }
 
-#ifdef CONFIG_VIDEO_V4L1_COMPAT
-
-/* sysfs functions */
-/*FIXME cleanup this */
-
-static ssize_t show_brightness(struct device *class,
-			struct device_attribute *attr, char *buf)
-{
-	struct video_device *vdev = to_video_device(class);
-	struct stk_camera *dev = vdev_to_camera(vdev);
-
-	return sprintf(buf, "%X\n", dev->vsettings.brightness);
-}
-
-static ssize_t store_brightness(struct device *class,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	char *endp;
-	unsigned long value;
-	int ret;
-
-	struct video_device *vdev = to_video_device(class);
-	struct stk_camera *dev = vdev_to_camera(vdev);
-
-	value = simple_strtoul(buf, &endp, 16);
-
-	dev->vsettings.brightness = (int) value;
-
-	ret = stk_sensor_set_brightness(dev, value >> 8);
-	if (ret)
-		return ret;
-	else
-		return count;
-}
-
-static ssize_t show_hflip(struct device *class,
-		struct device_attribute *attr, char *buf)
-{
-	struct video_device *vdev = to_video_device(class);
-	struct stk_camera *dev = vdev_to_camera(vdev);
-
-	return sprintf(buf, "%d\n", dev->vsettings.hflip);
-}
-
-static ssize_t store_hflip(struct device *class,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct video_device *vdev = to_video_device(class);
-	struct stk_camera *dev = vdev_to_camera(vdev);
-
-	if (strncmp(buf, "1", 1) == 0)
-		dev->vsettings.hflip = 1;
-	else if (strncmp(buf, "0", 1) == 0)
-		dev->vsettings.hflip = 0;
-	else
-		return -EINVAL;
-
-	return strlen(buf);
-}
-
-static ssize_t show_vflip(struct device *class,
-		struct device_attribute *attr, char *buf)
-{
-	struct video_device *vdev = to_video_device(class);
-	struct stk_camera *dev = vdev_to_camera(vdev);
-
-	return sprintf(buf, "%d\n", dev->vsettings.vflip);
-}
-
-static ssize_t store_vflip(struct device *class,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct video_device *vdev = to_video_device(class);
-	struct stk_camera *dev = vdev_to_camera(vdev);
-
-	if (strncmp(buf, "1", 1) == 0)
-		dev->vsettings.vflip = 1;
-	else if (strncmp(buf, "0", 1) == 0)
-		dev->vsettings.vflip = 0;
-	else
-		return -EINVAL;
-
-	return strlen(buf);
-}
-
-static DEVICE_ATTR(brightness, S_IRUGO | S_IWUGO,
-			show_brightness, store_brightness);
-static DEVICE_ATTR(hflip, S_IRUGO | S_IWUGO, show_hflip, store_hflip);
-static DEVICE_ATTR(vflip, S_IRUGO | S_IWUGO, show_vflip, store_vflip);
-
-static int stk_create_sysfs_files(struct video_device *vdev)
-{
-	int ret;
-
-	ret = device_create_file(&vdev->dev, &dev_attr_brightness);
-	ret += device_create_file(&vdev->dev, &dev_attr_hflip);
-	ret += device_create_file(&vdev->dev, &dev_attr_vflip);
-	if (ret)
-		STK_WARNING("Could not create sysfs files\n");
-	return ret;
-}
-
-static void stk_remove_sysfs_files(struct video_device *vdev)
-{
-	device_remove_file(&vdev->dev, &dev_attr_brightness);
-	device_remove_file(&vdev->dev, &dev_attr_hflip);
-	device_remove_file(&vdev->dev, &dev_attr_vflip);
-}
-
-#else
-#define stk_create_sysfs_files(a)
-#define stk_remove_sysfs_files(a)
-#endif
-
 /* *********************************************** */
 /*
  * This function is called as an URB transfert is complete (Isochronous pipe).
@@ -490,8 +377,8 @@ static int stk_prepare_iso(struct stk_camera *dev)
 	if (dev->isobufs)
 		STK_ERROR("isobufs already allocated. Bad\n");
 	else
-		dev->isobufs = kzalloc(MAX_ISO_BUFS * sizeof(*dev->isobufs),
-					GFP_KERNEL);
+		dev->isobufs = kcalloc(MAX_ISO_BUFS, sizeof(*dev->isobufs),
+				       GFP_KERNEL);
 	if (dev->isobufs == NULL) {
 		STK_ERROR("Unable to allocate iso buffers\n");
 		return -ENOMEM;
@@ -633,7 +520,7 @@ static int stk_prepare_sio_buffers(struct stk_camera *dev, unsigned n_sbufs)
 			return -ENOMEM;
 		for (i = 0; i < n_sbufs; i++) {
 			if (stk_setup_siobuf(dev, i))
-				return (dev->n_sbufs > 1)? 0 : -ENOMEM;
+				return (dev->n_sbufs > 1 ? 0 : -ENOMEM);
 			dev->n_sbufs = i+1;
 		}
 	}
@@ -673,14 +560,16 @@ static int v4l_stk_open(struct file *fp)
 	vdev = video_devdata(fp);
 	dev = vdev_to_camera(vdev);
 
-	lock_kernel();
-	if (dev == NULL || !is_present(dev)) {
-		unlock_kernel();
+	if (dev == NULL || !is_present(dev))
 		return -ENXIO;
-	}
+
+	if (!first_init)
+		stk_camera_write_reg(dev, 0x0, 0x24);
+	else
+		first_init = 0;
+
 	fp->private_data = dev;
 	usb_autopm_get_interface(dev->interface);
-	unlock_kernel();
 
 	return 0;
 }
@@ -692,10 +581,12 @@ static int v4l_stk_release(struct file *fp)
 	if (dev->owner == fp) {
 		stk_stop_stream(dev);
 		stk_free_buffers(dev);
+		stk_camera_write_reg(dev, 0x0, 0x49); /* turn off the LED */
+		unset_initialised(dev);
 		dev->owner = NULL;
 	}
 
-	if(is_present(dev))
+	if (is_present(dev))
 		usb_autopm_put_interface(dev->interface);
 
 	return 0;
@@ -772,7 +663,7 @@ static unsigned int v4l_stk_poll(struct file *fp, poll_table *wait)
 		return POLLERR;
 
 	if (!list_empty(&dev->sio_full))
-		return (POLLIN | POLLRDNORM);
+		return POLLIN | POLLRDNORM;
 
 	return 0;
 }
@@ -882,7 +773,24 @@ static struct v4l2_queryctrl stk_controls[] = {
 		.step    = 0x0100,
 		.default_value = 0x6000,
 	},
-	/*TODO: get more controls to work */
+	{
+		.id      = V4L2_CID_HFLIP,
+		.type    = V4L2_CTRL_TYPE_BOOLEAN,
+		.name    = "Horizontal Flip",
+		.minimum = 0,
+		.maximum = 1,
+		.step    = 1,
+		.default_value = 1,
+	},
+	{
+		.id      = V4L2_CID_VFLIP,
+		.type    = V4L2_CTRL_TYPE_BOOLEAN,
+		.name    = "Vertical Flip",
+		.minimum = 0,
+		.maximum = 1,
+		.step    = 1,
+		.default_value = 1,
+	},
 };
 
 static int stk_vidioc_queryctrl(struct file *filp,
@@ -910,6 +818,12 @@ static int stk_vidioc_g_ctrl(struct file *filp,
 	case V4L2_CID_BRIGHTNESS:
 		c->value = dev->vsettings.brightness;
 		break;
+	case V4L2_CID_HFLIP:
+		c->value = dev->vsettings.hflip;
+		break;
+	case V4L2_CID_VFLIP:
+		c->value = dev->vsettings.vflip;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -924,6 +838,12 @@ static int stk_vidioc_s_ctrl(struct file *filp,
 	case V4L2_CID_BRIGHTNESS:
 		dev->vsettings.brightness = c->value;
 		return stk_sensor_set_brightness(dev, c->value >> 8);
+	case V4L2_CID_HFLIP:
+		dev->vsettings.hflip = c->value;
+		return 0;
+	case V4L2_CID_VFLIP:
+		dev->vsettings.vflip = c->value;
+		return 0;
 	default:
 		return -EINVAL;
 	}
@@ -980,9 +900,9 @@ static int stk_vidioc_g_fmt_vid_cap(struct file *filp,
 	struct stk_camera *dev = priv;
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(stk_sizes)
-			&& stk_sizes[i].m != dev->vsettings.mode;
-		i++);
+	for (i = 0; i < ARRAY_SIZE(stk_sizes) &&
+			stk_sizes[i].m != dev->vsettings.mode; i++)
+		;
 	if (i == ARRAY_SIZE(stk_sizes)) {
 		STK_ERROR("ERROR: mode invalid\n");
 		return -EINVAL;
@@ -1394,11 +1314,8 @@ static int stk_camera_probe(struct usb_interface *interface,
 	usb_set_intfdata(interface, dev);
 
 	err = stk_register_video_device(dev);
-	if (err) {
+	if (err)
 		goto error;
-	}
-
-	stk_create_sysfs_files(&dev->vdev);
 
 	return 0;
 
@@ -1415,7 +1332,6 @@ static void stk_camera_disconnect(struct usb_interface *interface)
 	unset_present(dev);
 
 	wake_up_interruptible(&dev->wait_frame);
-	stk_remove_sysfs_files(&dev->vdev);
 
 	STK_INFO("Syntek USB2.0 Camera release resources device %s\n",
 		 video_device_node_name(&dev->vdev));
@@ -1442,6 +1358,7 @@ static int stk_camera_resume(struct usb_interface *intf)
 		return 0;
 	unset_initialised(dev);
 	stk_initialise(dev);
+	stk_camera_write_reg(dev, 0x0, 0x49);
 	stk_setup_format(dev);
 	if (is_streaming(dev))
 		stk_start_stream(dev);
@@ -1460,25 +1377,4 @@ static struct usb_driver stk_camera_driver = {
 #endif
 };
 
-
-static int __init stk_camera_init(void)
-{
-	int result;
-
-	result = usb_register(&stk_camera_driver);
-	if (result)
-		STK_ERROR("usb_register failed ! Error number %d\n", result);
-
-
-	return result;
-}
-
-static void __exit stk_camera_exit(void)
-{
-	usb_deregister(&stk_camera_driver);
-}
-
-module_init(stk_camera_init);
-module_exit(stk_camera_exit);
-
-
+module_usb_driver(stk_camera_driver);

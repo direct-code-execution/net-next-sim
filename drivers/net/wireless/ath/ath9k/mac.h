@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2009 Atheros Communications Inc.
+ * Copyright (c) 2008-2011 Atheros Communications Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -16,10 +16,6 @@
 
 #ifndef MAC_H
 #define MAC_H
-
-#define RXSTATUS_RATE(ah, ads) (AR_SREV_5416_20_OR_LATER(ah) ?		\
-				MS(ads->ds_rxstatus0, AR_RxRate) :	\
-				(ads->ds_rxstatus3 >> 2) & 0xFF)
 
 #define set11nTries(_series, _index) \
 	(SM((_series)[_index].Tries, AR_XmitDataTries##_index))
@@ -79,9 +75,10 @@
 #define ATH9K_TXERR_XTXOP          0x08
 #define ATH9K_TXERR_TIMER_EXPIRED  0x10
 #define ATH9K_TX_ACKED		   0x20
+#define ATH9K_TX_FLUSH		   0x40
 #define ATH9K_TXERR_MASK						\
 	(ATH9K_TXERR_XRETRY | ATH9K_TXERR_FILT | ATH9K_TXERR_FIFO |	\
-	 ATH9K_TXERR_XTXOP | ATH9K_TXERR_TIMER_EXPIRED)
+	 ATH9K_TXERR_XTXOP | ATH9K_TXERR_TIMER_EXPIRED | ATH9K_TX_FLUSH)
 
 #define ATH9K_TX_BA                0x01
 #define ATH9K_TX_PWRMGMT           0x02
@@ -104,13 +101,11 @@ struct ath_tx_status {
 	u32 ts_tstamp;
 	u16 ts_seqnum;
 	u8 ts_status;
-	u8 ts_ratecode;
 	u8 ts_rateindex;
 	int8_t ts_rssi;
 	u8 ts_shortretry;
 	u8 ts_longretry;
 	u8 ts_virtcol;
-	u8 ts_antenna;
 	u8 ts_flags;
 	int8_t ts_rssi_ctl0;
 	int8_t ts_rssi_ctl1;
@@ -121,7 +116,6 @@ struct ath_tx_status {
 	u8 qid;
 	u16 desc_id;
 	u8 tid;
-	u8 pad[2];
 	u32 ba_low;
 	u32 ba_high;
 	u32 evm0;
@@ -149,6 +143,7 @@ struct ath_rx_status {
 	u8 rs_moreaggr;
 	u8 rs_num_delims;
 	u8 rs_flags;
+	bool is_mybeacon;
 	u32 evm0;
 	u32 evm1;
 	u32 evm2;
@@ -187,6 +182,7 @@ struct ath_htc_rx_status {
 #define ATH9K_RXERR_FIFO          0x04
 #define ATH9K_RXERR_DECRYPT       0x08
 #define ATH9K_RXERR_MIC           0x10
+#define ATH9K_RXERR_KEYMISS       0x20
 
 #define ATH9K_RX_MORE             0x01
 #define ATH9K_RX_MORE_AGGR        0x02
@@ -197,7 +193,7 @@ struct ath_htc_rx_status {
 #define ATH9K_RX_DECRYPT_BUSY     0x40
 
 #define ATH9K_RXKEYIX_INVALID	((u8)-1)
-#define ATH9K_TXKEYIX_INVALID	((u32)-1)
+#define ATH9K_TXKEYIX_INVALID	((u8)-1)
 
 enum ath9k_phyerr {
 	ATH9K_PHYERR_UNDERRUN             = 0,  /* Transmit underrun */
@@ -240,9 +236,8 @@ struct ath_desc {
 	u32 ds_ctl1;
 	u32 ds_hw[20];
 	void *ds_vdata;
-} __packed;
+} __packed __aligned(4);
 
-#define ATH9K_TXDESC_CLRDMASK		0x0001
 #define ATH9K_TXDESC_NOACK		0x0002
 #define ATH9K_TXDESC_RTSENA		0x0004
 #define ATH9K_TXDESC_CTSENA		0x0008
@@ -266,7 +261,11 @@ struct ath_desc {
 #define ATH9K_TXDESC_VMF		0x0100
 #define ATH9K_TXDESC_FRAG_IS_ON 	0x0200
 #define ATH9K_TXDESC_LOWRXCHAIN		0x0400
-#define ATH9K_TXDESC_LDPC		0x00010000
+#define ATH9K_TXDESC_LDPC		0x0800
+#define ATH9K_TXDESC_CLRDMASK		0x1000
+
+#define ATH9K_TXDESC_PAPRD		0x70000
+#define ATH9K_TXDESC_PAPRD_S		16
 
 #define ATH9K_RXDESC_INTREQ		0x0020
 
@@ -310,7 +309,7 @@ struct ar5416_desc {
 			u32 status8;
 		} rx;
 	} u;
-} __packed;
+} __packed __aligned(4);
 
 #define AR5416DESC(_ds)         ((struct ar5416_desc *)(_ds))
 #define AR5416DESC_CONST(_ds)   ((const struct ar5416_desc *)(_ds))
@@ -584,8 +583,7 @@ enum ath9k_tx_queue {
 #define ATH9K_WME_UPSD	4
 
 enum ath9k_tx_queue_flags {
-	TXQ_FLAG_TXOKINT_ENABLE = 0x0001,
-	TXQ_FLAG_TXERRINT_ENABLE = 0x0001,
+	TXQ_FLAG_TXINT_ENABLE = 0x0001,
 	TXQ_FLAG_TXDESCINT_ENABLE = 0x0002,
 	TXQ_FLAG_TXEOLINT_ENABLE = 0x0004,
 	TXQ_FLAG_TXURNINT_ENABLE = 0x0008,
@@ -642,9 +640,12 @@ enum ath9k_rx_filter {
 	ATH9K_RX_FILTER_PHYERR = 0x00000100,
 	ATH9K_RX_FILTER_MYBEACON = 0x00000200,
 	ATH9K_RX_FILTER_COMP_BAR = 0x00000400,
+	ATH9K_RX_FILTER_COMP_BA = 0x00000800,
+	ATH9K_RX_FILTER_UNCOMP_BA_BAR = 0x00001000,
 	ATH9K_RX_FILTER_PSPOLL = 0x00004000,
 	ATH9K_RX_FILTER_PHYRADAR = 0x00002000,
 	ATH9K_RX_FILTER_MCAST_BCAST_ALL = 0x00008000,
+	ATH9K_RX_FILTER_CONTROL_WRAPPER = 0x00080000,
 };
 
 #define ATH9K_RATESERIES_RTS_CTS  0x0001
@@ -660,15 +661,11 @@ struct ath9k_11n_rate_series {
 	u32 RateFlags;
 };
 
-struct ath9k_keyval {
-	u8 kv_type;
-	u8 kv_pad;
-	u16 kv_len;
-	u8 kv_val[16]; /* TK */
-	u8 kv_mic[8]; /* Michael MIC key */
-	u8 kv_txmic[8]; /* Michael MIC TX key (used only if the hardware
-			 * supports both MIC keys in the same key cache entry;
-			 * in that case, kv_mic is the RX key) */
+enum aggr_type {
+	AGGR_BUF_NONE,
+	AGGR_BUF_FIRST,
+	AGGR_BUF_MIDDLE,
+	AGGR_BUF_LAST,
 };
 
 enum ath9k_key_type {
@@ -678,27 +675,44 @@ enum ath9k_key_type {
 	ATH9K_KEY_TYPE_TKIP,
 };
 
-enum ath9k_cipher {
-	ATH9K_CIPHER_WEP = 0,
-	ATH9K_CIPHER_AES_OCB = 1,
-	ATH9K_CIPHER_AES_CCM = 2,
-	ATH9K_CIPHER_CKIP = 3,
-	ATH9K_CIPHER_TKIP = 4,
-	ATH9K_CIPHER_CLR = 5,
-	ATH9K_CIPHER_MIC = 127
+struct ath_tx_info {
+	u8 qcu;
+
+	bool is_first;
+	bool is_last;
+
+	enum aggr_type aggr;
+	u8 ndelim;
+	u16 aggr_len;
+
+	dma_addr_t link;
+	int pkt_len;
+	u32 flags;
+
+	dma_addr_t buf_addr[4];
+	int buf_len[4];
+
+	struct ath9k_11n_rate_series rates[4];
+	u8 rtscts_rate;
+	bool dur_update;
+
+	enum ath9k_pkt_type type;
+	enum ath9k_key_type keytype;
+	u8 keyix;
+	u8 txpower;
 };
 
 struct ath_hw;
 struct ath9k_channel;
+enum ath9k_int;
 
 u32 ath9k_hw_gettxbuf(struct ath_hw *ah, u32 q);
 void ath9k_hw_puttxbuf(struct ath_hw *ah, u32 q, u32 txdp);
 void ath9k_hw_txstart(struct ath_hw *ah, u32 q);
-void ath9k_hw_cleartxdesc(struct ath_hw *ah, void *ds);
 u32 ath9k_hw_numtxpending(struct ath_hw *ah, u32 q);
 bool ath9k_hw_updatetxtriglevel(struct ath_hw *ah, bool bIncTrigLevel);
-bool ath9k_hw_stoptxdma(struct ath_hw *ah, u32 q);
-void ath9k_hw_gettxintrtxqs(struct ath_hw *ah, u32 *txqs);
+bool ath9k_hw_stop_dma_queue(struct ath_hw *ah, u32 q);
+void ath9k_hw_abort_tx_dma(struct ath_hw *ah);
 bool ath9k_hw_set_txq_props(struct ath_hw *ah, int q,
 			    const struct ath9k_tx_queue_info *qinfo);
 bool ath9k_hw_get_txq_props(struct ath_hw *ah, int q,
@@ -708,21 +722,21 @@ int ath9k_hw_setuptxqueue(struct ath_hw *ah, enum ath9k_tx_queue type,
 bool ath9k_hw_releasetxqueue(struct ath_hw *ah, u32 q);
 bool ath9k_hw_resettxqueue(struct ath_hw *ah, u32 q);
 int ath9k_hw_rxprocdesc(struct ath_hw *ah, struct ath_desc *ds,
-			struct ath_rx_status *rs, u64 tsf);
+			struct ath_rx_status *rs);
 void ath9k_hw_setuprxdesc(struct ath_hw *ah, struct ath_desc *ds,
 			  u32 size, u32 flags);
 bool ath9k_hw_setrxabort(struct ath_hw *ah, bool set);
 void ath9k_hw_putrxbuf(struct ath_hw *ah, u32 rxdp);
 void ath9k_hw_startpcureceive(struct ath_hw *ah, bool is_scanning);
-void ath9k_hw_stoppcurecv(struct ath_hw *ah);
 void ath9k_hw_abortpcurecv(struct ath_hw *ah);
-bool ath9k_hw_stopdmarecv(struct ath_hw *ah);
+bool ath9k_hw_stopdmarecv(struct ath_hw *ah, bool *reset);
 int ath9k_hw_beaconq_setup(struct ath_hw *ah);
 
 /* Interrupt Handling */
 bool ath9k_hw_intrpend(struct ath_hw *ah);
-enum ath9k_int ath9k_hw_set_interrupts(struct ath_hw *ah,
-				       enum ath9k_int ints);
+void ath9k_hw_set_interrupts(struct ath_hw *ah);
+void ath9k_hw_enable_interrupts(struct ath_hw *ah);
+void ath9k_hw_disable_interrupts(struct ath_hw *ah);
 
 void ar9002_hw_attach_mac_ops(struct ath_hw *ah);
 

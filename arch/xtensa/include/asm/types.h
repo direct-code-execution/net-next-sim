@@ -23,18 +23,12 @@
 
 #ifndef __ASSEMBLY__
 
-typedef unsigned short umode_t;
-
 /*
  * These aren't exported outside the kernel to avoid name space clashes
  */
 #ifdef __KERNEL__
 
 #define BITS_PER_LONG 32
-
-/* Dma addresses are 32-bits wide.  */
-
-typedef u32 dma_addr_t;
 
 #endif	/* __KERNEL__ */
 #endif

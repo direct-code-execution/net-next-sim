@@ -31,3 +31,19 @@ config CAIF_SPI_SYNC
 	Putting the next command and length in the start of the frame can
 	help to synchronize to the next transfer in case of over or under-runs.
 	This option also needs to be enabled on the modem.
+
+config CAIF_SHM
+	tristate "CAIF shared memory protocol driver"
+	depends on CAIF && U5500_MBOX
+	default n
+	---help---
+	The CAIF shared memory protocol driver for the STE UX5500 platform.
+
+config CAIF_HSI
+       tristate "CAIF HSI transport driver"
+       depends on CAIF
+       default n
+       ---help---
+       The caif low level driver for CAIF over HSI.
+       Be aware that if you enable this then you also need to
+       enable a low-level HSI driver.

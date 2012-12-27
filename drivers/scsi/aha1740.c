@@ -53,7 +53,6 @@
 #include <linux/gfp.h>
 
 #include <asm/dma.h>
-#include <asm/system.h>
 #include <asm/io.h>
 
 #include "scsi.h"
@@ -331,7 +330,7 @@ static irqreturn_t aha1740_intr_handle(int irq, void *dev_id)
 	return IRQ_RETVAL(handled);
 }
 
-static int aha1740_queuecommand(Scsi_Cmnd * SCpnt, void (*done)(Scsi_Cmnd *))
+static int aha1740_queuecommand_lck(Scsi_Cmnd * SCpnt, void (*done)(Scsi_Cmnd *))
 {
 	unchar direction;
 	unchar *cmd = (unchar *) SCpnt->cmnd;
@@ -461,7 +460,7 @@ static int aha1740_queuecommand(Scsi_Cmnd * SCpnt, void (*done)(Scsi_Cmnd *))
 	/* The Adaptec Spec says the card is so fast that the loops
            will only be executed once in the code below. Even if this
            was true with the fastest processors when the spec was
-           written, it doesn't seem to be true with todays fast
+           written, it doesn't seem to be true with today's fast
            processors. We print a warning if the code is executed more
            often than LOOPCNT_WARN. If this happens, it should be
            investigated. If the count reaches LOOPCNT_MAX, we assume
@@ -502,6 +501,8 @@ static int aha1740_queuecommand(Scsi_Cmnd * SCpnt, void (*done)(Scsi_Cmnd *))
 		printk(KERN_ALERT "aha1740_queuecommand: done can't be NULL\n");
 	return 0;
 }
+
+static DEF_SCSI_QCMD(aha1740_queuecommand)
 
 /* Query the board for its irq_level and irq_type.  Nothing else matters
    in enhanced mode on an EISA bus. */

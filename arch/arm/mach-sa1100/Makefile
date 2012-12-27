@@ -3,7 +3,7 @@
 #
 
 # Common support
-obj-y := clock.o generic.o gpio.o irq.o dma.o time.o #nmi-oopser.o
+obj-y := clock.o generic.o irq.o time.o #nmi-oopser.o
 obj-m :=
 obj-n :=
 obj-  :=
@@ -37,17 +37,19 @@ obj-$(CONFIG_SA1100_JORNADA720_SSP)	+= jornada720_ssp.o
 obj-$(CONFIG_SA1100_LART)		+= lart.o
 led-$(CONFIG_SA1100_LART)		+= leds-lart.o
 
+obj-$(CONFIG_SA1100_NANOENGINE)		+= nanoengine.o
+obj-$(CONFIG_PCI_NANOENGINE)		+= pci-nanoengine.o
+
 obj-$(CONFIG_SA1100_PLEB)		+= pleb.o
 
 obj-$(CONFIG_SA1100_SHANNON)		+= shannon.o
 
 obj-$(CONFIG_SA1100_SIMPAD)		+= simpad.o
-led-$(CONFIG_SA1100_SIMPAD)		+= leds-simpad.o
 
 # LEDs support
 obj-$(CONFIG_LEDS) += $(led-y)
 
-# Miscelaneous functions
+# Miscellaneous functions
 obj-$(CONFIG_PM)			+= pm.o sleep.o
 obj-$(CONFIG_SA1100_SSP)		+= ssp.o
 

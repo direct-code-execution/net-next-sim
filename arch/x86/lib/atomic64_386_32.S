@@ -15,14 +15,12 @@
 
 /* if you want SMP support, implement these with real spinlocks */
 .macro LOCK reg
-	pushfl
-	CFI_ADJUST_CFA_OFFSET 4
+	pushfl_cfi
 	cli
 .endm
 
 .macro UNLOCK reg
-	popfl
-	CFI_ADJUST_CFA_OFFSET -4
+	popfl_cfi
 .endm
 
 #define BEGIN(op) \
@@ -139,13 +137,13 @@ BEGIN(dec_return)
 RET_ENDP
 #undef v
 
-#define v %ecx
+#define v %esi
 BEGIN(add_unless)
-	addl %eax, %esi
+	addl %eax, %ecx
 	adcl %edx, %edi
 	addl  (v), %eax
 	adcl 4(v), %edx
-	cmpl %eax, %esi
+	cmpl %eax, %ecx
 	je 3f
 1:
 	movl %eax,  (v)

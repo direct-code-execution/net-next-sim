@@ -31,28 +31,14 @@
 #include <mach/platform.h>
 #include "common.h"
 
-static cycle_t lpc32xx_clksrc_read(struct clocksource *cs)
-{
-	return (cycle_t)__raw_readl(LCP32XX_TIMER_TC(LPC32XX_TIMER1_BASE));
-}
-
-static struct clocksource lpc32xx_clksrc = {
-	.name	= "lpc32xx_clksrc",
-	.shift	= 24,
-	.rating	= 300,
-	.read	= lpc32xx_clksrc_read,
-	.mask	= CLOCKSOURCE_MASK(32),
-	.flags	= CLOCK_SOURCE_IS_CONTINUOUS,
-};
-
 static int lpc32xx_clkevt_next_event(unsigned long delta,
     struct clock_event_device *dev)
 {
-	__raw_writel(LCP32XX_TIMER_CNTR_TCR_RESET,
-		LCP32XX_TIMER_TCR(LPC32XX_TIMER0_BASE));
-	__raw_writel(delta, LCP32XX_TIMER_PR(LPC32XX_TIMER0_BASE));
-	__raw_writel(LCP32XX_TIMER_CNTR_TCR_EN,
-		LCP32XX_TIMER_TCR(LPC32XX_TIMER0_BASE));
+	__raw_writel(LPC32XX_TIMER_CNTR_TCR_RESET,
+		LPC32XX_TIMER_TCR(LPC32XX_TIMER0_BASE));
+	__raw_writel(delta, LPC32XX_TIMER_PR(LPC32XX_TIMER0_BASE));
+	__raw_writel(LPC32XX_TIMER_CNTR_TCR_EN,
+		LPC32XX_TIMER_TCR(LPC32XX_TIMER0_BASE));
 
 	return 0;
 }
@@ -72,7 +58,7 @@ static void lpc32xx_clkevt_mode(enum clock_event_mode mode,
 		 * disable the timer to wait for the first call to
 		 * set_next_event().
 		 */
-		__raw_writel(0, LCP32XX_TIMER_TCR(LPC32XX_TIMER0_BASE));
+		__raw_writel(0, LPC32XX_TIMER_TCR(LPC32XX_TIMER0_BASE));
 		break;
 
 	case CLOCK_EVT_MODE_UNUSED:
@@ -95,8 +81,8 @@ static irqreturn_t lpc32xx_timer_interrupt(int irq, void *dev_id)
 	struct clock_event_device *evt = &lpc32xx_clkevt;
 
 	/* Clear match */
-	__raw_writel(LCP32XX_TIMER_CNTR_MTCH_BIT(0),
-		LCP32XX_TIMER_IR(LPC32XX_TIMER0_BASE));
+	__raw_writel(LPC32XX_TIMER_CNTR_MTCH_BIT(0),
+		LPC32XX_TIMER_IR(LPC32XX_TIMER0_BASE));
 
 	evt->event_handler(evt);
 
@@ -142,14 +128,14 @@ static void __init lpc32xx_timer_init(void)
 	clkrate = clkrate / clk_get_pclk_div();
 
 	/* Initial timer setup */
-	__raw_writel(0, LCP32XX_TIMER_TCR(LPC32XX_TIMER0_BASE));
-	__raw_writel(LCP32XX_TIMER_CNTR_MTCH_BIT(0),
-		LCP32XX_TIMER_IR(LPC32XX_TIMER0_BASE));
-	__raw_writel(1, LCP32XX_TIMER_MR0(LPC32XX_TIMER0_BASE));
-	__raw_writel(LCP32XX_TIMER_CNTR_MCR_MTCH(0) |
-		LCP32XX_TIMER_CNTR_MCR_STOP(0) |
-		LCP32XX_TIMER_CNTR_MCR_RESET(0),
-		LCP32XX_TIMER_MCR(LPC32XX_TIMER0_BASE));
+	__raw_writel(0, LPC32XX_TIMER_TCR(LPC32XX_TIMER0_BASE));
+	__raw_writel(LPC32XX_TIMER_CNTR_MTCH_BIT(0),
+		LPC32XX_TIMER_IR(LPC32XX_TIMER0_BASE));
+	__raw_writel(1, LPC32XX_TIMER_MR0(LPC32XX_TIMER0_BASE));
+	__raw_writel(LPC32XX_TIMER_CNTR_MCR_MTCH(0) |
+		LPC32XX_TIMER_CNTR_MCR_STOP(0) |
+		LPC32XX_TIMER_CNTR_MCR_RESET(0),
+		LPC32XX_TIMER_MCR(LPC32XX_TIMER0_BASE));
 
 	/* Setup tick interrupt */
 	setup_irq(IRQ_LPC32XX_TIMER0, &lpc32xx_timer_irq);
@@ -165,15 +151,15 @@ static void __init lpc32xx_timer_init(void)
 	clockevents_register_device(&lpc32xx_clkevt);
 
 	/* Use timer1 as clock source. */
-	__raw_writel(LCP32XX_TIMER_CNTR_TCR_RESET,
-		LCP32XX_TIMER_TCR(LPC32XX_TIMER1_BASE));
-	__raw_writel(0, LCP32XX_TIMER_PR(LPC32XX_TIMER1_BASE));
-	__raw_writel(0, LCP32XX_TIMER_MCR(LPC32XX_TIMER1_BASE));
-	__raw_writel(LCP32XX_TIMER_CNTR_TCR_EN,
-		LCP32XX_TIMER_TCR(LPC32XX_TIMER1_BASE));
-	lpc32xx_clksrc.mult = clocksource_hz2mult(clkrate,
-		lpc32xx_clksrc.shift);
-	clocksource_register(&lpc32xx_clksrc);
+	__raw_writel(LPC32XX_TIMER_CNTR_TCR_RESET,
+		LPC32XX_TIMER_TCR(LPC32XX_TIMER1_BASE));
+	__raw_writel(0, LPC32XX_TIMER_PR(LPC32XX_TIMER1_BASE));
+	__raw_writel(0, LPC32XX_TIMER_MCR(LPC32XX_TIMER1_BASE));
+	__raw_writel(LPC32XX_TIMER_CNTR_TCR_EN,
+		LPC32XX_TIMER_TCR(LPC32XX_TIMER1_BASE));
+
+	clocksource_mmio_init(LPC32XX_TIMER_TC(LPC32XX_TIMER1_BASE),
+		"lpc32xx_clksrc", clkrate, 300, 32, clocksource_mmio_readl_up);
 }
 
 struct sys_timer lpc32xx_timer = {

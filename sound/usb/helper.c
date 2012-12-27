@@ -81,7 +81,7 @@ void *snd_usb_find_csint_desc(void *buffer, int buflen, void *after, u8 dsubtype
  */
 int snd_usb_ctl_msg(struct usb_device *dev, unsigned int pipe, __u8 request,
 		    __u8 requesttype, __u16 value, __u16 index, void *data,
-		    __u16 size, int timeout)
+		    __u16 size)
 {
 	int err;
 	void *buf = NULL;
@@ -92,7 +92,7 @@ int snd_usb_ctl_msg(struct usb_device *dev, unsigned int pipe, __u8 request,
 			return -ENOMEM;
 	}
 	err = usb_control_msg(dev, pipe, request, requesttype,
-			      value, index, buf, size, timeout);
+			      value, index, buf, size, 1000);
 	if (size > 0) {
 		memcpy(data, buf, size);
 		kfree(buf);
@@ -103,11 +103,16 @@ int snd_usb_ctl_msg(struct usb_device *dev, unsigned int pipe, __u8 request,
 unsigned char snd_usb_parse_datainterval(struct snd_usb_audio *chip,
 					 struct usb_host_interface *alts)
 {
-	if (snd_usb_get_speed(chip->dev) == USB_SPEED_HIGH &&
-	    get_endpoint(alts, 0)->bInterval >= 1 &&
-	    get_endpoint(alts, 0)->bInterval <= 4)
-		return get_endpoint(alts, 0)->bInterval - 1;
-	else
-		return 0;
+	switch (snd_usb_get_speed(chip->dev)) {
+	case USB_SPEED_HIGH:
+	case USB_SPEED_SUPER:
+		if (get_endpoint(alts, 0)->bInterval >= 1 &&
+		    get_endpoint(alts, 0)->bInterval <= 4)
+			return get_endpoint(alts, 0)->bInterval - 1;
+		break;
+	default:
+		break;
+	}
+	return 0;
 }
 

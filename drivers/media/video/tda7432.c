@@ -36,7 +36,6 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
 #include <media/i2c-addr.h>
-#include <media/v4l2-i2c-drv.h>
 
 #ifndef VIDEO_AUDIO_BALANCE
 # define VIDEO_AUDIO_BALANCE 32
@@ -50,10 +49,11 @@ static int maxvol;
 static int loudness; /* disable loudness by default */
 static int debug;	 /* insmod parameter */
 module_param(debug, int, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(debug, "Set debugging level from 0 to 3. Default is off(0).");
 module_param(loudness, int, S_IRUGO);
-MODULE_PARM_DESC(maxvol,"Set maximium volume to +20db (0), default is 0db(1)");
+MODULE_PARM_DESC(loudness, "Turn loudness on(1) else off(0). Default is off(0).");
 module_param(maxvol, int, S_IRUGO | S_IWUSR);
-
+MODULE_PARM_DESC(maxvol, "Set maximium volume to +20dB(0) else +0dB(1). Default is +20dB(0).");
 
 
 /* Structure of address and subaddresses for the tda7432 */
@@ -472,9 +472,14 @@ static const struct i2c_device_id tda7432_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, tda7432_id);
 
-static struct v4l2_i2c_driver_data v4l2_i2c_data = {
-	.name = "tda7432",
-	.probe = tda7432_probe,
-	.remove = tda7432_remove,
-	.id_table = tda7432_id,
+static struct i2c_driver tda7432_driver = {
+	.driver = {
+		.owner	= THIS_MODULE,
+		.name	= "tda7432",
+	},
+	.probe		= tda7432_probe,
+	.remove		= tda7432_remove,
+	.id_table	= tda7432_id,
 };
+
+module_i2c_driver(tda7432_driver);

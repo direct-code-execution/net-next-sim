@@ -11,6 +11,17 @@
 #define	m5249sim_h
 /****************************************************************************/
 
+#define	CPU_NAME		"COLDFIRE(m5249)"
+#define	CPU_INSTR_PER_JIFFY	3
+#define	MCF_BUSCLK		(MCF_CLK / 2)
+
+#include <asm/m52xxacr.h>
+
+/*
+ *	The 5249 has a second MBAR region, define its address.
+ */
+#define MCF_MBAR2		0x80000000
+
 /*
  *	Define the 5249 SIM register set addresses.
  */
@@ -50,12 +61,42 @@
 #define MCFSIM_CSMR3		0xa8		/* CS 3 Mask reg (r/w) */
 #define MCFSIM_CSCR3		0xae		/* CS 3 Control reg (r/w) */
 
-#define MCFSIM_DCR		0x100		/* DRAM Control reg (r/w) */
-#define MCFSIM_DACR0		0x108		/* DRAM 0 Addr and Ctrl (r/w) */
-#define MCFSIM_DMR0		0x10c		/* DRAM 0 Mask reg (r/w) */
-#define MCFSIM_DACR1		0x110		/* DRAM 1 Addr and Ctrl (r/w) */
-#define MCFSIM_DMR1		0x114		/* DRAM 1 Mask reg (r/w) */
+#define MCFSIM_DCR		(MCF_MBAR + 0x100)	/* DRAM Control */
+#define MCFSIM_DACR0		(MCF_MBAR + 0x108)	/* DRAM 0 Addr/Ctrl */
+#define MCFSIM_DMR0		(MCF_MBAR + 0x10c)	/* DRAM 0 Mask */
+#define MCFSIM_DACR1		(MCF_MBAR + 0x110)	/* DRAM 1 Addr/Ctrl */
+#define MCFSIM_DMR1		(MCF_MBAR + 0x114)	/* DRAM 1 Mask */
 
+/*
+ *	Timer module.
+ */
+#define MCFTIMER_BASE1		(MCF_MBAR + 0x140)	/* Base of TIMER1 */
+#define MCFTIMER_BASE2		(MCF_MBAR + 0x180)	/* Base of TIMER2 */
+
+/*
+ *	UART module.
+ */
+#define MCFUART_BASE0		(MCF_MBAR + 0x1c0)	/* Base address UART0 */
+#define MCFUART_BASE1		(MCF_MBAR + 0x200)	/* Base address UART1 */
+
+/*
+ *	QSPI module.
+ */
+#define	MCFQSPI_BASE		(MCF_MBAR + 0x300)	/* Base address QSPI */
+#define	MCFQSPI_SIZE		0x40			/* Register set size */
+
+#define	MCFQSPI_CS0		29
+#define	MCFQSPI_CS1		24
+#define	MCFQSPI_CS2		21
+#define	MCFQSPI_CS3		22
+
+/*
+ *	DMA unit base addresses.
+ */
+#define MCFDMA_BASE0		(MCF_MBAR + 0x300)	/* Base address DMA 0 */
+#define MCFDMA_BASE1		(MCF_MBAR + 0x340)	/* Base address DMA 1 */
+#define MCFDMA_BASE2		(MCF_MBAR + 0x380)	/* Base address DMA 2 */
+#define MCFDMA_BASE3		(MCF_MBAR + 0x3C0)	/* Base address DMA 3 */
 
 /*
  *	Some symbol defines for the above...
@@ -77,6 +118,9 @@
 #define	MCF_IRQ_QSPI		28		/* QSPI, Level 4 */
 #define	MCF_IRQ_TIMER		30		/* Timer0, Level 6 */
 #define	MCF_IRQ_PROFILER	31		/* Timer1, Level 7 */
+
+#define	MCF_IRQ_UART0		73		/* UART0 */
+#define	MCF_IRQ_UART1		74		/* UART1 */
 
 /*
  *	General purpose IO registers (in MBAR2).

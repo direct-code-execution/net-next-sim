@@ -52,11 +52,11 @@ struct net_device *ieee802154_get_dev(struct net *net,
 
 	switch (addr->addr_type) {
 	case IEEE802154_ADDR_LONG:
-		rtnl_lock();
-		dev = dev_getbyhwaddr(net, ARPHRD_IEEE802154, addr->hwaddr);
+		rcu_read_lock();
+		dev = dev_getbyhwaddr_rcu(net, ARPHRD_IEEE802154, addr->hwaddr);
 		if (dev)
 			dev_hold(dev);
-		rtnl_unlock();
+		rcu_read_unlock();
 		break;
 	case IEEE802154_ADDR_SHORT:
 		if (addr->pan_id == 0xffff ||
@@ -302,7 +302,7 @@ static int ieee802154_rcv(struct sk_buff *skb, struct net_device *dev,
 	struct packet_type *pt, struct net_device *orig_dev)
 {
 	if (!netif_running(dev))
-		return -ENODEV;
+		goto drop;
 	pr_debug("got frame, type %d, dev %p\n", dev->type, dev);
 #ifdef DEBUG
 	print_hex_dump_bytes("ieee802154_rcv ", DUMP_PREFIX_NONE, skb->data, skb->len);

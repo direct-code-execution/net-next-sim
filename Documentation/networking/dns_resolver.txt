@@ -61,7 +61,6 @@ before the more general line given above as the first match is the one taken.
 	create	dns_resolver  	foo:*	*	/usr/sbin/dns.foo %k
 
 
-
 =====
 USAGE
 =====
@@ -103,6 +102,18 @@ implemented in the module can be called after doing:
      If _expiry is non-NULL, the expiry time (TTL) of the result will be
      returned also.
 
+The kernel maintains an internal keyring in which it caches looked up keys.
+This can be cleared by any process that has the CAP_SYS_ADMIN capability by
+the use of KEYCTL_KEYRING_CLEAR on the keyring ID.
+
+
+===============================
+READING DNS KEYS FROM USERSPACE
+===============================
+
+Keys of dns_resolver type can be read from userspace using keyctl_read() or
+"keyctl read/print/pipe".
+
 
 =========
 MECHANISM
@@ -132,8 +143,8 @@ the key will be discarded and recreated when the data it holds has expired.
 dns_query() returns a copy of the value attached to the key, or an error if
 that is indicated instead.
 
-See <file:Documentation/keys-request-key.txt> for further information about
-request-key function.
+See <file:Documentation/security/keys-request-key.txt> for further
+information about request-key function.
 
 
 =========

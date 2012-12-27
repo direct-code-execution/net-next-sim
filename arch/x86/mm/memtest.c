@@ -6,8 +6,7 @@
 #include <linux/smp.h>
 #include <linux/init.h>
 #include <linux/pfn.h>
-
-#include <asm/e820.h>
+#include <linux/memblock.h>
 
 static u64 patterns[] __initdata = {
 	0,
@@ -35,7 +34,7 @@ static void __init reserve_bad_mem(u64 pattern, u64 start_bad, u64 end_bad)
 	       (unsigned long long) pattern,
 	       (unsigned long long) start_bad,
 	       (unsigned long long) end_bad);
-	reserve_early(start_bad, end_bad, "BAD RAM");
+	memblock_reserve(start_bad, end_bad - start_bad);
 }
 
 static void __init memtest(u64 pattern, u64 start_phys, u64 size)
@@ -71,24 +70,19 @@ static void __init memtest(u64 pattern, u64 start_phys, u64 size)
 
 static void __init do_one_pass(u64 pattern, u64 start, u64 end)
 {
-	u64 size = 0;
+	u64 i;
+	phys_addr_t this_start, this_end;
 
-	while (start < end) {
-		start = find_e820_area_size(start, &size, 1);
-
-		/* done ? */
-		if (start >= end)
-			break;
-		if (start + size > end)
-			size = end - start;
-
-		printk(KERN_INFO "  %010llx - %010llx pattern %016llx\n",
-		       (unsigned long long) start,
-		       (unsigned long long) start + size,
-		       (unsigned long long) cpu_to_be64(pattern));
-		memtest(pattern, start, size);
-
-		start += size;
+	for_each_free_mem_range(i, MAX_NUMNODES, &this_start, &this_end, NULL) {
+		this_start = clamp_t(phys_addr_t, this_start, start, end);
+		this_end = clamp_t(phys_addr_t, this_end, start, end);
+		if (this_start < this_end) {
+			printk(KERN_INFO "  %010llx - %010llx pattern %016llx\n",
+			       (unsigned long long)this_start,
+			       (unsigned long long)this_end,
+			       (unsigned long long)cpu_to_be64(pattern));
+			memtest(pattern, this_start, this_end - this_start);
+		}
 	}
 }
 

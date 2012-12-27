@@ -1,6 +1,6 @@
 /*
  * QLogic iSCSI HBA Driver
- * Copyright (c)  2003-2006 QLogic Corporation
+ * Copyright (c)  2003-2010 QLogic Corporation
  *
  * See LICENSE.qla4xxx for copyright and licensing details.
  */
@@ -24,6 +24,8 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/mutex.h>
+#include <linux/aer.h>
+#include <linux/bsg-lib.h>
 
 #include <net/tcp.h>
 #include <scsi/scsi.h>
@@ -32,27 +34,14 @@
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_transport.h>
 #include <scsi/scsi_transport_iscsi.h>
+#include <scsi/scsi_bsg_iscsi.h>
+#include <scsi/scsi_netlink.h>
+#include <scsi/libiscsi.h>
 
 #include "ql4_dbg.h"
 #include "ql4_nx.h"
-
-#if defined(CONFIG_PCIEAER)
-#include <linux/aer.h>
-#else
-/* AER releated */
-static inline int pci_enable_pcie_error_reporting(struct pci_dev *dev)
-{
-	return -EINVAL;
-}
-static inline int pci_disable_pcie_error_reporting(struct pci_dev *dev)
-{
-	return -EINVAL;
-}
-static inline int pci_cleanup_aer_uncorrect_error_status(struct pci_dev *dev)
-{
-	return -EINVAL;
-}
-#endif
+#include "ql4_fw.h"
+#include "ql4_nvram.h"
 
 #ifndef PCI_DEVICE_ID_QLOGIC_ISP4010
 #define PCI_DEVICE_ID_QLOGIC_ISP4010	0x4010
@@ -69,6 +58,9 @@ static inline int pci_cleanup_aer_uncorrect_error_status(struct pci_dev *dev)
 #ifndef PCI_DEVICE_ID_QLOGIC_ISP8022
 #define PCI_DEVICE_ID_QLOGIC_ISP8022	0x8022
 #endif
+
+#define ISP4XXX_PCI_FN_1	0x1
+#define ISP4XXX_PCI_FN_2	0x3
 
 #define QLA_SUCCESS			0
 #define QLA_ERROR			1
@@ -123,13 +115,13 @@ static inline int pci_cleanup_aer_uncorrect_error_status(struct pci_dev *dev)
 #define MAX_BUSES		1
 #define MAX_TARGETS		MAX_DEV_DB_ENTRIES
 #define MAX_LUNS		0xffff
-#define MAX_AEN_ENTRIES		256 /* should be > EXT_DEF_MAX_AEN_QUEUE */
+#define MAX_AEN_ENTRIES		MAX_DEV_DB_ENTRIES
 #define MAX_DDB_ENTRIES		MAX_DEV_DB_ENTRIES
 #define MAX_PDU_ENTRIES		32
 #define INVALID_ENTRY		0xFFFF
 #define MAX_CMDS_TO_RISC	1024
 #define MAX_SRBS		MAX_CMDS_TO_RISC
-#define MBOX_AEN_REG_COUNT	5
+#define MBOX_AEN_REG_COUNT	8
 #define MAX_INIT_RETRIES	5
 
 /*
@@ -155,7 +147,7 @@ static inline int pci_cleanup_aer_uncorrect_error_status(struct pci_dev *dev)
 #define ISCSI_ALIAS_SIZE		32	/* ISCSI Alias name size */
 #define ISCSI_NAME_SIZE			0xE0	/* ISCSI Name size */
 
-#define QL4_SESS_RECOVERY_TMO		30	/* iSCSI session */
+#define QL4_SESS_RECOVERY_TMO		120	/* iSCSI session */
 						/* recovery timeout */
 
 #define LSDW(x) ((u32)((u64)(x)))
@@ -179,8 +171,13 @@ static inline int pci_cleanup_aer_uncorrect_error_status(struct pci_dev *dev)
 #define IOCB_TOV_MARGIN			10
 #define RELOGIN_TOV			18
 #define ISNS_DEREG_TOV			5
+#define HBA_ONLINE_TOV			30
+#define DISABLE_ACB_TOV			30
+#define IP_CONFIG_TOV			30
+#define LOGIN_TOV			12
 
 #define MAX_RESET_HA_RETRIES		2
+#define FW_ALIVE_WAIT_TOV		3
 
 #define CMD_SP(Cmnd)			((Cmnd)->SCp.ptr)
 
@@ -191,11 +188,11 @@ static inline int pci_cleanup_aer_uncorrect_error_status(struct pci_dev *dev)
 struct srb {
 	struct list_head list;	/* (8)	 */
 	struct scsi_qla_host *ha;	/* HA the SP is queued on */
-	struct ddb_entry	*ddb;
+	struct ddb_entry *ddb;
 	uint16_t flags;		/* (1) Status flags. */
 
 #define SRB_DMA_VALID		BIT_3	/* DMA Buffer mapped. */
-#define SRB_GOT_SENSE		BIT_4	/* sense data recieved. */
+#define SRB_GOT_SENSE		BIT_4	/* sense data received. */
 	uint8_t state;		/* (1) Status flags. */
 
 #define SRB_NO_QUEUE_STATE	 0	/* Request is in between states */
@@ -207,7 +204,6 @@ struct srb {
 	struct scsi_cmnd *cmd;	/* (4) SCSI command block */
 	dma_addr_t dma_handle;	/* (4) for unmap of single transfers */
 	struct kref srb_ref;	/* reference count for this srb */
-	uint32_t fw_ddb_index;
 	uint8_t err_id;		/* error id */
 #define SRB_ERR_PORT	   1	/* Request failed because "port down" */
 #define SRB_ERR_LOOP	   2	/* Request failed because "loop down" */
@@ -223,6 +219,15 @@ struct srb {
 	uint8_t *req_sense_ptr;
 	uint16_t req_sense_len;
 	uint16_t reserved2;
+};
+
+/* Mailbox request block structure */
+struct mrb {
+	struct scsi_qla_host *ha;
+	struct mbox_cmd_iocb *mbox;
+	uint32_t mbox_cmd;
+	uint16_t iocb_cnt;		/* Number of used iocbs */
+	uint32_t pid;
 };
 
 /*
@@ -241,55 +246,52 @@ struct ql4_aen_log {
  * Device Database (DDB) structure
  */
 struct ddb_entry {
-	struct list_head list;	/* ddb list */
 	struct scsi_qla_host *ha;
 	struct iscsi_cls_session *sess;
 	struct iscsi_cls_conn *conn;
 
-	atomic_t state;		/* DDB State */
-
-	unsigned long flags;	/* DDB Flags */
-
-	unsigned long dev_scan_wait_to_start_relogin;
-	unsigned long dev_scan_wait_to_complete_relogin;
-
 	uint16_t fw_ddb_index;	/* DDB firmware index */
-	uint16_t options;
 	uint32_t fw_ddb_device_state; /* F/W Device State  -- see ql4_fw.h */
+	uint16_t ddb_type;
+#define FLASH_DDB 0x01
 
-	uint32_t CmdSn;
-	uint16_t target_session_id;
-	uint16_t connection_id;
-	uint16_t exe_throttle;	/* Max mumber of cmds outstanding
-				 * simultaneously */
-	uint16_t task_mgmt_timeout; /* Min time for task mgmt cmds to
-				     * complete */
+	struct dev_db_entry fw_ddb_entry;
+	int (*unblock_sess)(struct iscsi_cls_session *cls_session);
+	int (*ddb_change)(struct scsi_qla_host *ha, uint32_t fw_ddb_index,
+			  struct ddb_entry *ddb_entry, uint32_t state);
+
+	/* Driver Re-login  */
+	unsigned long flags;		  /* DDB Flags */
 	uint16_t default_relogin_timeout; /*  Max time to wait for
 					   *  relogin to complete */
-	uint16_t tcp_source_port_num;
-	uint32_t default_time2wait; /* Default Min time between
-				     * relogins (+aens) */
+	atomic_t retry_relogin_timer;	  /* Min Time between relogins
+					   * (4000 only) */
+	atomic_t relogin_timer;		  /* Max Time to wait for
+					   * relogin to complete */
+	atomic_t relogin_retry_count;	  /* Num of times relogin has been
+					   * retried */
+	uint32_t default_time2wait;	  /* Default Min time between
+					   * relogins (+aens) */
+	uint16_t chap_tbl_idx;
+};
 
-	atomic_t retry_relogin_timer; /* Min Time between relogins
-				       * (4000 only) */
-	atomic_t relogin_timer;	/* Max Time to wait for relogin to complete */
-	atomic_t relogin_retry_count; /* Num of times relogin has been
-				       * retried */
+struct qla_ddb_index {
+	struct list_head list;
+	uint16_t fw_ddb_idx;
+	struct dev_db_entry fw_ddb;
+};
 
-	uint16_t port;
-	uint32_t tpgt;
-	uint8_t ip_addr[IP_ADDR_LEN];
-	uint8_t iscsi_name[ISCSI_NAME_SIZE];	/* 72 x48 */
-	uint8_t iscsi_alias[0x20];
+#define DDB_IPADDR_LEN 64
+
+struct ql4_tuple_ddb {
+	int port;
+	int tpgt;
+	char ip_addr[DDB_IPADDR_LEN];
+	char iscsi_name[ISCSI_NAME_SIZE];
+	uint16_t options;
+#define DDB_OPT_IPV6 0x0e0e
+#define DDB_OPT_IPV4 0x0f0f
 	uint8_t isid[6];
-	uint16_t iscsi_max_burst_len;
-	uint16_t iscsi_max_outsnd_r2t;
-	uint16_t iscsi_first_burst_len;
-	uint16_t iscsi_max_rcv_data_seg_len;
-	uint16_t iscsi_max_snd_data_seg_len;
-
-	struct in6_addr remote_ipv6_addr;
-	struct in6_addr link_local_ipv6_addr;
 };
 
 /*
@@ -306,14 +308,31 @@ struct ddb_entry {
  * DDB flags.
  */
 #define DF_RELOGIN		0	/* Relogin to device */
-#define DF_NO_RELOGIN		1	/* Do not relogin if IOCTL
-					 * logged it out */
 #define DF_ISNS_DISCOVERED	2	/* Device was discovered via iSNS */
 #define DF_FO_MASKED		3
 
+enum qla4_work_type {
+	QLA4_EVENT_AEN,
+	QLA4_EVENT_PING_STATUS,
+};
 
-#include "ql4_fw.h"
-#include "ql4_nvram.h"
+struct qla4_work_evt {
+	struct list_head list;
+	enum qla4_work_type type;
+	union {
+		struct {
+			enum iscsi_host_event_code code;
+			uint32_t data_size;
+			uint8_t data[0];
+		} aen;
+		struct {
+			uint32_t status;
+			uint32_t pid;
+			uint32_t data_size;
+			uint8_t data[0];
+		} ping;
+	} u;
+};
 
 struct ql82xx_hw_data {
 	/* Offsets for flash/nvram access (set to ~0 if not used). */
@@ -331,7 +350,10 @@ struct ql82xx_hw_data {
 	uint32_t flt_region_boot;
 	uint32_t flt_region_bootload;
 	uint32_t flt_region_fw;
-	uint32_t reserved;
+
+	uint32_t flt_iscsi_param;
+	uint32_t flt_region_chap;
+	uint32_t flt_chap_size;
 };
 
 struct qla4_8xxx_legacy_intr_set {
@@ -376,6 +398,68 @@ struct isp_operations {
 	int (*get_sys_info) (struct scsi_qla_host *);
 };
 
+/*qla4xxx ipaddress configuration details */
+struct ipaddress_config {
+	uint16_t ipv4_options;
+	uint16_t tcp_options;
+	uint16_t ipv4_vlan_tag;
+	uint8_t ipv4_addr_state;
+	uint8_t ip_address[IP_ADDR_LEN];
+	uint8_t subnet_mask[IP_ADDR_LEN];
+	uint8_t gateway[IP_ADDR_LEN];
+	uint32_t ipv6_options;
+	uint32_t ipv6_addl_options;
+	uint8_t ipv6_link_local_state;
+	uint8_t ipv6_addr0_state;
+	uint8_t ipv6_addr1_state;
+	uint8_t ipv6_default_router_state;
+	uint16_t ipv6_vlan_tag;
+	struct in6_addr ipv6_link_local_addr;
+	struct in6_addr ipv6_addr0;
+	struct in6_addr ipv6_addr1;
+	struct in6_addr ipv6_default_router_addr;
+	uint16_t eth_mtu_size;
+	uint16_t ipv4_port;
+	uint16_t ipv6_port;
+};
+
+#define QL4_CHAP_MAX_NAME_LEN 256
+#define QL4_CHAP_MAX_SECRET_LEN 100
+#define LOCAL_CHAP	0
+#define BIDI_CHAP	1
+
+struct ql4_chap_format {
+	u8  intr_chap_name[QL4_CHAP_MAX_NAME_LEN];
+	u8  intr_secret[QL4_CHAP_MAX_SECRET_LEN];
+	u8  target_chap_name[QL4_CHAP_MAX_NAME_LEN];
+	u8  target_secret[QL4_CHAP_MAX_SECRET_LEN];
+	u16 intr_chap_name_length;
+	u16 intr_secret_length;
+	u16 target_chap_name_length;
+	u16 target_secret_length;
+};
+
+struct ip_address_format {
+	u8 ip_type;
+	u8 ip_address[16];
+};
+
+struct	ql4_conn_info {
+	u16	dest_port;
+	struct	ip_address_format dest_ipaddr;
+	struct	ql4_chap_format chap;
+};
+
+struct ql4_boot_session_info {
+	u8	target_name[224];
+	struct	ql4_conn_info conn_list[1];
+};
+
+struct ql4_boot_tgt_info {
+	struct ql4_boot_session_info boot_pri_sess;
+	struct ql4_boot_session_info boot_sec_sess;
+};
+
 /*
  * Linux Host Adapter structure
  */
@@ -387,13 +471,12 @@ struct scsi_qla_host {
 #define AF_INIT_DONE			1 /* 0x00000002 */
 #define AF_MBOX_COMMAND			2 /* 0x00000004 */
 #define AF_MBOX_COMMAND_DONE		3 /* 0x00000008 */
-#define AF_DPC_SCHEDULED		5 /* 0x00000020 */
 #define AF_INTERRUPTS_ON		6 /* 0x00000040 */
 #define AF_GET_CRASH_RECORD		7 /* 0x00000080 */
 #define AF_LINK_UP			8 /* 0x00000100 */
 #define AF_IRQ_ATTACHED			10 /* 0x00000400 */
 #define AF_DISABLE_ACB_COMPLETE		11 /* 0x00000800 */
-#define AF_HBA_GOING_AWAY		12 /* 0x00001000 */
+#define AF_HA_REMOVAL			12 /* 0x00001000 */
 #define AF_INTx_ENABLED			15 /* 0x00008000 */
 #define AF_MSI_ENABLED			16 /* 0x00010000 */
 #define AF_MSIX_ENABLED			17 /* 0x00020000 */
@@ -401,7 +484,7 @@ struct scsi_qla_host {
 #define AF_FW_RECOVERY			19 /* 0x00080000 */
 #define AF_EEH_BUSY			20 /* 0x00100000 */
 #define AF_PCI_CHANNEL_IO_PERM_FAILURE	21 /* 0x00200000 */
-
+#define AF_BUILD_DDB_LIST		22 /* 0x00400000 */
 	unsigned long dpc_flags;
 
 #define DPC_RESET_HA			1 /* 0x00000002 */
@@ -471,10 +554,6 @@ struct scsi_qla_host {
 	/* --- From Init_FW --- */
 	/* init_cb_t *init_cb; */
 	uint16_t firmware_options;
-	uint16_t tcp_options;
-	uint8_t ip_address[IP_ADDR_LEN];
-	uint8_t subnet_mask[IP_ADDR_LEN];
-	uint8_t gateway[IP_ADDR_LEN];
 	uint8_t alias[32];
 	uint8_t name_string[256];
 	uint8_t heartbeat_interval;
@@ -482,7 +561,7 @@ struct scsi_qla_host {
 	/* --- From FlashSysInfo --- */
 	uint8_t my_mac[MAC_ADDR_LEN];
 	uint8_t serial_number[16];
-
+	uint16_t port_num;
 	/* --- From GetFwState --- */
 	uint32_t firmware_state;
 	uint32_t addl_fw_state;
@@ -496,7 +575,6 @@ struct scsi_qla_host {
 	uint32_t timer_active;
 
 	/* Recovery Timers */
-	uint32_t discovery_wait;
 	atomic_t check_relogin_timeouts;
 	uint32_t retry_reset_ha_cnt;
 	uint32_t isp_reset_timer;	/* reset test timer */
@@ -545,31 +623,13 @@ struct scsi_qla_host {
 	volatile uint8_t mbox_status_count;
 	volatile uint32_t mbox_status[MBOX_REG_COUNT];
 
-	/* local device database list (contains internal ddb entries) */
-	struct list_head ddb_list;
-
-	/* Map ddb_list entry by FW ddb index */
+	/* FW ddb index map */
 	struct ddb_entry *fw_ddb_index_map[MAX_DDB_ENTRIES];
 
 	/* Saved srb for status continuation entry processing */
 	struct srb *status_srb;
 
-	/* IPv6 support info from InitFW */
 	uint8_t acb_version;
-	uint8_t ipv4_addr_state;
-	uint16_t ipv4_options;
-
-	uint32_t resvd2;
-	uint32_t ipv6_options;
-	uint32_t ipv6_addl_options;
-	uint8_t ipv6_link_local_state;
-	uint8_t ipv6_addr0_state;
-	uint8_t ipv6_addr1_state;
-	uint8_t ipv6_default_router_state;
-	struct in6_addr ipv6_link_local_addr;
-	struct in6_addr ipv6_addr0;
-	struct in6_addr ipv6_addr1;
-	struct in6_addr ipv6_default_router_addr;
 
 	/* qla82xx specific fields */
 	struct device_reg_82xx  __iomem *qla4_8xxx_reg; /* Base I/O address */
@@ -604,16 +664,90 @@ struct scsi_qla_host {
 	uint32_t nx_reset_timeout;
 
 	struct completion mbx_intr_comp;
+
+	struct ipaddress_config ip_config;
+	struct iscsi_iface *iface_ipv4;
+	struct iscsi_iface *iface_ipv6_0;
+	struct iscsi_iface *iface_ipv6_1;
+
+	/* --- From About Firmware --- */
+	uint16_t iscsi_major;
+	uint16_t iscsi_minor;
+	uint16_t bootload_major;
+	uint16_t bootload_minor;
+	uint16_t bootload_patch;
+	uint16_t bootload_build;
+	uint16_t def_timeout; /* Default login timeout */
+
+	uint32_t flash_state;
+#define	QLFLASH_WAITING		0
+#define	QLFLASH_READING		1
+#define	QLFLASH_WRITING		2
+	struct dma_pool *chap_dma_pool;
+	uint8_t *chap_list; /* CHAP table cache */
+	struct mutex  chap_sem;
+
+#define CHAP_DMA_BLOCK_SIZE    512
+	struct workqueue_struct *task_wq;
+	unsigned long ddb_idx_map[MAX_DDB_ENTRIES / BITS_PER_LONG];
+#define SYSFS_FLAG_FW_SEL_BOOT 2
+	struct iscsi_boot_kset *boot_kset;
+	struct ql4_boot_tgt_info boot_tgt;
+	uint16_t phy_port_num;
+	uint16_t phy_port_cnt;
+	uint16_t iscsi_pci_func_cnt;
+	uint8_t model_name[16];
+	struct completion disable_acb_comp;
+	struct dma_pool *fw_ddb_dma_pool;
+#define DDB_DMA_BLOCK_SIZE 512
+	uint16_t pri_ddb_idx;
+	uint16_t sec_ddb_idx;
+	int is_reset;
+	uint16_t temperature;
+
+	/* event work list */
+	struct list_head work_list;
+	spinlock_t work_lock;
+
+	/* mbox iocb */
+#define MAX_MRB		128
+	struct mrb *active_mrb_array[MAX_MRB];
+	uint32_t mrb_index;
+};
+
+struct ql4_task_data {
+	struct scsi_qla_host *ha;
+	uint8_t iocb_req_cnt;
+	dma_addr_t data_dma;
+	void *req_buffer;
+	dma_addr_t req_dma;
+	uint32_t req_len;
+	void *resp_buffer;
+	dma_addr_t resp_dma;
+	uint32_t resp_len;
+	struct iscsi_task *task;
+	struct passthru_status sts;
+	struct work_struct task_work;
+};
+
+struct qla_endpoint {
+	struct Scsi_Host *host;
+	struct sockaddr dst_addr;
+};
+
+struct qla_conn {
+	struct qla_endpoint *qla_ep;
 };
 
 static inline int is_ipv4_enabled(struct scsi_qla_host *ha)
 {
-	return ((ha->ipv4_options & IPOPT_IPv4_PROTOCOL_ENABLE) != 0);
+	return ((ha->ip_config.ipv4_options & IPOPT_IPV4_PROTOCOL_ENABLE) != 0);
 }
 
 static inline int is_ipv6_enabled(struct scsi_qla_host *ha)
 {
-	return ((ha->ipv6_options & IPV6_OPT_IPV6_PROTOCOL_ENABLE) != 0);
+	return ((ha->ip_config.ipv6_options &
+		IPV6_OPT_IPV6_PROTOCOL_ENABLE) != 0);
 }
 
 static inline int is_qla4010(struct scsi_qla_host *ha)
@@ -629,6 +763,11 @@ static inline int is_qla4022(struct scsi_qla_host *ha)
 static inline int is_qla4032(struct scsi_qla_host *ha)
 {
 	return ha->pdev->device == PCI_DEVICE_ID_QLOGIC_ISP4032;
+}
+
+static inline int is_qla40XX(struct scsi_qla_host *ha)
+{
+	return is_qla4032(ha) || is_qla4022(ha) || is_qla4010(ha);
 }
 
 static inline int is_qla8022(struct scsi_qla_host *ha)
@@ -653,7 +792,7 @@ static inline int adapter_up(struct scsi_qla_host *ha)
 
 static inline struct scsi_qla_host* to_qla_host(struct Scsi_Host *shost)
 {
-	return (struct scsi_qla_host *)shost->hostdata;
+	return (struct scsi_qla_host *)iscsi_host_priv(shost);
 }
 
 static inline void __iomem* isp_semaphore(struct scsi_qla_host *ha)
@@ -773,15 +912,28 @@ static inline void ql4xxx_unlock_drvr(struct scsi_qla_host *a)
 		ql4xxx_sem_unlock(a, QL4022_DRVR_SEM_MASK);
 }
 
+static inline int ql4xxx_reset_active(struct scsi_qla_host *ha)
+{
+	return test_bit(DPC_RESET_ACTIVE, &ha->dpc_flags) ||
+	       test_bit(DPC_RESET_HA, &ha->dpc_flags) ||
+	       test_bit(DPC_RETRY_RESET_HA, &ha->dpc_flags) ||
+	       test_bit(DPC_RESET_HA_INTR, &ha->dpc_flags) ||
+	       test_bit(DPC_RESET_HA_FW_CONTEXT, &ha->dpc_flags) ||
+	       test_bit(DPC_HA_UNRECOVERABLE, &ha->dpc_flags);
+
+}
 /*---------------------------------------------------------------------------*/
 
 /* Defines for qla4xxx_initialize_adapter() and qla4xxx_recover_adapter() */
+
+#define INIT_ADAPTER    0
+#define RESET_ADAPTER   1
+
 #define PRESERVE_DDB_LIST	0
 #define REBUILD_DDB_LIST	1
 
 /* Defines for process_aen() */
 #define PROCESS_ALL_AENS	 0
 #define FLUSH_DDB_CHANGED_AENS	 1
-#define RELOGIN_DDB_CHANGED_AENS 2
 
 #endif	/*_QLA4XXX_H */

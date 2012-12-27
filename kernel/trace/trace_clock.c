@@ -46,7 +46,7 @@ u64 notrace trace_clock_local(void)
 }
 
 /*
- * trace_clock(): 'inbetween' trace clock. Not completely serialized,
+ * trace_clock(): 'between' trace clock. Not completely serialized,
  * but not completely incorrect when crossing CPUs either.
  *
  * This is based on cpu_clock(), which will allow at most ~1 jiffy of
@@ -112,4 +112,16 @@ u64 notrace trace_clock_global(void)
 	local_irq_restore(flags);
 
 	return now;
+}
+
+static atomic64_t trace_counter;
+
+/*
+ * trace_clock_counter(): simply an atomic counter.
+ * Use the trace_counter "counter" for cases where you do not care
+ * about timings, but are interested in strict ordering.
+ */
+u64 notrace trace_clock_counter(void)
+{
+	return atomic64_add_return(1, &trace_counter);
 }

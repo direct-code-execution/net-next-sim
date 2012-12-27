@@ -24,8 +24,7 @@
  * along with this driver.  If not, see <http://www.gnu.org/licenses/>.
  **********************************************************************/
 
-#include "crystalhd_cmds.h"
-#include "crystalhd_hw.h"
+#include "crystalhd.h"
 
 static struct crystalhd_user *bc_cproc_get_uid(struct crystalhd_cmd *ctx)
 {
@@ -914,7 +913,7 @@ enum BC_STATUS crystalhd_user_open(struct crystalhd_cmd *ctx,
  * Return:
  *	status
  *
- * Closer aplication handle and release app specific
+ * Closer application handle and release app specific
  * resources.
  */
 enum BC_STATUS crystalhd_user_close(struct crystalhd_cmd *ctx, struct crystalhd_user *uc)

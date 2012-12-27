@@ -49,7 +49,8 @@ static int sg_version_num = 30534;	/* 2 digits for each component */
 #include <linux/blkdev.h>
 #include <linux/delay.h>
 #include <linux/blktrace_api.h>
-#include <linux/smp_lock.h>
+#include <linux/mutex.h>
+#include <linux/ratelimit.h>
 
 #include "scsi.h"
 #include <scsi/scsi_dbg.h>
@@ -102,6 +103,8 @@ static int scatter_elem_sz_prev = SG_SCATTER_SZ;
 
 static int sg_add(struct device *, struct class_interface *);
 static void sg_remove(struct device *, struct class_interface *);
+
+static DEFINE_MUTEX(sg_mutex);
 
 static DEFINE_IDR(sg_index_idr);
 static DEFINE_RWLOCK(sg_index_lock);	/* Also used to lock
@@ -210,7 +213,7 @@ static void sg_put_dev(Sg_device *sdp);
 
 static int sg_allow_access(struct file *filp, unsigned char *cmd)
 {
-	struct sg_fd *sfp = (struct sg_fd *)filp->private_data;
+	struct sg_fd *sfp = filp->private_data;
 
 	if (sfp->parentdp->device->type == TYPE_SCANNER)
 		return 0;
@@ -229,7 +232,7 @@ sg_open(struct inode *inode, struct file *filp)
 	int res;
 	int retval;
 
-	lock_kernel();
+	mutex_lock(&sg_mutex);
 	nonseekable_open(inode, filp);
 	SCSI_LOG_TIMEOUT(3, printk("sg_open: dev=%d, flags=0x%x\n", dev, flags));
 	sdp = sg_get_dev(dev);
@@ -314,7 +317,7 @@ sdp_put:
 sg_put:
 	if (sdp)
 		sg_put_dev(sdp);
-	unlock_kernel();
+	mutex_unlock(&sg_mutex);
 	return retval;
 }
 
@@ -624,14 +627,15 @@ sg_write(struct file *filp, const char __user *buf, size_t count, loff_t * ppos)
 	 */
 	if (hp->dxfer_direction == SG_DXFER_TO_FROM_DEV) {
 		static char cmd[TASK_COMM_LEN];
-		if (strcmp(current->comm, cmd) && printk_ratelimit()) {
-			printk(KERN_WARNING
-			       "sg_write: data in/out %d/%d bytes for SCSI command 0x%x--"
-			       "guessing data in;\n   "
-			       "program %s not setting count and/or reply_len properly\n",
-			       old_hdr.reply_len - (int)SZ_SG_HEADER,
-			       input_size, (unsigned int) cmnd[0],
-			       current->comm);
+		if (strcmp(current->comm, cmd)) {
+			printk_ratelimited(KERN_WARNING
+					   "sg_write: data in/out %d/%d bytes "
+					   "for SCSI command 0x%x-- guessing "
+					   "data in;\n   program %s not setting "
+					   "count and/or reply_len properly\n",
+					   old_hdr.reply_len - (int)SZ_SG_HEADER,
+					   input_size, (unsigned int) cmnd[0],
+					   current->comm);
 			strcpy(cmd, current->comm);
 		}
 	}
@@ -1092,9 +1096,9 @@ sg_unlocked_ioctl(struct file *filp, unsigned int cmd_in, unsigned long arg)
 {
 	int ret;
 
-	lock_kernel();
+	mutex_lock(&sg_mutex);
 	ret = sg_ioctl(filp, cmd_in, arg);
-	unlock_kernel();
+	mutex_unlock(&sg_mutex);
 
 	return ret;
 }
@@ -1351,6 +1355,7 @@ static const struct file_operations sg_fops = {
 	.mmap = sg_mmap,
 	.release = sg_release,
 	.fasync = sg_fasync,
+	.llseek = no_llseek,
 };
 
 static struct class *sg_sysfs_class;
@@ -1657,7 +1662,7 @@ static int sg_start_req(Sg_request *srp, unsigned char *cmd)
 	if (sg_allow_dio && hp->flags & SG_FLAG_DIRECT_IO &&
 	    dxfer_dir != SG_DXFER_UNKNOWN && !iov_count &&
 	    !sfp->parentdp->device->host->unchecked_isa_dma &&
-	    blk_rq_aligned(q, hp->dxferp, dxfer_len))
+	    blk_rq_aligned(q, (unsigned long)hp->dxferp, dxfer_len))
 		md = NULL;
 	else
 		md = &map_data;
@@ -2320,16 +2325,15 @@ static struct sg_proc_leaf sg_proc_leaf_arr[] = {
 static int
 sg_proc_init(void)
 {
-	int k, mask;
 	int num_leaves = ARRAY_SIZE(sg_proc_leaf_arr);
-	struct sg_proc_leaf * leaf;
+	int k;
 
 	sg_proc_sgp = proc_mkdir(sg_proc_sg_dirname, NULL);
 	if (!sg_proc_sgp)
 		return 1;
 	for (k = 0; k < num_leaves; ++k) {
-		leaf = &sg_proc_leaf_arr[k];
-		mask = leaf->fops->write ? S_IRUGO | S_IWUSR : S_IRUGO;
+		struct sg_proc_leaf *leaf = &sg_proc_leaf_arr[k];
+		umode_t mask = leaf->fops->write ? S_IRUGO | S_IWUSR : S_IRUGO;
 		proc_create(leaf->name, mask, sg_proc_sgp, leaf->fops);
 	}
 	return 0;
@@ -2364,16 +2368,15 @@ static ssize_t
 sg_proc_write_adio(struct file *filp, const char __user *buffer,
 		   size_t count, loff_t *off)
 {
-	int num;
-	char buff[11];
+	int err;
+	unsigned long num;
 
 	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RAWIO))
 		return -EACCES;
-	num = (count < 10) ? count : 10;
-	if (copy_from_user(buff, buffer, num))
-		return -EFAULT;
-	buff[num] = '\0';
-	sg_allow_dio = simple_strtoul(buff, NULL, 10) ? 1 : 0;
+	err = kstrtoul_from_user(buffer, count, 0, &num);
+	if (err)
+		return err;
+	sg_allow_dio = num ? 1 : 0;
 	return count;
 }
 
@@ -2386,17 +2389,15 @@ static ssize_t
 sg_proc_write_dressz(struct file *filp, const char __user *buffer,
 		     size_t count, loff_t *off)
 {
-	int num;
+	int err;
 	unsigned long k = ULONG_MAX;
-	char buff[11];
 
 	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RAWIO))
 		return -EACCES;
-	num = (count < 10) ? count : 10;
-	if (copy_from_user(buff, buffer, num))
-		return -EFAULT;
-	buff[num] = '\0';
-	k = simple_strtoul(buff, NULL, 10);
+
+	err = kstrtoul_from_user(buffer, count, 0, &k);
+	if (err)
+		return err;
 	if (k <= 1048576) {	/* limit "big buff" to 1 MB */
 		sg_big_buff = k;
 		return count;

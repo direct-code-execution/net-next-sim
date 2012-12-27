@@ -14,6 +14,7 @@
 #include <asm/cacheflush.h>
 #include <asm/r4kcache.h>
 #include <asm/reboot.h>
+#include <asm/smp-ops.h>
 #include <asm/time.h>
 
 #include <msp_prom.h>
@@ -146,6 +147,8 @@ void __init plat_mem_setup(void)
 	pm_power_off = msp_power_off;
 }
 
+extern struct plat_smp_ops msp_smtc_smp_ops;
+
 void __init prom_init(void)
 {
 	unsigned long family;
@@ -206,7 +209,7 @@ void __init prom_init(void)
 	default:
 		/* we don't recognize the machine */
 		mips_machtype  = MACH_UNKNOWN;
-		panic("***Bogosity factor five***, exiting\n");
+		panic("***Bogosity factor five***, exiting");
 		break;
 	}
 
@@ -226,10 +229,16 @@ void __init prom_init(void)
 	 */
 	msp_serial_setup();
 
+	if (register_vsmp_smp_ops()) {
+#ifdef CONFIG_MIPS_MT_SMTC
+		register_smp_ops(&msp_smtc_smp_ops);
+#endif
+	}
+
 #ifdef CONFIG_PMCTWILED
 	/*
 	 * Setup LED states before the subsys_initcall loads other
-	 * dependant drivers/modules.
+	 * dependent drivers/modules.
 	 */
 	pmctwiled_setup();
 #endif

@@ -10,6 +10,7 @@
 #ifndef __LINUX_MDIO_H__
 #define __LINUX_MDIO_H__
 
+#include <linux/types.h>
 #include <linux/mii.h>
 
 /* MDIO Manageable Devices (MMDs). */
@@ -55,6 +56,7 @@
 #define MDIO_PCS_10GBRT_STAT2	33	/* 10GBASE-R/-T PCS status 2 */
 #define MDIO_AN_10GBT_CTRL	32	/* 10GBASE-T auto-negotiation control */
 #define MDIO_AN_10GBT_STAT	33	/* 10GBASE-T auto-negotiation status */
+#define MDIO_AN_EEE_ADV		60	/* EEE advertisement */
 
 /* LASI (Link Alarm Status Interrupt) registers, defined by XENPAK MSA. */
 #define MDIO_PMA_LASI_RXCTRL	0x9000	/* RX_ALARM control */
@@ -235,6 +237,10 @@
 #define MDIO_AN_10GBT_STAT_MS		0x4000	/* Master/slave config */
 #define MDIO_AN_10GBT_STAT_MSFLT	0x8000	/* Master/slave config fault */
 
+/* AN EEE Advertisement register. */
+#define MDIO_AN_EEE_ADV_100TX		0x0002	/* Advertise 100TX EEE cap */
+#define MDIO_AN_EEE_ADV_1000T		0x0004	/* Advertise 1000T EEE cap */
+
 /* LASI RX_ALARM control/status registers. */
 #define MDIO_PMA_LASI_RX_PHYXSLFLT	0x0001	/* PHY XS RX local fault */
 #define MDIO_PMA_LASI_RX_PCSLFLT	0x0008	/* PCS RX local fault */
@@ -268,6 +274,8 @@ static inline __u16 mdio_phy_id_c45(int prtad, int devad)
 	return MDIO_PHY_ID_C45 | (prtad << 5) | devad;
 }
 
+#ifdef __KERNEL__
+
 static inline bool mdio_phy_id_is_c45(int phy_id)
 {
 	return (phy_id & MDIO_PHY_ID_C45) && !(phy_id & ~MDIO_PHY_ID_C45_MASK);
@@ -282,11 +290,6 @@ static inline __u16 mdio_phy_id_devad(int phy_id)
 {
 	return phy_id & MDIO_PHY_ID_DEVAD;
 }
-
-#define MDIO_SUPPORTS_C22		1
-#define MDIO_SUPPORTS_C45		2
-
-#ifdef __KERNEL__ 
 
 /**
  * struct mdio_if_info - Ethernet controller MDIO interface
@@ -316,6 +319,8 @@ struct mdio_if_info {
 
 #define MDIO_PRTAD_NONE			(-1)
 #define MDIO_DEVAD_NONE			(-1)
+#define MDIO_SUPPORTS_C22		1
+#define MDIO_SUPPORTS_C45		2
 #define MDIO_EMULATE_C22		4
 
 struct ethtool_cmd;

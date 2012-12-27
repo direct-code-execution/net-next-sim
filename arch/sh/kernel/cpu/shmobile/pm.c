@@ -16,6 +16,7 @@
 #include <asm/suspend.h>
 #include <asm/uaccess.h>
 #include <asm/cacheflush.h>
+#include <asm/bl_bit.h>
 
 /*
  * Notifier lists for pre/post sleep notification
@@ -141,7 +142,7 @@ static int sh_pm_enter(suspend_state_t state)
 	return 0;
 }
 
-static struct platform_suspend_ops sh_pm_ops = {
+static const struct platform_suspend_ops sh_pm_ops = {
 	.enter          = sh_pm_enter,
 	.valid          = suspend_valid_only_mem,
 };

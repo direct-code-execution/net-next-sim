@@ -1,7 +1,7 @@
 /*
  * Sonics Silicon Backplane PCI-Hostbus related functions.
  *
- * Copyright (C) 2005-2006 Michael Buesch <mb@bu3sch.de>
+ * Copyright (C) 2005-2006 Michael Buesch <m@bues.ch>
  * Copyright (C) 2005 Martin Langer <martin-langer@gmx.de>
  * Copyright (C) 2005 Stefano Brivio <st3@riseup.net>
  * Copyright (C) 2005 Danny van Dyk <kugelfang@gentoo.org>
@@ -331,7 +331,6 @@ static void sprom_extract_r123(struct ssb_sprom *out, const u16 *in)
 {
 	int i;
 	u16 v;
-	s8 gain;
 	u16 loc[3];
 
 	if (out->revision == 3)			/* rev 3 moved MAC */
@@ -390,20 +389,52 @@ static void sprom_extract_r123(struct ssb_sprom *out, const u16 *in)
 		SPEX(boardflags_hi, SSB_SPROM2_BFLHI, 0xFFFF, 0);
 
 	/* Extract the antenna gain values. */
-	gain = r123_extract_antgain(out->revision, in,
-				    SSB_SPROM1_AGAIN_BG,
-				    SSB_SPROM1_AGAIN_BG_SHIFT);
-	out->antenna_gain.ghz24.a0 = gain;
-	out->antenna_gain.ghz24.a1 = gain;
-	out->antenna_gain.ghz24.a2 = gain;
-	out->antenna_gain.ghz24.a3 = gain;
-	gain = r123_extract_antgain(out->revision, in,
-				    SSB_SPROM1_AGAIN_A,
-				    SSB_SPROM1_AGAIN_A_SHIFT);
-	out->antenna_gain.ghz5.a0 = gain;
-	out->antenna_gain.ghz5.a1 = gain;
-	out->antenna_gain.ghz5.a2 = gain;
-	out->antenna_gain.ghz5.a3 = gain;
+	out->antenna_gain.a0 = r123_extract_antgain(out->revision, in,
+						    SSB_SPROM1_AGAIN_BG,
+						    SSB_SPROM1_AGAIN_BG_SHIFT);
+	out->antenna_gain.a1 = r123_extract_antgain(out->revision, in,
+						    SSB_SPROM1_AGAIN_A,
+						    SSB_SPROM1_AGAIN_A_SHIFT);
+}
+
+/* Revs 4 5 and 8 have partially shared layout */
+static void sprom_extract_r458(struct ssb_sprom *out, const u16 *in)
+{
+	SPEX(txpid2g[0], SSB_SPROM4_TXPID2G01,
+	     SSB_SPROM4_TXPID2G0, SSB_SPROM4_TXPID2G0_SHIFT);
+	SPEX(txpid2g[1], SSB_SPROM4_TXPID2G01,
+	     SSB_SPROM4_TXPID2G1, SSB_SPROM4_TXPID2G1_SHIFT);
+	SPEX(txpid2g[2], SSB_SPROM4_TXPID2G23,
+	     SSB_SPROM4_TXPID2G2, SSB_SPROM4_TXPID2G2_SHIFT);
+	SPEX(txpid2g[3], SSB_SPROM4_TXPID2G23,
+	     SSB_SPROM4_TXPID2G3, SSB_SPROM4_TXPID2G3_SHIFT);
+
+	SPEX(txpid5gl[0], SSB_SPROM4_TXPID5GL01,
+	     SSB_SPROM4_TXPID5GL0, SSB_SPROM4_TXPID5GL0_SHIFT);
+	SPEX(txpid5gl[1], SSB_SPROM4_TXPID5GL01,
+	     SSB_SPROM4_TXPID5GL1, SSB_SPROM4_TXPID5GL1_SHIFT);
+	SPEX(txpid5gl[2], SSB_SPROM4_TXPID5GL23,
+	     SSB_SPROM4_TXPID5GL2, SSB_SPROM4_TXPID5GL2_SHIFT);
+	SPEX(txpid5gl[3], SSB_SPROM4_TXPID5GL23,
+	     SSB_SPROM4_TXPID5GL3, SSB_SPROM4_TXPID5GL3_SHIFT);
+
+	SPEX(txpid5g[0], SSB_SPROM4_TXPID5G01,
+	     SSB_SPROM4_TXPID5G0, SSB_SPROM4_TXPID5G0_SHIFT);
+	SPEX(txpid5g[1], SSB_SPROM4_TXPID5G01,
+	     SSB_SPROM4_TXPID5G1, SSB_SPROM4_TXPID5G1_SHIFT);
+	SPEX(txpid5g[2], SSB_SPROM4_TXPID5G23,
+	     SSB_SPROM4_TXPID5G2, SSB_SPROM4_TXPID5G2_SHIFT);
+	SPEX(txpid5g[3], SSB_SPROM4_TXPID5G23,
+	     SSB_SPROM4_TXPID5G3, SSB_SPROM4_TXPID5G3_SHIFT);
+
+	SPEX(txpid5gh[0], SSB_SPROM4_TXPID5GH01,
+	     SSB_SPROM4_TXPID5GH0, SSB_SPROM4_TXPID5GH0_SHIFT);
+	SPEX(txpid5gh[1], SSB_SPROM4_TXPID5GH01,
+	     SSB_SPROM4_TXPID5GH1, SSB_SPROM4_TXPID5GH1_SHIFT);
+	SPEX(txpid5gh[2], SSB_SPROM4_TXPID5GH23,
+	     SSB_SPROM4_TXPID5GH2, SSB_SPROM4_TXPID5GH2_SHIFT);
+	SPEX(txpid5gh[3], SSB_SPROM4_TXPID5GH23,
+	     SSB_SPROM4_TXPID5GH3, SSB_SPROM4_TXPID5GH3_SHIFT);
 }
 
 static void sprom_extract_r45(struct ssb_sprom *out, const u16 *in)
@@ -428,10 +459,14 @@ static void sprom_extract_r45(struct ssb_sprom *out, const u16 *in)
 		SPEX(country_code, SSB_SPROM4_CCODE, 0xFFFF, 0);
 		SPEX(boardflags_lo, SSB_SPROM4_BFLLO, 0xFFFF, 0);
 		SPEX(boardflags_hi, SSB_SPROM4_BFLHI, 0xFFFF, 0);
+		SPEX(boardflags2_lo, SSB_SPROM4_BFL2LO, 0xFFFF, 0);
+		SPEX(boardflags2_hi, SSB_SPROM4_BFL2HI, 0xFFFF, 0);
 	} else {
 		SPEX(country_code, SSB_SPROM5_CCODE, 0xFFFF, 0);
 		SPEX(boardflags_lo, SSB_SPROM5_BFLLO, 0xFFFF, 0);
 		SPEX(boardflags_hi, SSB_SPROM5_BFLHI, 0xFFFF, 0);
+		SPEX(boardflags2_lo, SSB_SPROM5_BFL2LO, 0xFFFF, 0);
+		SPEX(boardflags2_hi, SSB_SPROM5_BFL2HI, 0xFFFF, 0);
 	}
 	SPEX(ant_available_a, SSB_SPROM4_ANTAVAIL, SSB_SPROM4_ANTAVAIL_A,
 	     SSB_SPROM4_ANTAVAIL_A_SHIFT);
@@ -460,16 +495,16 @@ static void sprom_extract_r45(struct ssb_sprom *out, const u16 *in)
 	}
 
 	/* Extract the antenna gain values. */
-	SPEX(antenna_gain.ghz24.a0, SSB_SPROM4_AGAIN01,
+	SPEX(antenna_gain.a0, SSB_SPROM4_AGAIN01,
 	     SSB_SPROM4_AGAIN0, SSB_SPROM4_AGAIN0_SHIFT);
-	SPEX(antenna_gain.ghz24.a1, SSB_SPROM4_AGAIN01,
+	SPEX(antenna_gain.a1, SSB_SPROM4_AGAIN01,
 	     SSB_SPROM4_AGAIN1, SSB_SPROM4_AGAIN1_SHIFT);
-	SPEX(antenna_gain.ghz24.a2, SSB_SPROM4_AGAIN23,
+	SPEX(antenna_gain.a2, SSB_SPROM4_AGAIN23,
 	     SSB_SPROM4_AGAIN2, SSB_SPROM4_AGAIN2_SHIFT);
-	SPEX(antenna_gain.ghz24.a3, SSB_SPROM4_AGAIN23,
+	SPEX(antenna_gain.a3, SSB_SPROM4_AGAIN23,
 	     SSB_SPROM4_AGAIN3, SSB_SPROM4_AGAIN3_SHIFT);
-	memcpy(&out->antenna_gain.ghz5, &out->antenna_gain.ghz24,
-	       sizeof(out->antenna_gain.ghz5));
+
+	sprom_extract_r458(out, in);
 
 	/* TODO - get remaining rev 4 stuff needed */
 }
@@ -477,7 +512,13 @@ static void sprom_extract_r45(struct ssb_sprom *out, const u16 *in)
 static void sprom_extract_r8(struct ssb_sprom *out, const u16 *in)
 {
 	int i;
-	u16 v;
+	u16 v, o;
+	u16 pwr_info_offset[] = {
+		SSB_SROM8_PWR_INFO_CORE0, SSB_SROM8_PWR_INFO_CORE1,
+		SSB_SROM8_PWR_INFO_CORE2, SSB_SROM8_PWR_INFO_CORE3
+	};
+	BUILD_BUG_ON(ARRAY_SIZE(pwr_info_offset) !=
+			ARRAY_SIZE(out->core_pwr_info));
 
 	/* extract the MAC address */
 	for (i = 0; i < 3; i++) {
@@ -550,16 +591,71 @@ static void sprom_extract_r8(struct ssb_sprom *out, const u16 *in)
 	SPEX32(ofdm5ghpo, SSB_SPROM8_OFDM5GHPO, 0xFFFFFFFF, 0);
 
 	/* Extract the antenna gain values. */
-	SPEX(antenna_gain.ghz24.a0, SSB_SPROM8_AGAIN01,
+	SPEX(antenna_gain.a0, SSB_SPROM8_AGAIN01,
 	     SSB_SPROM8_AGAIN0, SSB_SPROM8_AGAIN0_SHIFT);
-	SPEX(antenna_gain.ghz24.a1, SSB_SPROM8_AGAIN01,
+	SPEX(antenna_gain.a1, SSB_SPROM8_AGAIN01,
 	     SSB_SPROM8_AGAIN1, SSB_SPROM8_AGAIN1_SHIFT);
-	SPEX(antenna_gain.ghz24.a2, SSB_SPROM8_AGAIN23,
+	SPEX(antenna_gain.a2, SSB_SPROM8_AGAIN23,
 	     SSB_SPROM8_AGAIN2, SSB_SPROM8_AGAIN2_SHIFT);
-	SPEX(antenna_gain.ghz24.a3, SSB_SPROM8_AGAIN23,
+	SPEX(antenna_gain.a3, SSB_SPROM8_AGAIN23,
 	     SSB_SPROM8_AGAIN3, SSB_SPROM8_AGAIN3_SHIFT);
-	memcpy(&out->antenna_gain.ghz5, &out->antenna_gain.ghz24,
-	       sizeof(out->antenna_gain.ghz5));
+
+	/* Extract cores power info info */
+	for (i = 0; i < ARRAY_SIZE(pwr_info_offset); i++) {
+		o = pwr_info_offset[i];
+		SPEX(core_pwr_info[i].itssi_2g, o + SSB_SROM8_2G_MAXP_ITSSI,
+			SSB_SPROM8_2G_ITSSI, SSB_SPROM8_2G_ITSSI_SHIFT);
+		SPEX(core_pwr_info[i].maxpwr_2g, o + SSB_SROM8_2G_MAXP_ITSSI,
+			SSB_SPROM8_2G_MAXP, 0);
+
+		SPEX(core_pwr_info[i].pa_2g[0], o + SSB_SROM8_2G_PA_0, ~0, 0);
+		SPEX(core_pwr_info[i].pa_2g[1], o + SSB_SROM8_2G_PA_1, ~0, 0);
+		SPEX(core_pwr_info[i].pa_2g[2], o + SSB_SROM8_2G_PA_2, ~0, 0);
+
+		SPEX(core_pwr_info[i].itssi_5g, o + SSB_SROM8_5G_MAXP_ITSSI,
+			SSB_SPROM8_5G_ITSSI, SSB_SPROM8_5G_ITSSI_SHIFT);
+		SPEX(core_pwr_info[i].maxpwr_5g, o + SSB_SROM8_5G_MAXP_ITSSI,
+			SSB_SPROM8_5G_MAXP, 0);
+		SPEX(core_pwr_info[i].maxpwr_5gh, o + SSB_SPROM8_5GHL_MAXP,
+			SSB_SPROM8_5GH_MAXP, 0);
+		SPEX(core_pwr_info[i].maxpwr_5gl, o + SSB_SPROM8_5GHL_MAXP,
+			SSB_SPROM8_5GL_MAXP, SSB_SPROM8_5GL_MAXP_SHIFT);
+
+		SPEX(core_pwr_info[i].pa_5gl[0], o + SSB_SROM8_5GL_PA_0, ~0, 0);
+		SPEX(core_pwr_info[i].pa_5gl[1], o + SSB_SROM8_5GL_PA_1, ~0, 0);
+		SPEX(core_pwr_info[i].pa_5gl[2], o + SSB_SROM8_5GL_PA_2, ~0, 0);
+		SPEX(core_pwr_info[i].pa_5g[0], o + SSB_SROM8_5G_PA_0, ~0, 0);
+		SPEX(core_pwr_info[i].pa_5g[1], o + SSB_SROM8_5G_PA_1, ~0, 0);
+		SPEX(core_pwr_info[i].pa_5g[2], o + SSB_SROM8_5G_PA_2, ~0, 0);
+		SPEX(core_pwr_info[i].pa_5gh[0], o + SSB_SROM8_5GH_PA_0, ~0, 0);
+		SPEX(core_pwr_info[i].pa_5gh[1], o + SSB_SROM8_5GH_PA_1, ~0, 0);
+		SPEX(core_pwr_info[i].pa_5gh[2], o + SSB_SROM8_5GH_PA_2, ~0, 0);
+	}
+
+	/* Extract FEM info */
+	SPEX(fem.ghz2.tssipos, SSB_SPROM8_FEM2G,
+		SSB_SROM8_FEM_TSSIPOS, SSB_SROM8_FEM_TSSIPOS_SHIFT);
+	SPEX(fem.ghz2.extpa_gain, SSB_SPROM8_FEM2G,
+		SSB_SROM8_FEM_EXTPA_GAIN, SSB_SROM8_FEM_EXTPA_GAIN_SHIFT);
+	SPEX(fem.ghz2.pdet_range, SSB_SPROM8_FEM2G,
+		SSB_SROM8_FEM_PDET_RANGE, SSB_SROM8_FEM_PDET_RANGE_SHIFT);
+	SPEX(fem.ghz2.tr_iso, SSB_SPROM8_FEM2G,
+		SSB_SROM8_FEM_TR_ISO, SSB_SROM8_FEM_TR_ISO_SHIFT);
+	SPEX(fem.ghz2.antswlut, SSB_SPROM8_FEM2G,
+		SSB_SROM8_FEM_ANTSWLUT, SSB_SROM8_FEM_ANTSWLUT_SHIFT);
+
+	SPEX(fem.ghz5.tssipos, SSB_SPROM8_FEM5G,
+		SSB_SROM8_FEM_TSSIPOS, SSB_SROM8_FEM_TSSIPOS_SHIFT);
+	SPEX(fem.ghz5.extpa_gain, SSB_SPROM8_FEM5G,
+		SSB_SROM8_FEM_EXTPA_GAIN, SSB_SROM8_FEM_EXTPA_GAIN_SHIFT);
+	SPEX(fem.ghz5.pdet_range, SSB_SPROM8_FEM5G,
+		SSB_SROM8_FEM_PDET_RANGE, SSB_SROM8_FEM_PDET_RANGE_SHIFT);
+	SPEX(fem.ghz5.tr_iso, SSB_SPROM8_FEM5G,
+		SSB_SROM8_FEM_TR_ISO, SSB_SROM8_FEM_TR_ISO_SHIFT);
+	SPEX(fem.ghz5.antswlut, SSB_SPROM8_FEM5G,
+		SSB_SROM8_FEM_ANTSWLUT, SSB_SROM8_FEM_ANTSWLUT_SHIFT);
+
+	sprom_extract_r458(out, in);
 
 	/* TODO - get remaining rev 8 stuff needed */
 }
@@ -573,37 +669,34 @@ static int sprom_extract(struct ssb_bus *bus, struct ssb_sprom *out,
 	ssb_dprintk(KERN_DEBUG PFX "SPROM revision %d detected.\n", out->revision);
 	memset(out->et0mac, 0xFF, 6);		/* preset et0 and et1 mac */
 	memset(out->et1mac, 0xFF, 6);
+
 	if ((bus->chip_id & 0xFF00) == 0x4400) {
 		/* Workaround: The BCM44XX chip has a stupid revision
 		 * number stored in the SPROM.
 		 * Always extract r1. */
 		out->revision = 1;
+		ssb_dprintk(KERN_DEBUG PFX "SPROM treated as revision %d\n", out->revision);
+	}
+
+	switch (out->revision) {
+	case 1:
+	case 2:
+	case 3:
 		sprom_extract_r123(out, in);
-	} else if (bus->chip_id == 0x4321) {
-		/* the BCM4328 has a chipid == 0x4321 and a rev 4 SPROM */
-		out->revision = 4;
+		break;
+	case 4:
+	case 5:
 		sprom_extract_r45(out, in);
-	} else {
-		switch (out->revision) {
-		case 1:
-		case 2:
-		case 3:
-			sprom_extract_r123(out, in);
-			break;
-		case 4:
-		case 5:
-			sprom_extract_r45(out, in);
-			break;
-		case 8:
-			sprom_extract_r8(out, in);
-			break;
-		default:
-			ssb_printk(KERN_WARNING PFX "Unsupported SPROM"
-				   "  revision %d detected. Will extract"
-				   " v1\n", out->revision);
-			out->revision = 1;
-			sprom_extract_r123(out, in);
-		}
+		break;
+	case 8:
+		sprom_extract_r8(out, in);
+		break;
+	default:
+		ssb_printk(KERN_WARNING PFX "Unsupported SPROM"
+			   " revision %d detected. Will extract"
+			   " v1\n", out->revision);
+		out->revision = 1;
+		sprom_extract_r123(out, in);
 	}
 
 	if (out->boardflags_lo == 0xFFFF)
@@ -617,15 +710,14 @@ static int sprom_extract(struct ssb_bus *bus, struct ssb_sprom *out,
 static int ssb_pci_sprom_get(struct ssb_bus *bus,
 			     struct ssb_sprom *sprom)
 {
-	const struct ssb_sprom *fallback;
-	int err = -ENOMEM;
+	int err;
 	u16 *buf;
 
 	if (!ssb_is_sprom_available(bus)) {
 		ssb_printk(KERN_ERR PFX "No SPROM available!\n");
 		return -ENODEV;
 	}
-	if (bus->chipco.dev) {	/* can be unavailible! */
+	if (bus->chipco.dev) {	/* can be unavailable! */
 		/*
 		 * get SPROM offset: SSB_SPROM_BASE1 except for
 		 * chipcommon rev >= 31 or chip ID is 0x4312 and
@@ -645,7 +737,7 @@ static int ssb_pci_sprom_get(struct ssb_bus *bus,
 
 	buf = kcalloc(SSB_SPROMSIZE_WORDS_R123, sizeof(u16), GFP_KERNEL);
 	if (!buf)
-		goto out;
+		return -ENOMEM;
 	bus->sprom_size = SSB_SPROMSIZE_WORDS_R123;
 	sprom_do_read(bus, buf);
 	err = sprom_check_crc(buf, bus->sprom_size);
@@ -655,17 +747,24 @@ static int ssb_pci_sprom_get(struct ssb_bus *bus,
 		buf = kcalloc(SSB_SPROMSIZE_WORDS_R4, sizeof(u16),
 			      GFP_KERNEL);
 		if (!buf)
-			goto out;
+			return -ENOMEM;
 		bus->sprom_size = SSB_SPROMSIZE_WORDS_R4;
 		sprom_do_read(bus, buf);
 		err = sprom_check_crc(buf, bus->sprom_size);
 		if (err) {
 			/* All CRC attempts failed.
 			 * Maybe there is no SPROM on the device?
-			 * If we have a fallback, use that. */
-			fallback = ssb_get_fallback_sprom();
-			if (fallback) {
-				memcpy(sprom, fallback, sizeof(*sprom));
+			 * Now we ask the arch code if there is some sprom
+			 * available for this device in some other storage */
+			err = ssb_fill_sprom_with_fallback(bus, sprom);
+			if (err) {
+				ssb_printk(KERN_WARNING PFX "WARNING: Using"
+					   " fallback SPROM failed (err %d)\n",
+					   err);
+			} else {
+				ssb_dprintk(KERN_DEBUG PFX "Using SPROM"
+					    " revision %d provided by"
+					    " platform.\n", sprom->revision);
 				err = 0;
 				goto out_free;
 			}
@@ -677,19 +776,15 @@ static int ssb_pci_sprom_get(struct ssb_bus *bus,
 
 out_free:
 	kfree(buf);
-out:
 	return err;
 }
 
 static void ssb_pci_get_boardinfo(struct ssb_bus *bus,
 				  struct ssb_boardinfo *bi)
 {
-	pci_read_config_word(bus->host_pci, PCI_SUBSYSTEM_VENDOR_ID,
-			     &bi->vendor);
-	pci_read_config_word(bus->host_pci, PCI_SUBSYSTEM_ID,
-			     &bi->type);
-	pci_read_config_word(bus->host_pci, PCI_REVISION_ID,
-			     &bi->rev);
+	bi->vendor = bus->host_pci->subsystem_vendor;
+	bi->type = bus->host_pci->subsystem_device;
+	bi->rev = bus->host_pci->revision;
 }
 
 int ssb_pci_get_invariants(struct ssb_bus *bus,

@@ -409,7 +409,7 @@ iop3xx_i2c_remove(struct platform_device *pdev)
 		IOP3XX_ICR_RXFULL_IE | IOP3XX_ICR_TXEMPTY_IE);
 	__raw_writel(cr, adapter_data->ioaddr + CR_OFFSET);
 
-	iounmap((void __iomem*)adapter_data->ioaddr);
+	iounmap(adapter_data->ioaddr);
 	release_mem_region(res->start, IOP3XX_I2C_IO_SIZE);
 	kfree(adapter_data);
 	kfree(padapter);
@@ -453,7 +453,7 @@ iop3xx_i2c_probe(struct platform_device *pdev)
 	/* set the adapter enumeration # */
 	adapter_data->id = i2c_id++;
 
-	adapter_data->ioaddr = (u32)ioremap(res->start, IOP3XX_I2C_IO_SIZE);
+	adapter_data->ioaddr = ioremap(res->start, IOP3XX_I2C_IO_SIZE);
 	if (!adapter_data->ioaddr) {
 		ret = -ENOMEM;
 		goto release_region;
@@ -498,7 +498,7 @@ iop3xx_i2c_probe(struct platform_device *pdev)
 	return 0;
 
 unmap:
-	iounmap((void __iomem*)adapter_data->ioaddr);
+	iounmap(adapter_data->ioaddr);
 
 release_region:
 	release_mem_region(res->start, IOP3XX_I2C_IO_SIZE);
@@ -523,21 +523,7 @@ static struct platform_driver iop3xx_i2c_driver = {
 	},
 };
 
-static int __init 
-i2c_iop3xx_init (void)
-{
-	return platform_driver_register(&iop3xx_i2c_driver);
-}
-
-static void __exit 
-i2c_iop3xx_exit (void)
-{
-	platform_driver_unregister(&iop3xx_i2c_driver);
-	return;
-}
-
-module_init (i2c_iop3xx_init);
-module_exit (i2c_iop3xx_exit);
+module_platform_driver(iop3xx_i2c_driver);
 
 MODULE_AUTHOR("D-TACQ Solutions Ltd <www.d-tacq.com>");
 MODULE_DESCRIPTION("IOP3xx iic algorithm and driver");

@@ -2,6 +2,7 @@
 #define __WL12XX_80211_H__
 
 #include <linux/if_ether.h>	/* ETH_ALEN */
+#include <linux/if_arp.h>
 
 /* RATES */
 #define IEEE80211_CCK_RATE_1MB		        0x02
@@ -54,7 +55,6 @@
 
 /* This really should be 8, but not for our firmware */
 #define MAX_SUPPORTED_RATES 32
-#define COUNTRY_STRING_LEN 3
 #define MAX_COUNTRY_TRIPLETS 32
 
 /* Headers */
@@ -77,7 +77,7 @@ struct wl12xx_ie_header {
 
 struct wl12xx_ie_ssid {
 	struct wl12xx_ie_header header;
-	char ssid[IW_ESSID_MAX_SIZE];
+	char ssid[IEEE80211_MAX_SSID_LEN];
 } __packed;
 
 struct wl12xx_ie_rates {
@@ -98,24 +98,12 @@ struct country_triplet {
 
 struct wl12xx_ie_country {
 	struct wl12xx_ie_header header;
-	u8 country_string[COUNTRY_STRING_LEN];
+	u8 country_string[IEEE80211_COUNTRY_STRING_LEN];
 	struct country_triplet triplets[MAX_COUNTRY_TRIPLETS];
 } __packed;
 
 
 /* Templates */
-
-struct wl12xx_beacon_template {
-	struct ieee80211_header header;
-	__le32 time_stamp[2];
-	__le16 beacon_interval;
-	__le16 capability;
-	struct wl12xx_ie_ssid ssid;
-	struct wl12xx_ie_rates rates;
-	struct wl12xx_ie_rates ext_rates;
-	struct wl12xx_ie_ds_params ds_params;
-	struct wl12xx_ie_country country;
-} __packed;
 
 struct wl12xx_null_data_template {
 	struct ieee80211_header header;
@@ -128,29 +116,22 @@ struct wl12xx_ps_poll_template {
 	u8 ta[ETH_ALEN];
 } __packed;
 
-struct wl12xx_qos_null_data_template {
-	struct ieee80211_header header;
-	__le16 qos_ctl;
+struct wl12xx_arp_rsp_template {
+	/* not including ieee80211 header */
+
+	u8 llc_hdr[sizeof(rfc1042_header)];
+	__be16 llc_type;
+
+	struct arphdr arp_hdr;
+	u8 sender_hw[ETH_ALEN];
+	__be32 sender_ip;
+	u8 target_hw[ETH_ALEN];
+	__be32 target_ip;
 } __packed;
 
-struct wl12xx_probe_req_template {
+struct wl12xx_disconn_template {
 	struct ieee80211_header header;
-	struct wl12xx_ie_ssid ssid;
-	struct wl12xx_ie_rates rates;
-	struct wl12xx_ie_rates ext_rates;
-} __packed;
-
-
-struct wl12xx_probe_resp_template {
-	struct ieee80211_header header;
-	__le32 time_stamp[2];
-	__le16 beacon_interval;
-	__le16 capability;
-	struct wl12xx_ie_ssid ssid;
-	struct wl12xx_ie_rates rates;
-	struct wl12xx_ie_rates ext_rates;
-	struct wl12xx_ie_ds_params ds_params;
-	struct wl12xx_ie_country country;
+	__le16 disconn_reason;
 } __packed;
 
 #endif

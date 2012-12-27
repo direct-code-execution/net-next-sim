@@ -69,7 +69,8 @@ typedef enum {
 	F_BACK = 5,
 	F_SAVE = 6,
 	F_LOAD = 7,
-	F_EXIT = 8
+	F_SEARCH = 8,
+	F_EXIT = 9,
 } function_key;
 
 void set_colors(void);
@@ -88,7 +89,7 @@ void fill_window(WINDOW *win, const char *text);
 int btn_dialog(WINDOW *main_window, const char *msg, int btn_num, ...);
 int dialog_inputbox(WINDOW *main_window,
 		const char *title, const char *prompt,
-		const char *init, char *result, int result_len);
+		const char *init, char **resultp, int *result_len);
 void refresh_all_windows(WINDOW *main_window);
 void show_scroll_win(WINDOW *main_window,
 		const char *title,

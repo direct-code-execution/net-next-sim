@@ -2,7 +2,7 @@
  * Squashfs - a compressed read only filesystem for Linux
  *
  * Copyright (c) 2002, 2003, 2004, 2005, 2006, 2007, 2008
- * Phillip Lougher <phillip@lougher.demon.co.uk>
+ * Phillip Lougher <phillip@squashfs.org.uk>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -144,7 +144,7 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 	struct squashfs_dir_entry *dire;
 	u64 block = squashfs_i(dir)->start + msblk->directory_table;
 	int offset = squashfs_i(dir)->offset;
-	int err, length = 0, dir_count, size;
+	int err, length, dir_count, size;
 
 	TRACE("Entered squashfs_lookup [%llx:%x]\n", block, offset);
 
@@ -176,6 +176,10 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 		length += sizeof(dirh);
 
 		dir_count = le32_to_cpu(dirh.count) + 1;
+
+		if (dir_count > SQUASHFS_DIR_COUNT)
+			goto data_error;
+
 		while (dir_count--) {
 			/*
 			 * Read directory entry.
@@ -186,6 +190,10 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 				goto read_failure;
 
 			size = le16_to_cpu(dire->size) + 1;
+
+			/* size should never be larger than SQUASHFS_NAME_LEN */
+			if (size > SQUASHFS_NAME_LEN)
+				goto data_error;
 
 			err = squashfs_read_metadata(dir->i_sb, dire->name,
 					&block, &offset, size);
@@ -211,11 +219,6 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 					blk, off, ino_num);
 
 				inode = squashfs_iget(dir->i_sb, ino, ino_num);
-				if (IS_ERR(inode)) {
-					err = PTR_ERR(inode);
-					goto failed;
-				}
-
 				goto exit_lookup;
 			}
 		}
@@ -223,10 +226,10 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 
 exit_lookup:
 	kfree(dire);
-	if (inode)
-		return d_splice_alias(inode, dentry);
-	d_add(dentry, inode);
-	return ERR_PTR(0);
+	return d_splice_alias(inode, dentry);
+
+data_error:
+	err = -EIO;
 
 read_failure:
 	ERROR("Unable to read directory block [%llx:%x]\n",

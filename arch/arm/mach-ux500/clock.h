@@ -21,6 +21,7 @@ struct clkops {
 	void (*enable) (struct clk *);
 	void (*disable) (struct clk *);
 	unsigned long (*get_rate) (struct clk *);
+	int (*set_parent)(struct clk *, struct clk *);
 };
 
 /**
@@ -90,6 +91,10 @@ struct clk {
 
 	struct clk		*parent_cluster;
 	struct clk		*parent_periph;
+#if defined(CONFIG_DEBUG_FS)
+	struct dentry		*dent;		/* For visible tree hierarchy */
+	struct dentry		*dent_bus;	/* For visible tree hierarchy */
+#endif
 };
 
 #define DEFINE_PRCMU_CLK(_name, _cg_off, _cg_bit, _reg)		\

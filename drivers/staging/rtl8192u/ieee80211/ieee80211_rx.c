@@ -37,16 +37,13 @@
 #include <linux/slab.h>
 #include <linux/tcp.h>
 #include <linux/types.h>
-#include <linux/version.h>
 #include <linux/wireless.h>
 #include <linux/etherdevice.h>
 #include <asm/uaccess.h>
 #include <linux/ctype.h>
 
 #include "ieee80211.h"
-#ifdef ENABLE_DOT11D
 #include "dot11d.h"
-#endif
 static inline void ieee80211_monitor_rx(struct ieee80211_device *ieee,
 					struct sk_buff *skb,
 					struct ieee80211_rx_stats *rx_stats)
@@ -240,7 +237,7 @@ ieee80211_rx_frame_mgmt(struct ieee80211_device *ieee, struct sk_buff *skb,
 
 	#ifdef NOT_YET
 	if (ieee->iw_mode == IW_MODE_MASTER) {
-		printk(KERN_DEBUG "%s: Master mode not yet suppported.\n",
+		printk(KERN_DEBUG "%s: Master mode not yet supported.\n",
 		       ieee->dev->name);
 		return 0;
 /*
@@ -1386,11 +1383,8 @@ int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 	return 1;
 
  rx_dropped:
-	if (rxb != NULL)
-	{
-		kfree(rxb);
-		rxb = NULL;
-	}
+	kfree(rxb);
+	rxb = NULL;
 	stats->rx_dropped++;
 
 	/* Returning 0 indicates to caller that we have not handled the SKB--
@@ -1404,7 +1398,7 @@ int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 static u8 qos_oui[QOS_OUI_LEN] = { 0x00, 0x50, 0xF2 };
 
 /*
-* Make ther structure we read from the beacon packet has
+* Make the structure we read from the beacon packet to have
 * the right values
 */
 static int ieee80211_verify_qos_info(struct ieee80211_qos_information_element
@@ -1599,7 +1593,6 @@ static const char *get_info_element_string(u16 id)
 }
 #endif
 
-#ifdef ENABLE_DOT11D
 static inline void ieee80211_extract_country_ie(
 	struct ieee80211_device *ieee,
 	struct ieee80211_info_element *info_element,
@@ -1632,7 +1625,6 @@ static inline void ieee80211_extract_country_ie(
 	}
 
 }
-#endif
 
 int ieee80211_parse_info_param(struct ieee80211_device *ieee,
 		struct ieee80211_info_element *info_element,
@@ -2086,14 +2078,12 @@ int ieee80211_parse_info_param(struct ieee80211_device *ieee,
 			       "QoS Error need to parse QOS_PARAMETER IE\n");
 			break;
 
-#ifdef ENABLE_DOT11D
 		case MFIE_TYPE_COUNTRY:
 			IEEE80211_DEBUG_SCAN("MFIE_TYPE_COUNTRY: %d bytes\n",
 					     info_element->len);
 			//printk("=====>Receive <%s> Country IE\n",network->ssid);
 			ieee80211_extract_country_ie(ieee, info_element, network, network->bssid);//addr2 is same as addr3 when from an AP
 			break;
-#endif
 /* TODO */
 		default:
 			IEEE80211_DEBUG_MGMT
@@ -2229,10 +2219,8 @@ static inline int ieee80211_network_init(
 #ifdef THOMAS_TURBO
 	network->Turbo_Enable = 0;
 #endif
-#ifdef ENABLE_DOT11D
 	network->CountryIeLen = 0;
 	memset(network->CountryIeBuf, 0, MAX_IE_LEN);
-#endif
 //Initialize HT parameters
 	//ieee80211_ht_initialize(&network->bssht);
 	HTInitializeBssDesc(&network->bssht);
@@ -2391,7 +2379,7 @@ static inline void update_network(struct ieee80211_network *dst,
 	if(src->wmm_param[0].ac_aci_acm_aifsn|| \
 	   src->wmm_param[1].ac_aci_acm_aifsn|| \
 	   src->wmm_param[2].ac_aci_acm_aifsn|| \
-	   src->wmm_param[1].ac_aci_acm_aifsn) {
+	   src->wmm_param[3].ac_aci_acm_aifsn) {
 	  memcpy(dst->wmm_param, src->wmm_param, WME_AC_PRAM_LEN);
 	}
 	//dst->QoS_Enable = src->QoS_Enable;
@@ -2399,10 +2387,8 @@ static inline void update_network(struct ieee80211_network *dst,
 	dst->Turbo_Enable = src->Turbo_Enable;
 #endif
 
-#ifdef ENABLE_DOT11D
 	dst->CountryIeLen = src->CountryIeLen;
 	memcpy(dst->CountryIeBuf, src->CountryIeBuf, src->CountryIeLen);
-#endif
 
 	//added by amy for LEAP
 	dst->bWithAironetIE = src->bWithAironetIE;
@@ -2470,7 +2456,6 @@ static inline void ieee80211_process_probe_response(
 		return;
 	}
 
-#ifdef ENABLE_DOT11D
 	// For Asus EeePc request,
 	// (1) if wireless adapter receive get any 802.11d country code in AP beacon,
 	//	   wireless adapter should follow the country code.
@@ -2527,7 +2512,6 @@ static inline void ieee80211_process_probe_response(
 			}
 		}
 	}
-#endif
 
 	/* The network parsed correctly -- so now we scan our known networks
 	 * to see if we can find it in our list.

@@ -24,6 +24,7 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/ioport.h>
+#include <linux/export.h>
 #include <linux/delay.h>
 #include <sound/core.h>
 #include <sound/emu8000.h>
@@ -370,7 +371,7 @@ init_arrays(struct snd_emu8000 *emu)
 
 /*
  * Size the onboard memory.
- * This is written so as not to need arbitary delays after the write. It
+ * This is written so as not to need arbitrary delays after the write. It
  * seems that the only way to do this is to use the one channel and keep
  * reallocating between read and write.
  */

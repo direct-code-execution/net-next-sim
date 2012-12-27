@@ -14,11 +14,14 @@
 #ifndef _LINUX_NFSD_FH_H
 #define _LINUX_NFSD_FH_H
 
-# include <linux/types.h>
+#include <linux/types.h>
+#include <linux/nfs.h>
+#include <linux/nfs2.h>
+#include <linux/nfs3.h>
+#include <linux/nfs4.h>
 #ifdef __KERNEL__
 # include <linux/sunrpc/svc.h>
 #endif
-#include <linux/nfsd/const.h>
 
 /*
  * This is the old "dentry style" Linux NFSv2 file handle.
@@ -49,7 +52,7 @@ struct nfs_fhbase_old {
  *
  * The auth_type field specifies how the filehandle can be authenticated
  * This might allow a file to be confirmed to be in a writable part of a
- * filetree without checking the path from it upto the root.
+ * filetree without checking the path from it up to the root.
  * Current values:
  *     0  - No authentication.  fb_auth is 0 bytes long
  * Possible future values:

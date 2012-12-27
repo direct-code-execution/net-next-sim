@@ -7,7 +7,7 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-
+#include <linux/gpio.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -24,8 +24,9 @@
 
 #include <plat/board.h>
 #include <plat/mux.h>
-#include <mach/gpio.h>
 #include <plat/fpga.h>
+
+#include "pm.h"
 
 static struct clk * uart1_ck;
 static struct clk * uart2_ck;
@@ -52,9 +53,11 @@ static inline void omap_serial_outp(struct plat_serial8250_port *p, int offset,
  */
 static void __init omap_serial_reset(struct plat_serial8250_port *p)
 {
-	omap_serial_outp(p, UART_OMAP_MDR1, 0x07);	/* disable UART */
+	omap_serial_outp(p, UART_OMAP_MDR1,
+			UART_OMAP_MDR1_DISABLE);	/* disable UART */
 	omap_serial_outp(p, UART_OMAP_SCR, 0x08);	/* TX watermark */
-	omap_serial_outp(p, UART_OMAP_MDR1, 0x00);	/* enable UART */
+	omap_serial_outp(p, UART_OMAP_MDR1,
+			UART_OMAP_MDR1_16X_MODE);	/* enable UART */
 
 	if (!cpu_is_omap15xx()) {
 		omap_serial_outp(p, UART_OMAP_SYSC, 0x01);
@@ -254,6 +257,9 @@ late_initcall(omap_serial_wakeup_init);
 
 static int __init omap_init(void)
 {
+	if (!cpu_class_is_omap1())
+		return -ENODEV;
+
 	return platform_device_register(&serial_device);
 }
 arch_initcall(omap_init);

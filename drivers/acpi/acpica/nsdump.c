@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2010, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -242,7 +242,20 @@ acpi_ns_dump_one_object(acpi_handle obj_handle,
 
 		if (!obj_desc) {
 
-			/* No attached object, we are done */
+			/* No attached object. Some types should always have an object */
+
+			switch (type) {
+			case ACPI_TYPE_INTEGER:
+			case ACPI_TYPE_PACKAGE:
+			case ACPI_TYPE_BUFFER:
+			case ACPI_TYPE_STRING:
+			case ACPI_TYPE_METHOD:
+				acpi_os_printf("<No attached object>");
+				break;
+
+			default:
+				break;
+			}
 
 			acpi_os_printf("\n");
 			return (AE_OK);
@@ -624,8 +637,21 @@ acpi_ns_dump_objects(acpi_object_type type,
 		     acpi_owner_id owner_id, acpi_handle start_handle)
 {
 	struct acpi_walk_info info;
+	acpi_status status;
 
 	ACPI_FUNCTION_ENTRY();
+
+	/*
+	 * Just lock the entire namespace for the duration of the dump.
+	 * We don't want any changes to the namespace during this time,
+	 * especially the temporary nodes since we are going to display
+	 * them also.
+	 */
+	status = acpi_ut_acquire_mutex(ACPI_MTX_NAMESPACE);
+	if (ACPI_FAILURE(status)) {
+		acpi_os_printf("Could not acquire namespace mutex\n");
+		return;
+	}
 
 	info.debug_level = ACPI_LV_TABLES;
 	info.owner_id = owner_id;
@@ -636,6 +662,8 @@ acpi_ns_dump_objects(acpi_object_type type,
 				     ACPI_NS_WALK_TEMP_NODES,
 				     acpi_ns_dump_one_object, NULL,
 				     (void *)&info, NULL);
+
+	(void)acpi_ut_release_mutex(ACPI_MTX_NAMESPACE);
 }
 #endif				/* ACPI_FUTURE_USAGE */
 

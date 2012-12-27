@@ -18,7 +18,7 @@
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/errno.h>
-#include <linux/tracehook.h>
+#include <linux/ptrace.h>
 #include <linux/timer.h>
 #include <linux/mm.h>
 #include <linux/smp.h>
@@ -33,24 +33,19 @@
 #include <linux/kprobes.h>
 #include <linux/bug.h>
 #include <linux/utsname.h>
-#include <asm/system.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/mathemu.h>
 #include <asm/cpcmd.h>
-#include <asm/s390_ext.h>
 #include <asm/lowcore.h>
 #include <asm/debug.h>
+#include <asm/ipl.h>
 #include "entry.h"
 
-pgm_check_handler_t *pgm_check_table[128];
+void (*pgm_check_table[128])(struct pt_regs *regs);
 
-int show_unhandled_signals;
-
-extern pgm_check_handler_t do_protection_exception;
-extern pgm_check_handler_t do_dat_exception;
-extern pgm_check_handler_t do_asce_exception;
+int show_unhandled_signals = 1;
 
 #define stack_pointer ({ void **sp; asm("la %0,0(15)" : "=&d" (sp)); sp; })
 
@@ -149,8 +144,8 @@ void show_stack(struct task_struct *task, unsigned long *sp)
 	for (i = 0; i < kstack_depth_to_print; i++) {
 		if (((addr_t) stack & (THREAD_SIZE-1)) == 0)
 			break;
-		if (i && ((i * sizeof (long) % 32) == 0))
-			printk("\n       ");
+		if ((i * sizeof(long) % 32) == 0)
+			printk("%s       ", i == 0 ? "" : "\n");
 		printk(LONG, *stack++);
 	}
 	printk("\n");
@@ -205,7 +200,7 @@ void show_registers(struct pt_regs *regs)
 	       mask_bits(regs, PSW_MASK_PSTATE), mask_bits(regs, PSW_MASK_ASC),
 	       mask_bits(regs, PSW_MASK_CC), mask_bits(regs, PSW_MASK_PM));
 #ifdef CONFIG_64BIT
-	printk(" EA:%x", mask_bits(regs, PSW_BASE_BITS));
+	printk(" EA:%x", mask_bits(regs, PSW_MASK_EA | PSW_MASK_BA));
 #endif
 	printk("\n%s GPRS: " FOURLONG, mode,
 	       regs->gprs[0], regs->gprs[1], regs->gprs[2], regs->gprs[3]);
@@ -237,55 +232,19 @@ void show_regs(struct pt_regs *regs)
 	show_last_breaking_event(regs);
 }
 
-/* This is called from fs/proc/array.c */
-void task_show_regs(struct seq_file *m, struct task_struct *task)
-{
-	struct pt_regs *regs;
-
-	regs = task_pt_regs(task);
-	seq_printf(m, "task: %p, ksp: %p\n",
-		       task, (void *)task->thread.ksp);
-	seq_printf(m, "User PSW : %p %p\n",
-		       (void *) regs->psw.mask, (void *)regs->psw.addr);
-
-	seq_printf(m, "User GPRS: " FOURLONG,
-			  regs->gprs[0], regs->gprs[1],
-			  regs->gprs[2], regs->gprs[3]);
-	seq_printf(m, "           " FOURLONG,
-			  regs->gprs[4], regs->gprs[5],
-			  regs->gprs[6], regs->gprs[7]);
-	seq_printf(m, "           " FOURLONG,
-			  regs->gprs[8], regs->gprs[9],
-			  regs->gprs[10], regs->gprs[11]);
-	seq_printf(m, "           " FOURLONG,
-			  regs->gprs[12], regs->gprs[13],
-			  regs->gprs[14], regs->gprs[15]);
-	seq_printf(m, "User ACRS: %08x %08x %08x %08x\n",
-			  task->thread.acrs[0], task->thread.acrs[1],
-			  task->thread.acrs[2], task->thread.acrs[3]);
-	seq_printf(m, "           %08x %08x %08x %08x\n",
-			  task->thread.acrs[4], task->thread.acrs[5],
-			  task->thread.acrs[6], task->thread.acrs[7]);
-	seq_printf(m, "           %08x %08x %08x %08x\n",
-			  task->thread.acrs[8], task->thread.acrs[9],
-			  task->thread.acrs[10], task->thread.acrs[11]);
-	seq_printf(m, "           %08x %08x %08x %08x\n",
-			  task->thread.acrs[12], task->thread.acrs[13],
-			  task->thread.acrs[14], task->thread.acrs[15]);
-}
-
 static DEFINE_SPINLOCK(die_lock);
 
-void die(const char * str, struct pt_regs * regs, long err)
+void die(struct pt_regs *regs, const char *str)
 {
 	static int die_counter;
 
 	oops_enter();
+	lgr_info_log();
 	debug_stop_all();
 	console_verbose();
 	spin_lock_irq(&die_lock);
 	bust_spinlocks(1);
-	printk("%s: %04lx [#%d] ", str, err & 0xffff, ++die_counter);
+	printk("%s: %04x [#%d] ", str, regs->int_code & 0xffff, ++die_counter);
 #ifdef CONFIG_PREEMPT
 	printk("PREEMPT ");
 #endif
@@ -296,7 +255,7 @@ void die(const char * str, struct pt_regs * regs, long err)
 	printk("DEBUG_PAGEALLOC");
 #endif
 	printk("\n");
-	notify_die(DIE_OOPS, str, regs, err, current->thread.trap_no, SIGSEGV);
+	notify_die(DIE_OOPS, str, regs, 0, regs->int_code & 0xffff, SIGSEGV);
 	show_regs(regs);
 	bust_spinlocks(0);
 	add_taint(TAINT_DIE);
@@ -309,8 +268,7 @@ void die(const char * str, struct pt_regs * regs, long err)
 	do_exit(SIGSEGV);
 }
 
-static void inline report_user_fault(struct pt_regs *regs, long int_code,
-				     int signr)
+static inline void report_user_fault(struct pt_regs *regs, int signr)
 {
 	if ((task_pid_nr(current) > 1) && !show_unhandled_signals)
 		return;
@@ -318,7 +276,7 @@ static void inline report_user_fault(struct pt_regs *regs, long int_code,
 		return;
 	if (!printk_ratelimit())
 		return;
-	printk("User process fault: interruption code 0x%lX ", int_code);
+	printk("User process fault: interruption code 0x%X ", regs->int_code);
 	print_vma_addr("in ", regs->psw.addr & PSW_ADDR_INSN);
 	printk("\n");
 	show_regs(regs);
@@ -329,27 +287,28 @@ int is_valid_bugaddr(unsigned long addr)
 	return 1;
 }
 
-static void __kprobes inline do_trap(long interruption_code, int signr,
-					char *str, struct pt_regs *regs,
-					siginfo_t *info)
+static inline void __user *get_psw_address(struct pt_regs *regs)
 {
-	/*
-	 * We got all needed information from the lowcore and can
-	 * now safely switch on interrupts.
-	 */
-        if (regs->psw.mask & PSW_MASK_PSTATE)
-		local_irq_enable();
+	return (void __user *)
+		((regs->psw.addr - (regs->int_code >> 16)) & PSW_ADDR_INSN);
+}
 
-	if (notify_die(DIE_TRAP, str, regs, interruption_code,
-				interruption_code, signr) == NOTIFY_STOP)
+static void __kprobes do_trap(struct pt_regs *regs,
+			      int si_signo, int si_code, char *str)
+{
+	siginfo_t info;
+
+	if (notify_die(DIE_TRAP, str, regs, 0,
+		       regs->int_code, si_signo) == NOTIFY_STOP)
 		return;
 
         if (regs->psw.mask & PSW_MASK_PSTATE) {
-                struct task_struct *tsk = current;
-
-                tsk->thread.trap_no = interruption_code & 0xffff;
-		force_sig_info(signr, info, tsk);
-		report_user_fault(regs, interruption_code, signr);
+		info.si_signo = si_signo;
+		info.si_errno = 0;
+		info.si_code = si_code;
+		info.si_addr = get_psw_address(regs);
+		force_sig_info(si_signo, &info, current);
+		report_user_fault(regs, si_signo);
         } else {
                 const struct exception_table_entry *fixup;
                 fixup = search_exception_tables(regs->psw.addr & PSW_ADDR_INSN);
@@ -361,126 +320,109 @@ static void __kprobes inline do_trap(long interruption_code, int signr,
 			btt = report_bug(regs->psw.addr & PSW_ADDR_INSN, regs);
 			if (btt == BUG_TRAP_TYPE_WARN)
 				return;
-			die(str, regs, interruption_code);
+			die(regs, str);
 		}
         }
 }
 
-static inline void __user *get_check_address(struct pt_regs *regs)
+void __kprobes do_per_trap(struct pt_regs *regs)
 {
-	return (void __user *)((regs->psw.addr-S390_lowcore.pgm_ilc) & PSW_ADDR_INSN);
-}
+	siginfo_t info;
 
-void __kprobes do_single_step(struct pt_regs *regs)
-{
-	if (notify_die(DIE_SSTEP, "sstep", regs, 0, 0,
-					SIGTRAP) == NOTIFY_STOP){
+	if (notify_die(DIE_SSTEP, "sstep", regs, 0, 0, SIGTRAP) == NOTIFY_STOP)
 		return;
-	}
-	if (tracehook_consider_fatal_signal(current, SIGTRAP))
-		force_sig(SIGTRAP, current);
+	if (!current->ptrace)
+		return;
+	info.si_signo = SIGTRAP;
+	info.si_errno = 0;
+	info.si_code = TRAP_HWBKPT;
+	info.si_addr =
+		(void __force __user *) current->thread.per_event.address;
+	force_sig_info(SIGTRAP, &info, current);
 }
 
-static void default_trap_handler(struct pt_regs * regs, long interruption_code)
+static void default_trap_handler(struct pt_regs *regs)
 {
         if (regs->psw.mask & PSW_MASK_PSTATE) {
-		local_irq_enable();
-		report_user_fault(regs, interruption_code, SIGSEGV);
+		report_user_fault(regs, SIGSEGV);
 		do_exit(SIGSEGV);
 	} else
-		die("Unknown program exception", regs, interruption_code);
+		die(regs, "Unknown program exception");
 }
 
-#define DO_ERROR_INFO(signr, str, name, sicode, siaddr) \
-static void name(struct pt_regs * regs, long interruption_code) \
+#define DO_ERROR_INFO(name, signr, sicode, str) \
+static void name(struct pt_regs *regs) \
 { \
-        siginfo_t info; \
-        info.si_signo = signr; \
-        info.si_errno = 0; \
-        info.si_code = sicode; \
-	info.si_addr = siaddr; \
-        do_trap(interruption_code, signr, str, regs, &info); \
+	do_trap(regs, signr, sicode, str); \
 }
 
-DO_ERROR_INFO(SIGILL, "addressing exception", addressing_exception,
-	      ILL_ILLADR, get_check_address(regs))
-DO_ERROR_INFO(SIGILL,  "execute exception", execute_exception,
-	      ILL_ILLOPN, get_check_address(regs))
-DO_ERROR_INFO(SIGFPE,  "fixpoint divide exception", divide_exception,
-	      FPE_INTDIV, get_check_address(regs))
-DO_ERROR_INFO(SIGFPE,  "fixpoint overflow exception", overflow_exception,
-	      FPE_INTOVF, get_check_address(regs))
-DO_ERROR_INFO(SIGFPE,  "HFP overflow exception", hfp_overflow_exception,
-	      FPE_FLTOVF, get_check_address(regs))
-DO_ERROR_INFO(SIGFPE,  "HFP underflow exception", hfp_underflow_exception,
-	      FPE_FLTUND, get_check_address(regs))
-DO_ERROR_INFO(SIGFPE,  "HFP significance exception", hfp_significance_exception,
-	      FPE_FLTRES, get_check_address(regs))
-DO_ERROR_INFO(SIGFPE,  "HFP divide exception", hfp_divide_exception,
-	      FPE_FLTDIV, get_check_address(regs))
-DO_ERROR_INFO(SIGFPE,  "HFP square root exception", hfp_sqrt_exception,
-	      FPE_FLTINV, get_check_address(regs))
-DO_ERROR_INFO(SIGILL,  "operand exception", operand_exception,
-	      ILL_ILLOPN, get_check_address(regs))
-DO_ERROR_INFO(SIGILL,  "privileged operation", privileged_op,
-	      ILL_PRVOPC, get_check_address(regs))
-DO_ERROR_INFO(SIGILL,  "special operation exception", special_op_exception,
-	      ILL_ILLOPN, get_check_address(regs))
-DO_ERROR_INFO(SIGILL,  "translation exception", translation_exception,
-	      ILL_ILLOPN, get_check_address(regs))
+DO_ERROR_INFO(addressing_exception, SIGILL, ILL_ILLADR,
+	      "addressing exception")
+DO_ERROR_INFO(execute_exception, SIGILL, ILL_ILLOPN,
+	      "execute exception")
+DO_ERROR_INFO(divide_exception, SIGFPE, FPE_INTDIV,
+	      "fixpoint divide exception")
+DO_ERROR_INFO(overflow_exception, SIGFPE, FPE_INTOVF,
+	      "fixpoint overflow exception")
+DO_ERROR_INFO(hfp_overflow_exception, SIGFPE, FPE_FLTOVF,
+	      "HFP overflow exception")
+DO_ERROR_INFO(hfp_underflow_exception, SIGFPE, FPE_FLTUND,
+	      "HFP underflow exception")
+DO_ERROR_INFO(hfp_significance_exception, SIGFPE, FPE_FLTRES,
+	      "HFP significance exception")
+DO_ERROR_INFO(hfp_divide_exception, SIGFPE, FPE_FLTDIV,
+	      "HFP divide exception")
+DO_ERROR_INFO(hfp_sqrt_exception, SIGFPE, FPE_FLTINV,
+	      "HFP square root exception")
+DO_ERROR_INFO(operand_exception, SIGILL, ILL_ILLOPN,
+	      "operand exception")
+DO_ERROR_INFO(privileged_op, SIGILL, ILL_PRVOPC,
+	      "privileged operation")
+DO_ERROR_INFO(special_op_exception, SIGILL, ILL_ILLOPN,
+	      "special operation exception")
+DO_ERROR_INFO(translation_exception, SIGILL, ILL_ILLOPN,
+	      "translation exception")
 
-static inline void
-do_fp_trap(struct pt_regs *regs, void __user *location,
-           int fpc, long interruption_code)
+static inline void do_fp_trap(struct pt_regs *regs, int fpc)
 {
-	siginfo_t si;
-
-	si.si_signo = SIGFPE;
-	si.si_errno = 0;
-	si.si_addr = location;
-	si.si_code = 0;
+	int si_code = 0;
 	/* FPC[2] is Data Exception Code */
 	if ((fpc & 0x00000300) == 0) {
 		/* bits 6 and 7 of DXC are 0 iff IEEE exception */
 		if (fpc & 0x8000) /* invalid fp operation */
-			si.si_code = FPE_FLTINV;
+			si_code = FPE_FLTINV;
 		else if (fpc & 0x4000) /* div by 0 */
-			si.si_code = FPE_FLTDIV;
+			si_code = FPE_FLTDIV;
 		else if (fpc & 0x2000) /* overflow */
-			si.si_code = FPE_FLTOVF;
+			si_code = FPE_FLTOVF;
 		else if (fpc & 0x1000) /* underflow */
-			si.si_code = FPE_FLTUND;
+			si_code = FPE_FLTUND;
 		else if (fpc & 0x0800) /* inexact */
-			si.si_code = FPE_FLTRES;
+			si_code = FPE_FLTRES;
 	}
-	current->thread.ieee_instruction_pointer = (addr_t) location;
-	do_trap(interruption_code, SIGFPE,
-		"floating point exception", regs, &si);
+	do_trap(regs, SIGFPE, si_code, "floating point exception");
 }
 
-static void illegal_op(struct pt_regs * regs, long interruption_code)
+static void __kprobes illegal_op(struct pt_regs *regs)
 {
 	siginfo_t info;
         __u8 opcode[6];
 	__u16 __user *location;
 	int signal = 0;
 
-	location = get_check_address(regs);
-
-	/*
-	 * We got all needed information from the lowcore and can
-	 * now safely switch on interrupts.
-	 */
-	if (regs->psw.mask & PSW_MASK_PSTATE)
-		local_irq_enable();
+	location = get_psw_address(regs);
 
 	if (regs->psw.mask & PSW_MASK_PSTATE) {
 		if (get_user(*((__u16 *) opcode), (__u16 __user *) location))
 			return;
 		if (*((__u16 *) opcode) == S390_BREAKPOINT_U16) {
-			if (tracehook_consider_fatal_signal(current, SIGTRAP))
-				force_sig(SIGTRAP, current);
-			else
+			if (current->ptrace) {
+				info.si_signo = SIGTRAP;
+				info.si_errno = 0;
+				info.si_code = TRAP_BRKPT;
+				info.si_addr = location;
+				force_sig_info(SIGTRAP, &info, current);
+			} else
 				signal = SIGILL;
 #ifdef CONFIG_MATHEMU
 		} else if (opcode[0] == 0xb3) {
@@ -512,51 +454,31 @@ static void illegal_op(struct pt_regs * regs, long interruption_code)
 		 * If we get an illegal op in kernel mode, send it through the
 		 * kprobes notifier. If kprobes doesn't pick it up, SIGILL
 		 */
-		if (notify_die(DIE_BPT, "bpt", regs, interruption_code,
+		if (notify_die(DIE_BPT, "bpt", regs, 0,
 			       3, SIGTRAP) != NOTIFY_STOP)
 			signal = SIGILL;
 	}
 
 #ifdef CONFIG_MATHEMU
         if (signal == SIGFPE)
-		do_fp_trap(regs, location,
-                           current->thread.fp_regs.fpc, interruption_code);
-        else if (signal == SIGSEGV) {
-		info.si_signo = signal;
-		info.si_errno = 0;
-		info.si_code = SEGV_MAPERR;
-		info.si_addr = (void __user *) location;
-		do_trap(interruption_code, signal,
-			"user address fault", regs, &info);
-	} else
+		do_fp_trap(regs, current->thread.fp_regs.fpc);
+	else if (signal == SIGSEGV)
+		do_trap(regs, signal, SEGV_MAPERR, "user address fault");
+	else
 #endif
-        if (signal) {
-		info.si_signo = signal;
-		info.si_errno = 0;
-		info.si_code = ILL_ILLOPC;
-		info.si_addr = (void __user *) location;
-		do_trap(interruption_code, signal,
-			"illegal operation", regs, &info);
-	}
+	if (signal)
+		do_trap(regs, signal, ILL_ILLOPC, "illegal operation");
 }
 
 
 #ifdef CONFIG_MATHEMU
-asmlinkage void 
-specification_exception(struct pt_regs * regs, long interruption_code)
+void specification_exception(struct pt_regs *regs)
 {
         __u8 opcode[6];
 	__u16 __user *location = NULL;
 	int signal = 0;
 
-	location = (__u16 __user *) get_check_address(regs);
-
-	/*
-	 * We got all needed information from the lowcore and can
-	 * now safely switch on interrupts.
-	 */
-        if (regs->psw.mask & PSW_MASK_PSTATE)
-		local_irq_enable();
+	location = (__u16 __user *) get_psw_address(regs);
 
         if (regs->psw.mask & PSW_MASK_PSTATE) {
 		get_user(*((__u16 *) opcode), location);
@@ -591,36 +513,21 @@ specification_exception(struct pt_regs * regs, long interruption_code)
 		signal = SIGILL;
 
         if (signal == SIGFPE)
-		do_fp_trap(regs, location,
-                           current->thread.fp_regs.fpc, interruption_code);
-        else if (signal) {
-		siginfo_t info;
-		info.si_signo = signal;
-		info.si_errno = 0;
-		info.si_code = ILL_ILLOPN;
-		info.si_addr = location;
-		do_trap(interruption_code, signal, 
-			"specification exception", regs, &info);
-	}
+		do_fp_trap(regs, current->thread.fp_regs.fpc);
+	else if (signal)
+		do_trap(regs, signal, ILL_ILLOPN, "specification exception");
 }
 #else
-DO_ERROR_INFO(SIGILL, "specification exception", specification_exception,
-	      ILL_ILLOPN, get_check_address(regs));
+DO_ERROR_INFO(specification_exception, SIGILL, ILL_ILLOPN,
+	      "specification exception");
 #endif
 
-static void data_exception(struct pt_regs * regs, long interruption_code)
+static void data_exception(struct pt_regs *regs)
 {
 	__u16 __user *location;
 	int signal = 0;
 
-	location = get_check_address(regs);
-
-	/*
-	 * We got all needed information from the lowcore and can
-	 * now safely switch on interrupts.
-	 */
-	if (regs->psw.mask & PSW_MASK_PSTATE)
-		local_irq_enable();
+	location = get_psw_address(regs);
 
 	if (MACHINE_HAS_IEEE)
 		asm volatile("stfpc %0" : "=m" (current->thread.fp_regs.fpc));
@@ -685,35 +592,21 @@ static void data_exception(struct pt_regs * regs, long interruption_code)
 	else
 		signal = SIGILL;
         if (signal == SIGFPE)
-		do_fp_trap(regs, location,
-                           current->thread.fp_regs.fpc, interruption_code);
-        else if (signal) {
-		siginfo_t info;
-		info.si_signo = signal;
-		info.si_errno = 0;
-		info.si_code = ILL_ILLOPN;
-		info.si_addr = location;
-		do_trap(interruption_code, signal, 
-			"data exception", regs, &info);
-	}
+		do_fp_trap(regs, current->thread.fp_regs.fpc);
+	else if (signal)
+		do_trap(regs, signal, ILL_ILLOPN, "data exception");
 }
 
-static void space_switch_exception(struct pt_regs * regs, long int_code)
+static void space_switch_exception(struct pt_regs *regs)
 {
-        siginfo_t info;
-
 	/* Set user psw back to home space mode. */
 	if (regs->psw.mask & PSW_MASK_PSTATE)
 		regs->psw.mask |= PSW_ASC_HOME;
 	/* Send SIGILL. */
-        info.si_signo = SIGILL;
-        info.si_errno = 0;
-        info.si_code = ILL_PRVOPC;
-        info.si_addr = get_check_address(regs);
-        do_trap(int_code, SIGILL, "space switch event", regs, &info);
+	do_trap(regs, SIGILL, ILL_PRVOPC, "space switch event");
 }
 
-asmlinkage void kernel_stack_overflow(struct pt_regs * regs)
+void __kprobes kernel_stack_overflow(struct pt_regs * regs)
 {
 	bust_spinlocks(1);
 	printk("Kernel stack overflow.\n");
@@ -758,5 +651,6 @@ void __init trap_init(void)
         pgm_check_table[0x15] = &operand_exception;
         pgm_check_table[0x1C] = &space_switch_exception;
         pgm_check_table[0x1D] = &hfp_sqrt_exception;
-	pfault_irq_init();
+	/* Enable machine checks early. */
+	local_mcck_enable();
 }

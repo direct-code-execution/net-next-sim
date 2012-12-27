@@ -46,6 +46,7 @@
 #include <asm/dcr.h>
 #include <asm/dcr-regs.h>
 #include "adma.h"
+#include "../dmaengine.h"
 
 enum ppc_adma_init_code {
 	PPC_ADMA_INIT_OK = 0,
@@ -1930,7 +1931,7 @@ static void __ppc440spe_adma_slot_cleanup(struct ppc440spe_adma_chan *chan)
 				if (end_of_chain && slot_cnt) {
 					/* Should wait for ZeroSum completion */
 					if (cookie > 0)
-						chan->completed_cookie = cookie;
+						chan->common.completed_cookie = cookie;
 					return;
 				}
 
@@ -1960,7 +1961,7 @@ static void __ppc440spe_adma_slot_cleanup(struct ppc440spe_adma_chan *chan)
 	BUG_ON(!seen_current);
 
 	if (cookie > 0) {
-		chan->completed_cookie = cookie;
+		chan->common.completed_cookie = cookie;
 		pr_debug("\tcompleted cookie %d\n", cookie);
 	}
 
@@ -2150,22 +2151,6 @@ static int ppc440spe_adma_alloc_chan_resources(struct dma_chan *chan)
 }
 
 /**
- * ppc440spe_desc_assign_cookie - assign a cookie
- */
-static dma_cookie_t ppc440spe_desc_assign_cookie(
-		struct ppc440spe_adma_chan *chan,
-		struct ppc440spe_adma_desc_slot *desc)
-{
-	dma_cookie_t cookie = chan->common.cookie;
-
-	cookie++;
-	if (cookie < 0)
-		cookie = 1;
-	chan->common.cookie = desc->async_tx.cookie = cookie;
-	return cookie;
-}
-
-/**
  * ppc440spe_rxor_set_region_data -
  */
 static void ppc440spe_rxor_set_region(struct ppc440spe_adma_desc_slot *desc,
@@ -2235,8 +2220,7 @@ static dma_cookie_t ppc440spe_adma_tx_submit(struct dma_async_tx_descriptor *tx)
 	slots_per_op = group_start->slots_per_op;
 
 	spin_lock_bh(&chan->lock);
-
-	cookie = ppc440spe_desc_assign_cookie(chan, sw_desc);
+	cookie = dma_cookie_assign(tx);
 
 	if (unlikely(list_empty(&chan->chain))) {
 		/* first peer */
@@ -2313,7 +2297,7 @@ static struct dma_async_tx_descriptor *ppc440spe_adma_prep_dma_memcpy(
 	if (unlikely(!len))
 		return NULL;
 
-	BUG_ON(unlikely(len > PPC440SPE_ADMA_DMA_MAX_BYTE_COUNT));
+	BUG_ON(len > PPC440SPE_ADMA_DMA_MAX_BYTE_COUNT);
 
 	spin_lock_bh(&ppc440spe_chan->lock);
 
@@ -2354,7 +2338,7 @@ static struct dma_async_tx_descriptor *ppc440spe_adma_prep_dma_memset(
 	if (unlikely(!len))
 		return NULL;
 
-	BUG_ON(unlikely(len > PPC440SPE_ADMA_DMA_MAX_BYTE_COUNT));
+	BUG_ON(len > PPC440SPE_ADMA_DMA_MAX_BYTE_COUNT);
 
 	spin_lock_bh(&ppc440spe_chan->lock);
 
@@ -2397,7 +2381,7 @@ static struct dma_async_tx_descriptor *ppc440spe_adma_prep_dma_xor(
 				     dma_dest, dma_src, src_cnt));
 	if (unlikely(!len))
 		return NULL;
-	BUG_ON(unlikely(len > PPC440SPE_ADMA_XOR_MAX_BYTE_COUNT));
+	BUG_ON(len > PPC440SPE_ADMA_XOR_MAX_BYTE_COUNT);
 
 	dev_dbg(ppc440spe_chan->device->common.dev,
 		"ppc440spe adma%d: %s src_cnt: %d len: %u int_en: %d\n",
@@ -2887,7 +2871,7 @@ static struct dma_async_tx_descriptor *ppc440spe_adma_prep_dma_pq(
 	ADMA_LL_DBG(prep_dma_pq_dbg(ppc440spe_chan->device->id,
 				    dst, src, src_cnt));
 	BUG_ON(!len);
-	BUG_ON(unlikely(len > PPC440SPE_ADMA_XOR_MAX_BYTE_COUNT));
+	BUG_ON(len > PPC440SPE_ADMA_XOR_MAX_BYTE_COUNT);
 	BUG_ON(!src_cnt);
 
 	if (src_cnt == 1 && dst[1] == src[0]) {
@@ -3944,28 +3928,16 @@ static enum dma_status ppc440spe_adma_tx_status(struct dma_chan *chan,
 			dma_cookie_t cookie, struct dma_tx_state *txstate)
 {
 	struct ppc440spe_adma_chan *ppc440spe_chan;
-	dma_cookie_t last_used;
-	dma_cookie_t last_complete;
 	enum dma_status ret;
 
 	ppc440spe_chan = to_ppc440spe_adma_chan(chan);
-	last_used = chan->cookie;
-	last_complete = ppc440spe_chan->completed_cookie;
-
-	dma_set_tx_state(txstate, last_complete, last_used, 0);
-
-	ret = dma_async_is_complete(cookie, last_complete, last_used);
+	ret = dma_cookie_status(chan, cookie, txstate);
 	if (ret == DMA_SUCCESS)
 		return ret;
 
 	ppc440spe_adma_slot_cleanup(ppc440spe_chan);
 
-	last_used = chan->cookie;
-	last_complete = ppc440spe_chan->completed_cookie;
-
-	dma_set_tx_state(txstate, last_complete, last_used, 0);
-
-	return dma_async_is_complete(cookie, last_complete, last_used);
+	return dma_cookie_status(chan, cookie, txstate);
 }
 
 /**
@@ -4050,16 +4022,12 @@ static void ppc440spe_chan_start_null_xor(struct ppc440spe_adma_chan *chan)
 		async_tx_ack(&sw_desc->async_tx);
 		ppc440spe_desc_init_null_xor(group_start);
 
-		cookie = chan->common.cookie;
-		cookie++;
-		if (cookie <= 1)
-			cookie = 2;
+		cookie = dma_cookie_assign(&sw_desc->async_tx);
 
 		/* initialize the completed cookie to be less than
 		 * the most recently used cookie
 		 */
-		chan->completed_cookie = cookie - 1;
-		chan->common.cookie = sw_desc->async_tx.cookie = cookie;
+		chan->common.completed_cookie = cookie - 1;
 
 		/* channel should not be busy */
 		BUG_ON(ppc440spe_chan_is_busy(chan));
@@ -4393,8 +4361,7 @@ static void ppc440spe_adma_release_irqs(struct ppc440spe_adma_device *adev,
 /**
  * ppc440spe_adma_probe - probe the asynch device
  */
-static int __devinit ppc440spe_adma_probe(struct platform_device *ofdev,
-					  const struct of_device_id *match)
+static int __devinit ppc440spe_adma_probe(struct platform_device *ofdev)
 {
 	struct device_node *np = ofdev->dev.of_node;
 	struct resource res;
@@ -4449,9 +4416,8 @@ static int __devinit ppc440spe_adma_probe(struct platform_device *ofdev,
 
 	if (!request_mem_region(res.start, resource_size(&res),
 				dev_driver_string(&ofdev->dev))) {
-		dev_err(&ofdev->dev, "failed to request memory region "
-			"(0x%016llx-0x%016llx)\n",
-			(u64)res.start, (u64)res.end);
+		dev_err(&ofdev->dev, "failed to request memory region %pR\n",
+			&res);
 		initcode = PPC_ADMA_INIT_MEMREG;
 		ret = -EBUSY;
 		goto out;
@@ -4531,6 +4497,7 @@ static int __devinit ppc440spe_adma_probe(struct platform_device *ofdev,
 	INIT_LIST_HEAD(&chan->all_slots);
 	chan->device = adev;
 	chan->common.device = &adev->common;
+	dma_cookie_init(&chan->common);
 	list_add_tail(&chan->common.device_node, &adev->common.channels);
 	tasklet_init(&chan->irq_tasklet, ppc440spe_adma_tasklet,
 		     (unsigned long)chan);
@@ -4945,7 +4912,7 @@ static const struct of_device_id ppc440spe_adma_of_match[] __devinitconst = {
 };
 MODULE_DEVICE_TABLE(of, ppc440spe_adma_of_match);
 
-static struct of_platform_driver ppc440spe_adma_driver = {
+static struct platform_driver ppc440spe_adma_driver = {
 	.probe = ppc440spe_adma_probe,
 	.remove = __devexit_p(ppc440spe_adma_remove),
 	.driver = {
@@ -4963,7 +4930,7 @@ static __init int ppc440spe_adma_init(void)
 	if (ret)
 		return ret;
 
-	ret = of_register_platform_driver(&ppc440spe_adma_driver);
+	ret = platform_driver_register(&ppc440spe_adma_driver);
 	if (ret) {
 		pr_err("%s: failed to register platform driver\n",
 			__func__);
@@ -4997,7 +4964,7 @@ out_dev:
 	/* User will not be able to enable h/w RAID-6 */
 	pr_err("%s: failed to create RAID-6 driver interface\n",
 		__func__);
-	of_unregister_platform_driver(&ppc440spe_adma_driver);
+	platform_driver_unregister(&ppc440spe_adma_driver);
 out_reg:
 	dcr_unmap(ppc440spe_mq_dcr_host, ppc440spe_mq_dcr_len);
 	kfree(ppc440spe_dma_fifo_buf);
@@ -5012,7 +4979,7 @@ static void __exit ppc440spe_adma_exit(void)
 			   &driver_attr_enable);
 	driver_remove_file(&ppc440spe_adma_driver.driver,
 			   &driver_attr_devices);
-	of_unregister_platform_driver(&ppc440spe_adma_driver);
+	platform_driver_unregister(&ppc440spe_adma_driver);
 	dcr_unmap(ppc440spe_mq_dcr_host, ppc440spe_mq_dcr_len);
 	kfree(ppc440spe_dma_fifo_buf);
 }

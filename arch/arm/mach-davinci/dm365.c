@@ -17,12 +17,10 @@
 #include <linux/serial_8250.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
-#include <linux/gpio.h>
 #include <linux/spi/spi.h>
 
 #include <asm/mach/map.h>
 
-#include <mach/dm365.h>
 #include <mach/cputype.h>
 #include <mach/edma.h>
 #include <mach/psc.h>
@@ -34,12 +32,29 @@
 #include <mach/asp.h>
 #include <mach/keyscan.h>
 #include <mach/spi.h>
+#include <mach/gpio-davinci.h>
 
-
+#include "davinci.h"
 #include "clock.h"
 #include "mux.h"
 
 #define DM365_REF_FREQ		24000000	/* 24 MHz on the DM365 EVM */
+
+/* Base of key scan register bank */
+#define DM365_KEYSCAN_BASE		0x01c69400
+
+#define DM365_RTC_BASE			0x01c69000
+
+#define DAVINCI_DM365_VC_BASE		0x01d0c000
+#define DAVINCI_DMA_VC_TX		2
+#define DAVINCI_DMA_VC_RX		3
+
+#define DM365_EMAC_BASE			0x01d07000
+#define DM365_EMAC_MDIO_BASE		(DM365_EMAC_BASE + 0x4000)
+#define DM365_EMAC_CNTRL_OFFSET		0x0000
+#define DM365_EMAC_CNTRL_MOD_OFFSET	0x3000
+#define DM365_EMAC_CNTRL_RAM_OFFSET	0x1000
+#define DM365_EMAC_CNTRL_RAM_SIZE	0x2000
 
 static struct pll_data pll1_data = {
 	.num		= 1,
@@ -459,7 +474,7 @@ static struct clk_lookup dm365_clks[] = {
 	CLK(NULL, "usb", &usb_clk),
 	CLK("davinci_emac.1", NULL, &emac_clk),
 	CLK("davinci_voicecodec", NULL, &voicecodec_clk),
-	CLK("davinci-asp.0", NULL, &asp0_clk),
+	CLK("davinci-mcbsp", NULL, &asp0_clk),
 	CLK(NULL, "rto", &rto_clk),
 	CLK(NULL, "mjcp", &mjcp_clk),
 	CLK(NULL, NULL, NULL),
@@ -625,12 +640,7 @@ static u64 dm365_spi0_dma_mask = DMA_BIT_MASK(32);
 static struct davinci_spi_platform_data dm365_spi0_pdata = {
 	.version 	= SPI_VERSION_1,
 	.num_chipselect = 2,
-	.clk_internal	= 1,
-	.cs_hold	= 1,
-	.intr_level	= 0,
-	.poll_mode	= 1,	/* 0 -> interrupt mode 1-> polling mode */
-	.c2tdelay	= 0,
-	.t2cdelay	= 0,
+	.dma_event_q	= EVENTQ_3,
 };
 
 static struct resource dm365_spi0_resources[] = {
@@ -649,10 +659,6 @@ static struct resource dm365_spi0_resources[] = {
 	},
 	{
 		.start = 16,
-		.flags = IORESOURCE_DMA,
-	},
-	{
-		.start = EVENTQ_3,
 		.flags = IORESOURCE_DMA,
 	},
 };
@@ -691,7 +697,6 @@ static struct emac_platform_data dm365_emac_pdata = {
 	.ctrl_reg_offset	= DM365_EMAC_CNTRL_OFFSET,
 	.ctrl_mod_reg_offset	= DM365_EMAC_CNTRL_MOD_OFFSET,
 	.ctrl_ram_offset	= DM365_EMAC_CNTRL_RAM_OFFSET,
-	.mdio_reg_offset	= DM365_EMAC_MDIO_OFFSET,
 	.ctrl_ram_size		= DM365_EMAC_CNTRL_RAM_SIZE,
 	.version		= EMAC_VERSION_2,
 };
@@ -699,7 +704,7 @@ static struct emac_platform_data dm365_emac_pdata = {
 static struct resource dm365_emac_resources[] = {
 	{
 		.start	= DM365_EMAC_BASE,
-		.end	= DM365_EMAC_BASE + 0x47ff,
+		.end	= DM365_EMAC_BASE + SZ_16K - 1,
 		.flags	= IORESOURCE_MEM,
 	},
 	{
@@ -732,6 +737,21 @@ static struct platform_device dm365_emac_device = {
 	},
 	.num_resources	= ARRAY_SIZE(dm365_emac_resources),
 	.resource	= dm365_emac_resources,
+};
+
+static struct resource dm365_mdio_resources[] = {
+	{
+		.start	= DM365_EMAC_MDIO_BASE,
+		.end	= DM365_EMAC_MDIO_BASE + SZ_4K - 1,
+		.flags	= IORESOURCE_MEM,
+	},
+};
+
+static struct platform_device dm365_mdio_device = {
+	.name		= "davinci_mdio",
+	.id		= 0,
+	.num_resources	= ARRAY_SIZE(dm365_mdio_resources),
+	.resource	= dm365_mdio_resources,
 };
 
 static u8 dm365_default_priorities[DAVINCI_N_AINTC_IRQ] = {
@@ -908,8 +928,8 @@ static struct resource dm365_asp_resources[] = {
 };
 
 static struct platform_device dm365_asp_device = {
-	.name		= "davinci-asp",
-	.id		= 0,
+	.name		= "davinci-mcbsp",
+	.id		= -1,
 	.num_resources	= ARRAY_SIZE(dm365_asp_resources),
 	.resource	= dm365_asp_resources,
 };
@@ -1079,7 +1099,6 @@ static struct davinci_soc_info davinci_soc_info_dm365 = {
 	.emac_pdata		= &dm365_emac_pdata,
 	.sram_dma		= 0x00010000,
 	.sram_len		= SZ_32K,
-	.reset_device		= &davinci_wdt_device,
 };
 
 void __init dm365_init_asp(struct snd_platform_data *pdata)
@@ -1119,6 +1138,7 @@ void __init dm365_init_rtc(void)
 void __init dm365_init(void)
 {
 	davinci_common_init(&davinci_soc_info_dm365);
+	davinci_map_sysmod();
 }
 
 static struct resource dm365_vpss_resources[] = {
@@ -1219,7 +1239,12 @@ static int __init dm365_init_devices(void)
 
 	davinci_cfg_reg(DM365_INT_EDMA_CC);
 	platform_device_register(&dm365_edma_device);
+
+	platform_device_register(&dm365_mdio_device);
 	platform_device_register(&dm365_emac_device);
+	clk_add_alias(NULL, dev_name(&dm365_mdio_device.dev),
+		      NULL, &dm365_emac_device.dev);
+
 	/* Add isif clock alias */
 	clk_add_alias("master", dm365_isif_dev.name, "vpss_master", NULL);
 	platform_device_register(&dm365_vpss_device);

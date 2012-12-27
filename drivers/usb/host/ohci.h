@@ -344,6 +344,12 @@ typedef struct urb_priv {
  * a subset of what the full implementation needs. (Linus)
  */
 
+enum ohci_rh_state {
+	OHCI_RH_HALTED,
+	OHCI_RH_SUSPENDED,
+	OHCI_RH_RUNNING
+};
+
 struct ohci_hcd {
 	spinlock_t		lock;
 
@@ -370,7 +376,7 @@ struct ohci_hcd {
 	 * OTG controllers and transceivers need software interaction;
 	 * other external transceivers should be software-transparent
 	 */
-	struct otg_transceiver	*transceiver;
+	struct usb_phy	*transceiver;
 	void (*start_hnp)(struct ohci_hcd *ohci);
 
 	/*
@@ -384,6 +390,7 @@ struct ohci_hcd {
 	/*
 	 * driver state
 	 */
+	enum ohci_rh_state	rh_state;
 	int			num_ports;
 	int			load [NUM_INTS];
 	u32			hc_control;	/* copy of hc control reg */
@@ -401,7 +408,7 @@ struct ohci_hcd {
 #define	OHCI_QUIRK_NEC		0x40			/* lost interrupts */
 #define	OHCI_QUIRK_FRAME_NO	0x80			/* no big endian frame_no shift */
 #define	OHCI_QUIRK_HUB_POWER	0x100			/* distrust firmware power/oc setup */
-#define	OHCI_QUIRK_AMD_ISO	0x200			/* ISO transfers*/
+#define	OHCI_QUIRK_AMD_PLL	0x200			/* AMD PLL quirk*/
 #define	OHCI_QUIRK_AMD_PREFETCH	0x400			/* pre-fetch for ISO transfer */
 	// there are also chip quirks/bugs in init logic
 
@@ -432,7 +439,7 @@ static inline int quirk_zfmicro(struct ohci_hcd *ohci)
 }
 static inline int quirk_amdiso(struct ohci_hcd *ohci)
 {
-	return ohci->flags & OHCI_QUIRK_AMD_ISO;
+	return ohci->flags & OHCI_QUIRK_AMD_PLL;
 }
 static inline int quirk_amdprefetch(struct ohci_hcd *ohci)
 {
@@ -574,18 +581,8 @@ static inline void _ohci_writel (const struct ohci_hcd *ohci,
 #endif
 }
 
-#ifdef CONFIG_ARCH_LH7A404
-/* Marc Singer: at the time this code was written, the LH7A404
- * had a problem reading the USB host registers.  This
- * implementation of the ohci_readl function performs the read
- * twice as a work-around.
- */
-#define ohci_readl(o,r)		(_ohci_readl(o,r),_ohci_readl(o,r))
-#define ohci_writel(o,v,r)	_ohci_writel(o,v,r)
-#else
 #define ohci_readl(o,r)		_ohci_readl(o,r)
 #define ohci_writel(o,v,r)	_ohci_writel(o,v,r)
-#endif
 
 
 /*-------------------------------------------------------------------------*/
@@ -689,11 +686,6 @@ static inline u16 ohci_hwPSW(const struct ohci_hcd *ohci,
 
 /*-------------------------------------------------------------------------*/
 
-static inline void disable (struct ohci_hcd *ohci)
-{
-	ohci_to_hcd(ohci)->state = HC_STATE_HALT;
-}
-
 #define	FI			0x2edf		/* 12000 bits per frame (-1) */
 #define	FSMP(fi)		(0x7fff & ((6 * ((fi) - 210)) / 7))
 #define	FIT			(1 << 31)
@@ -717,7 +709,7 @@ static inline void periodic_reinit (struct ohci_hcd *ohci)
 #define read_roothub(hc, register, mask) ({ \
 	u32 temp = ohci_readl (hc, &hc->regs->roothub.register); \
 	if (temp == -1) \
-		disable (hc); \
+		hc->rh_state = OHCI_RH_HALTED; \
 	else if (hc->flags & OHCI_QUIRK_AMD756) \
 		while (temp & mask) \
 			temp = ohci_readl (hc, &hc->regs->roothub.register); \

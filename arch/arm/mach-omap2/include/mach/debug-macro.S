@@ -13,8 +13,6 @@
 
 #include <linux/serial_reg.h>
 
-#include <asm/memory.h>
-
 #include <plat/serial.h>
 
 #define UART_OFFSET(addr)	((addr) & 0x00ffffff)
@@ -31,111 +29,118 @@ omap_uart_lsr:	.word	0
 		 * the desired UART phys and virt addresses temporarily into
 		 * the omap_uart_phys and omap_uart_virt above.
 		 */
-		.macro	addruart, rx, tmp
+		.macro	addruart, rp, rv, tmp
 
 		/* Use omap_uart_phys/virt if already configured */
-10:		mrc	p15, 0, \rx, c1, c0
-		tst	\rx, #1			@ MMU enabled?
-		ldreq	\rx, =__virt_to_phys(omap_uart_phys)	@ physical base address
-		ldrne	\rx, =omap_uart_virt	@ virtual base address
-		ldr	\rx, [\rx, #0]
-		cmp	\rx, #0			@ is port configured?
-		bne	99f			@ already configured
+10:		adr	\rp, 99f		@ get effective addr of 99f
+		ldr	\rv, [\rp]		@ get absolute addr of 99f
+		sub	\rv, \rv, \rp		@ offset between the two
+		ldr	\rp, [\rp, #4]		@ abs addr of omap_uart_phys
+		sub	\tmp, \rp, \rv		@ make it effective
+		ldr	\rp, [\tmp, #0]		@ omap_uart_phys
+		ldr	\rv, [\tmp, #4]		@ omap_uart_virt
+		cmp	\rp, #0			@ is port configured?
+		cmpne	\rv, #0
+		bne	100f			@ already configured
 
 		/* Check the debug UART configuration set in uncompress.h */
-		mrc	p15, 0, \rx, c1, c0
-		tst	\rx, #1			@ MMU enabled?
-		ldreq	\rx, =OMAP_UART_INFO
-		ldrne	\rx, =__phys_to_virt(OMAP_UART_INFO)
-		ldr	\rx, [\rx, #0]
+		mov	\rp, pc
+		ldr	\rv, =OMAP_UART_INFO_OFS
+		and	\rp, \rp, #0xff000000
+		ldr	\rp, [\rp, \rv]
 
 		/* Select the UART to use based on the UART1 scratchpad value */
-		cmp	\rx, #0			@ no port configured?
+		cmp	\rp, #0			@ no port configured?
 		beq	21f			@ if none, try to use UART1
-		cmp	\rx, #OMAP2UART1	@ OMAP2/3/4UART1
+		cmp	\rp, #OMAP2UART1	@ OMAP2/3/4UART1
 		beq	21f			@ configure OMAP2/3/4UART1
-		cmp	\rx, #OMAP2UART2	@ OMAP2/3/4UART2
+		cmp	\rp, #OMAP2UART2	@ OMAP2/3/4UART2
 		beq	22f			@ configure OMAP2/3/4UART2
-		cmp	\rx, #OMAP2UART3	@ only on 24xx
+		cmp	\rp, #OMAP2UART3	@ only on 24xx
 		beq	23f			@ configure OMAP2UART3
-		cmp	\rx, #OMAP3UART3	@ only on 34xx
+		cmp	\rp, #OMAP3UART3	@ only on 34xx
 		beq	33f			@ configure OMAP3UART3
-		cmp	\rx, #OMAP4UART3	@ only on 44xx
+		cmp	\rp, #OMAP4UART3	@ only on 44xx
 		beq	43f			@ configure OMAP4UART3
-		cmp	\rx, #OMAP3UART4	@ only on 36xx
+		cmp	\rp, #OMAP3UART4	@ only on 36xx
 		beq	34f			@ configure OMAP3UART4
-		cmp	\rx, #OMAP4UART4	@ only on 44xx
+		cmp	\rp, #OMAP4UART4	@ only on 44xx
 		beq	44f			@ configure OMAP4UART4
-		cmp	\rx, #ZOOM_UART		@ only on zoom2/3
+		cmp	\rp, #TI81XXUART1	@ ti81Xx UART offsets different
+		beq	81f			@ configure UART1
+		cmp	\rp, #TI81XXUART2	@ ti81Xx UART offsets different
+		beq	82f			@ configure UART2
+		cmp	\rp, #TI81XXUART3	@ ti81Xx UART offsets different
+		beq	83f			@ configure UART3
+		cmp	\rp, #ZOOM_UART		@ only on zoom2/3
 		beq	95f			@ configure ZOOM_UART
 
 		/* Configure the UART offset from the phys/virt base */
-21:		mov	\rx, #UART_OFFSET(OMAP2_UART1_BASE)	@ omap2/3/4
+21:		mov	\rp, #UART_OFFSET(OMAP2_UART1_BASE)	@ omap2/3/4
 		b	98f
-22:		mov	\rx, #UART_OFFSET(OMAP2_UART2_BASE)	@ omap2/3/4
+22:		mov	\rp, #UART_OFFSET(OMAP2_UART2_BASE)	@ omap2/3/4
 		b	98f
-23:		mov	\rx, #UART_OFFSET(OMAP2_UART3_BASE)
+23:		mov	\rp, #UART_OFFSET(OMAP2_UART3_BASE)
 		b	98f
-33:		mov	\rx, #UART_OFFSET(OMAP3_UART1_BASE)
-		add	\rx, \rx, #0x00fb0000
-		add	\rx, \rx, #0x00006000		@ OMAP3_UART3_BASE
+33:		mov	\rp, #UART_OFFSET(OMAP3_UART1_BASE)
+		add	\rp, \rp, #0x00fb0000
+		add	\rp, \rp, #0x00006000		@ OMAP3_UART3_BASE
 		b	98f
-34:		mov	\rx, #UART_OFFSET(OMAP3_UART1_BASE)
-		add	\rx, \rx, #0x00fb0000
-		add	\rx, \rx, #0x00028000		@ OMAP3_UART4_BASE
+34:		mov	\rp, #UART_OFFSET(OMAP3_UART1_BASE)
+		add	\rp, \rp, #0x00fb0000
+		add	\rp, \rp, #0x00028000		@ OMAP3_UART4_BASE
 		b	98f
-43:		mov	\rx, #UART_OFFSET(OMAP4_UART3_BASE)
+43:		mov	\rp, #UART_OFFSET(OMAP4_UART3_BASE)
 		b	98f
-44:		mov	\rx, #UART_OFFSET(OMAP4_UART4_BASE)
+44:		mov	\rp, #UART_OFFSET(OMAP4_UART4_BASE)
 		b	98f
-95:		ldr	\rx, =ZOOM_UART_BASE
-		mrc	p15, 0, \tmp, c1, c0
-		tst	\tmp, #1		@ MMU enabled?
-		ldreq	\tmp, =__virt_to_phys(omap_uart_phys)
-		ldrne	\tmp, =omap_uart_phys
-		str	\rx, [\tmp, #0]
-		ldr	\rx, =ZOOM_UART_VIRT
-		ldreq	\tmp, =__virt_to_phys(omap_uart_virt)
-		ldrne	\tmp, =omap_uart_virt
-		str	\rx, [\tmp, #0]
-		mov	\rx, #(UART_LSR << ZOOM_PORT_SHIFT)
-		ldreq	\tmp, =__virt_to_phys(omap_uart_lsr)
-		ldrne	\tmp, =omap_uart_lsr
-		str	\rx, [\tmp, #0]
+81:		mov	\rp, #UART_OFFSET(TI81XX_UART1_BASE)
+		b	98f
+82:		mov	\rp, #UART_OFFSET(TI81XX_UART2_BASE)
+		b	98f
+83:		mov	\rp, #UART_OFFSET(TI81XX_UART3_BASE)
+		b	98f
+
+95:		ldr	\rp, =ZOOM_UART_BASE
+		str	\rp, [\tmp, #0]		@ omap_uart_phys
+		ldr	\rp, =ZOOM_UART_VIRT
+		str	\rp, [\tmp, #4]		@ omap_uart_virt
+		mov	\rp, #(UART_LSR << ZOOM_PORT_SHIFT)
+		str	\rp, [\tmp, #8]		@ omap_uart_lsr
 		b	10b
 
 		/* Store both phys and virt address for the uart */
-98:		add	\rx, \rx, #0x48000000	@ phys base
-		mrc	p15, 0, \tmp, c1, c0
-		tst	\tmp, #1		@ MMU enabled?
-		ldreq	\tmp, =__virt_to_phys(omap_uart_phys)
-		ldrne	\tmp, =omap_uart_phys
-		str	\rx, [\tmp, #0]
-		sub	\rx, \rx, #0x48000000	@ phys base
-		add	\rx, \rx, #0xfa000000	@ virt base
-		ldreq	\tmp, =__virt_to_phys(omap_uart_virt)
-		ldrne	\tmp, =omap_uart_virt
-		str	\rx, [\tmp, #0]
-		mov	\rx, #(UART_LSR << OMAP_PORT_SHIFT)
-		ldreq	\tmp, =__virt_to_phys(omap_uart_lsr)
-		ldrne	\tmp, =omap_uart_lsr
-		str	\rx, [\tmp, #0]
+98:		add	\rp, \rp, #0x48000000	@ phys base
+		str	\rp, [\tmp, #0]		@ omap_uart_phys
+		sub	\rp, \rp, #0x48000000	@ phys base
+		add	\rp, \rp, #0xfa000000	@ virt base
+		str	\rp, [\tmp, #4]		@ omap_uart_virt
+		mov	\rp, #(UART_LSR << OMAP_PORT_SHIFT)
+		str	\rp, [\tmp, #8]		@ omap_uart_lsr
 
 		b	10b
-99:
+
+		.align
+99:		.word	.
+		.word	omap_uart_phys
+		.ltorg
+
+100:		/* Pass the UART_LSR reg address */
+		ldr	\tmp, [\tmp, #8]	@ omap_uart_lsr
+		add	\rp, \rp, \tmp
+		add	\rv, \rv, \tmp
 		.endm
 
 		.macro	senduart,rd,rx
-		strb	\rd, [\rx]
+		orr	\rd, \rd, \rx, lsl #24	@ preserve LSR reg offset
+		bic	\rx, \rx, #0xff		@ get base (THR) reg address
+		strb	\rd, [\rx]		@ send lower byte of rd
+		orr	\rx, \rx, \rd, lsr #24	@ restore original rx (LSR)
+		bic	\rd, \rd, #(0xff << 24)	@ restore original rd
 		.endm
 
 		.macro	busyuart,rd,rx
-1001:		mrc	p15, 0, \rd, c1, c0
-		tst	\rd, #1		@ MMU enabled?
-		ldreq	\rd, =__virt_to_phys(omap_uart_lsr)
-		ldrne	\rd, =omap_uart_lsr
-		ldr	\rd, [\rd, #0]
-		ldrb	\rd, [\rx, \rd]
+1001:		ldrb	\rd, [\rx]		@ rx contains UART_LSR address
 		and	\rd, \rd, #(UART_LSR_TEMT | UART_LSR_THRE)
 		teq	\rd, #(UART_LSR_TEMT | UART_LSR_THRE)
 		bne	1001b

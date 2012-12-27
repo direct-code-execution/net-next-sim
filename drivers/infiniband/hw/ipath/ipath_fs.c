@@ -46,7 +46,7 @@
 static struct super_block *ipath_super;
 
 static int ipathfs_mknod(struct inode *dir, struct dentry *dentry,
-			 int mode, const struct file_operations *fops,
+			 umode_t mode, const struct file_operations *fops,
 			 void *data)
 {
 	int error;
@@ -57,10 +57,11 @@ static int ipathfs_mknod(struct inode *dir, struct dentry *dentry,
 		goto bail;
 	}
 
+	inode->i_ino = get_next_ino();
 	inode->i_mode = mode;
 	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 	inode->i_private = data;
-	if ((mode & S_IFMT) == S_IFDIR) {
+	if (S_ISDIR(mode)) {
 		inode->i_op = &simple_dir_inode_operations;
 		inc_nlink(inode);
 		inc_nlink(dir);
@@ -75,7 +76,7 @@ bail:
 	return error;
 }
 
-static int create_file(const char *name, mode_t mode,
+static int create_file(const char *name, umode_t mode,
 		       struct dentry *parent, struct dentry **dentry,
 		       const struct file_operations *fops, void *data)
 {
@@ -88,7 +89,7 @@ static int create_file(const char *name, mode_t mode,
 		error = ipathfs_mknod(parent->d_inode, *dentry,
 				      mode, fops, data);
 	else
-		error = PTR_ERR(dentry);
+		error = PTR_ERR(*dentry);
 	mutex_unlock(&parent->d_inode->i_mutex);
 
 	return error;
@@ -103,6 +104,7 @@ static ssize_t atomic_stats_read(struct file *file, char __user *buf,
 
 static const struct file_operations atomic_stats_ops = {
 	.read = atomic_stats_read,
+	.llseek = default_llseek,
 };
 
 static ssize_t atomic_counters_read(struct file *file, char __user *buf,
@@ -120,6 +122,7 @@ static ssize_t atomic_counters_read(struct file *file, char __user *buf,
 
 static const struct file_operations atomic_counters_ops = {
 	.read = atomic_counters_read,
+	.llseek = default_llseek,
 };
 
 static ssize_t flash_read(struct file *file, char __user *buf,
@@ -224,6 +227,7 @@ bail:
 static const struct file_operations flash_ops = {
 	.read = flash_read,
 	.write = flash_write,
+	.llseek = default_llseek,
 };
 
 static int create_device_files(struct super_block *sb,
@@ -273,18 +277,14 @@ static int remove_file(struct dentry *parent, char *name)
 		goto bail;
 	}
 
-	spin_lock(&dcache_lock);
 	spin_lock(&tmp->d_lock);
 	if (!(d_unhashed(tmp) && tmp->d_inode)) {
-		dget_locked(tmp);
+		dget_dlock(tmp);
 		__d_drop(tmp);
 		spin_unlock(&tmp->d_lock);
-		spin_unlock(&dcache_lock);
 		simple_unlink(parent->d_inode, tmp);
-	} else {
+	} else
 		spin_unlock(&tmp->d_lock);
-		spin_unlock(&dcache_lock);
-	}
 
 	ret = 0;
 bail:
@@ -358,13 +358,13 @@ bail:
 	return ret;
 }
 
-static int ipathfs_get_sb(struct file_system_type *fs_type, int flags,
-			const char *dev_name, void *data, struct vfsmount *mnt)
+static struct dentry *ipathfs_mount(struct file_system_type *fs_type,
+			int flags, const char *dev_name, void *data)
 {
-	int ret = get_sb_single(fs_type, flags, data,
-				    ipathfs_fill_super, mnt);
-	if (ret >= 0)
-		ipath_super = mnt->mnt_sb;
+	struct dentry *ret;
+	ret = mount_single(fs_type, flags, data, ipathfs_fill_super);
+	if (!IS_ERR(ret))
+		ipath_super = ret->d_sb;
 	return ret;
 }
 
@@ -407,7 +407,7 @@ bail:
 static struct file_system_type ipathfs_fs_type = {
 	.owner =	THIS_MODULE,
 	.name =		"ipathfs",
-	.get_sb =	ipathfs_get_sb,
+	.mount =	ipathfs_mount,
 	.kill_sb =	ipathfs_kill_super,
 };
 

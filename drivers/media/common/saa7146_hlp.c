@@ -1,4 +1,7 @@
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/kernel.h>
+#include <linux/export.h>
 #include <media/saa7146_vv.h>
 
 static void calculate_output_format_register(struct saa7146_dev* saa, u32 palette, u32* clip_format)
@@ -558,7 +561,7 @@ static void saa7146_set_window(struct saa7146_dev *dev, int width, int height, e
 static void saa7146_set_position(struct saa7146_dev *dev, int w_x, int w_y, int w_height, enum v4l2_field field, u32 pixelformat)
 {
 	struct saa7146_vv *vv = dev->vv_data;
-	struct saa7146_format *sfmt = format_by_fourcc(dev, pixelformat);
+	struct saa7146_format *sfmt = saa7146_format_by_fourcc(dev, pixelformat);
 
 	int b_depth = vv->ov_fmt->depth;
 	int b_bpl = vv->ov_fb.fmt.bytesperline;
@@ -702,7 +705,7 @@ static int calculate_video_dma_grab_packed(struct saa7146_dev* dev, struct saa71
 	struct saa7146_vv *vv = dev->vv_data;
 	struct saa7146_video_dma vdma1;
 
-	struct saa7146_format *sfmt = format_by_fourcc(dev,buf->fmt->pixelformat);
+	struct saa7146_format *sfmt = saa7146_format_by_fourcc(dev,buf->fmt->pixelformat);
 
 	int width = buf->fmt->width;
 	int height = buf->fmt->height;
@@ -711,8 +714,8 @@ static int calculate_video_dma_grab_packed(struct saa7146_dev* dev, struct saa71
 
 	int depth = sfmt->depth;
 
-	DEB_CAP(("[size=%dx%d,fields=%s]\n",
-		width,height,v4l2_field_names[field]));
+	DEB_CAP("[size=%dx%d,fields=%s]\n",
+		width, height, v4l2_field_names[field]);
 
 	if( bytesperline != 0) {
 		vdma1.pitch = bytesperline*2;
@@ -827,7 +830,7 @@ static int calculate_video_dma_grab_planar(struct saa7146_dev* dev, struct saa71
 	struct saa7146_video_dma vdma2;
 	struct saa7146_video_dma vdma3;
 
-	struct saa7146_format *sfmt = format_by_fourcc(dev,buf->fmt->pixelformat);
+	struct saa7146_format *sfmt = saa7146_format_by_fourcc(dev,buf->fmt->pixelformat);
 
 	int width = buf->fmt->width;
 	int height = buf->fmt->height;
@@ -837,8 +840,8 @@ static int calculate_video_dma_grab_planar(struct saa7146_dev* dev, struct saa71
 	BUG_ON(0 == buf->pt[1].dma);
 	BUG_ON(0 == buf->pt[2].dma);
 
-	DEB_CAP(("[size=%dx%d,fields=%s]\n",
-		width,height,v4l2_field_names[field]));
+	DEB_CAP("[size=%dx%d,fields=%s]\n",
+		width, height, v4l2_field_names[field]);
 
 	/* fixme: look at bytesperline! */
 
@@ -994,16 +997,16 @@ static void program_capture_engine(struct saa7146_dev *dev, int planar)
 
 void saa7146_set_capture(struct saa7146_dev *dev, struct saa7146_buf *buf, struct saa7146_buf *next)
 {
-	struct saa7146_format *sfmt = format_by_fourcc(dev,buf->fmt->pixelformat);
+	struct saa7146_format *sfmt = saa7146_format_by_fourcc(dev,buf->fmt->pixelformat);
 	struct saa7146_vv *vv = dev->vv_data;
 	u32 vdma1_prot_addr;
 
-	DEB_CAP(("buf:%p, next:%p\n",buf,next));
+	DEB_CAP("buf:%p, next:%p\n", buf, next);
 
 	vdma1_prot_addr = saa7146_read(dev, PROT_ADDR1);
 	if( 0 == vdma1_prot_addr ) {
 		/* clear out beginning of streaming bit (rps register 0)*/
-		DEB_CAP(("forcing sync to new frame\n"));
+		DEB_CAP("forcing sync to new frame\n");
 		saa7146_write(dev, MC2, MASK_27 );
 	}
 

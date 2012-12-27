@@ -456,6 +456,7 @@ static int __devexit pcf50633_mbc_remove(struct platform_device *pdev)
 	for (i = 0; i < ARRAY_SIZE(mbc_irq_handlers); i++)
 		pcf50633_free_irq(mbc->pcf, mbc_irq_handlers[i]);
 
+	sysfs_remove_group(&pdev->dev.kobj, &mbc_attr_group);
 	power_supply_unregister(&mbc->usb);
 	power_supply_unregister(&mbc->adapter);
 	power_supply_unregister(&mbc->ac);
@@ -473,17 +474,7 @@ static struct platform_driver pcf50633_mbc_driver = {
 	.remove = __devexit_p(pcf50633_mbc_remove),
 };
 
-static int __init pcf50633_mbc_init(void)
-{
-	return platform_driver_register(&pcf50633_mbc_driver);
-}
-module_init(pcf50633_mbc_init);
-
-static void __exit pcf50633_mbc_exit(void)
-{
-	platform_driver_unregister(&pcf50633_mbc_driver);
-}
-module_exit(pcf50633_mbc_exit);
+module_platform_driver(pcf50633_mbc_driver);
 
 MODULE_AUTHOR("Balaji Rao <balajirrao@openmoko.org>");
 MODULE_DESCRIPTION("PCF50633 mbc driver");

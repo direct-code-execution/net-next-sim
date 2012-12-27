@@ -39,7 +39,7 @@ void do_gettimeofday(struct timeval *tv)
   *tv = ns_to_timeval (ns);
 }
 
-int do_settimeofday(struct timespec *tv)
+int do_settimeofday(const struct timespec *tv)
 {
   sim_assert (false);
   return -EPERM; // quiet compiler

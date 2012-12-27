@@ -5,7 +5,6 @@
  * Largely rewritten by Cort Dougan (cort@cs.nmt.edu)
  * and Paul Mackerras.
  *
- * Adapted for iSeries by Mike Corrigan (mikejc@us.ibm.com)
  * PPC64 updates by Dave Engebretsen (engebret@us.ibm.com)
  *
  * setjmp/longjmp code by Paul Mackerras.
@@ -121,9 +120,4 @@ _GLOBAL(longjmp)
 	PPC_LL	r2,2*SZL(r3)
 	mtlr	r0
 	mr	r3,r4
-	blr
-
-_GLOBAL(__setup_cpu_power7)
-_GLOBAL(__restore_cpu_power7)
-	/* place holder */
 	blr

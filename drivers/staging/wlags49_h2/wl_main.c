@@ -23,7 +23,7 @@
  * software indicates your acceptance of these terms and conditions.  If you do
  * not agree with these terms and conditions, do not use the software.
  *
- * Copyright © 2003 Agere Systems Inc.
+ * Copyright Â© 2003 Agere Systems Inc.
  * All rights reserved.
  *
  * Redistribution and use in source or binary forms, with or without
@@ -44,7 +44,7 @@
  *
  * Disclaimer
  *
- * THIS SOFTWARE IS PROVIDED “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES,
+ * THIS SOFTWARE IS PROVIDED Â“AS ISÂ” AND ANY EXPRESS OR IMPLIED WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, INFRINGEMENT AND THE IMPLIED WARRANTIES OF
  * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  ANY
  * USE, MODIFICATION OR DISTRIBUTION OF THIS SOFTWARE IS SOLELY AT THE USERS OWN
@@ -86,8 +86,7 @@
 // #include <linux/in.h>
 // #include <linux/delay.h>
 // #include <asm/io.h>
-// #include <asm/system.h>
-// #include <asm/bitops.h>
+// // #include <asm/bitops.h>
 #include <linux/unistd.h>
 #include <asm/uaccess.h>
 
@@ -414,25 +413,6 @@ extern memimage fw_image;            // firmware image to be downloaded
 #endif /* HCF_STA */
 
 
-/*******************************************************************************
- *	wl_insert()
- *******************************************************************************
- *
- *  DESCRIPTION:
- *
- *      wl_insert() is scheduled to run after a CARD_INSERTION event is
- *  received, to configure the PCMCIA socket, and to make the ethernet device
- *  available to the system.
- *
- *  PARAMETERS:
- *
- *      dev - a pointer to the net_device struct of the wireless device
- *
- *  RETURNS:
- *
- *      TRUE or FALSE
- *
- ******************************************************************************/
 int wl_insert( struct net_device *dev )
 {
 	int                     result = 0;
@@ -450,7 +430,7 @@ int wl_insert( struct net_device *dev )
 	/* Initialize the adapter parameters. */
 	spin_lock_init( &( lp->slock ));
 
-	/* Intialize states */
+	/* Initialize states */
 	//lp->lockcount = 0; //PE1DNN
         lp->is_handling_int = WL_NOT_HANDLING_INT;
 	lp->firmware_present = WL_FRIMWARE_NOT_PRESENT;
@@ -485,7 +465,10 @@ int wl_insert( struct net_device *dev )
 //;?        DBG_PARAM( DbgInfo, PARM_NAME_CREATE_IBSS, "\"%s\"", PARM_CREATE_IBSS );
 //;?        DBG_PARAM( DbgInfo, PARM_NAME_MULTICAST_RX, "\"%s\"", PARM_MULTICAST_RX );
 //;?        DBG_PARAM( DbgInfo, PARM_NAME_MAX_SLEEP, "%d", PARM_MAX_SLEEP );
-//;?        DBG_PARAM( DbgInfo, PARM_NAME_NETWORK_ADDR, "\"%s\"", DbgHwAddr( PARM_NETWORK_ADDR ));
+/*
+	DBG_PARAM(DbgInfo, PARM_NAME_NETWORK_ADDR, "\"%pM\"",
+			PARM_NETWORK_ADDR);
+ */
 //;?        DBG_PARAM( DbgInfo, PARM_NAME_AUTHENTICATION, "%d", PARM_AUTHENTICATION );
 //;?        DBG_PARAM( DbgInfo, PARM_NAME_OWN_ATIM_WINDOW, "%d", PARM_OWN_ATIM_WINDOW );
 //;?        DBG_PARAM( DbgInfo, PARM_NAME_PM_HOLDOVER_DURATION, "%d", PARM_PM_HOLDOVER_DURATION );
@@ -512,12 +495,18 @@ int wl_insert( struct net_device *dev )
 	DBG_PARAM( DbgInfo, PARM_NAME_TX_RATE4, "%d", PARM_TX_RATE4 );
 	DBG_PARAM( DbgInfo, PARM_NAME_TX_RATE5, "%d", PARM_TX_RATE5 );
 	DBG_PARAM( DbgInfo, PARM_NAME_TX_RATE6, "%d", PARM_TX_RATE6 );
-	DBG_PARAM( DbgInfo, PARM_NAME_WDS_ADDRESS1, "\"%s\"", DbgHwAddr( PARM_WDS_ADDRESS1 ));
-	DBG_PARAM( DbgInfo, PARM_NAME_WDS_ADDRESS2, "\"%s\"", DbgHwAddr( PARM_WDS_ADDRESS2 ));
-	DBG_PARAM( DbgInfo, PARM_NAME_WDS_ADDRESS3, "\"%s\"", DbgHwAddr( PARM_WDS_ADDRESS3 ));
-	DBG_PARAM( DbgInfo, PARM_NAME_WDS_ADDRESS4, "\"%s\"", DbgHwAddr( PARM_WDS_ADDRESS4 ));
-	DBG_PARAM( DbgInfo, PARM_NAME_WDS_ADDRESS5, "\"%s\"", DbgHwAddr( PARM_WDS_ADDRESS5 ));
-	DBG_PARAM( DbgInfo, PARM_NAME_WDS_ADDRESS6, "\"%s\"", DbgHwAddr( PARM_WDS_ADDRESS6 ));
+	DBG_PARAM(DbgInfo, PARM_NAME_WDS_ADDRESS1, "\"%pM\"",
+			PARM_WDS_ADDRESS1);
+	DBG_PARAM(DbgInfo, PARM_NAME_WDS_ADDRESS2, "\"%pM\"",
+			PARM_WDS_ADDRESS2);
+	DBG_PARAM(DbgInfo, PARM_NAME_WDS_ADDRESS3, "\"%pM\"",
+			PARM_WDS_ADDRESS3);
+	DBG_PARAM(DbgInfo, PARM_NAME_WDS_ADDRESS4, "\"%pM\"",
+			PARM_WDS_ADDRESS4);
+	DBG_PARAM(DbgInfo, PARM_NAME_WDS_ADDRESS5, "\"%pM\"",
+			PARM_WDS_ADDRESS5);
+	DBG_PARAM(DbgInfo, PARM_NAME_WDS_ADDRESS6, "\"%pM\"",
+			PARM_WDS_ADDRESS6);
 #endif /* USE_WDS */
 #endif /* HCF_AP */
 
@@ -1189,7 +1178,7 @@ int 			rc;
 		return hcf_status;
 	}
 	memcpy( lp->MACAddress, &lp->ltvRecord.u.u8[0], ETH_ALEN );
-	DBG_TRACE( DbgInfo, "Card MAC Address: %s\n", DbgHwAddr( lp->MACAddress ));
+	DBG_TRACE(DbgInfo, "Card MAC Address: %pM\n", lp->MACAddress);
 
 	/* Write out configuration to the device, enable, and reconnect. However,
 	   only reconnect if in AP mode. For STA mode, need to wait for passive scan
@@ -1940,8 +1929,10 @@ int wl_put_ltv( struct wl_private *lp )
 	}
 
 	/* Own MAC Address */
-	//DBG_TRACE( DbgInfo, "MAC Address                       : %s\n",
-	//           DbgHwAddr( lp->MACAddress ));
+/*
+	DBG_TRACE(DbgInfo, "MAC Address                       : %pM\n",
+			lp->MACAddress);
+ */
 
 	if ( WVLAN_VALID_MAC_ADDRESS( lp->MACAddress )) {
 		/* Make the MAC address valid by:
@@ -2001,8 +1992,10 @@ int wl_put_ltv( struct wl_private *lp )
 	lp->ltvRecord.typ       = CFG_SET_WPA_AUTH_KEY_MGMT_SUITE;
 	lp->ltvRecord.u.u16[0]  = CNV_INT_TO_LITTLE( lp->AuthKeyMgmtSuite );
 	hcf_status = hcf_put_info( &lp->hcfCtx, (LTVP)&( lp->ltvRecord ));
-	/* WEP Keys */
-	wl_set_wep_keys( lp );
+
+	/* If WEP (or no) keys are being used, write (or clear) them */
+	if (lp->wext_enc != IW_ENCODE_ALG_TKIP)
+		wl_set_wep_keys(lp);
 
 	/* Country Code */
 	/* countryInfo, ltvCountryInfo, CFG_CNF_COUNTRY_INFO */
@@ -3052,8 +3045,8 @@ void wl_process_mailbox( struct wl_private *lp )
 						   aps[num_aps].capability );
 				DBG_TRACE( DbgInfo, "SSID Length     : 0x%04x\n",
 						   aps[num_aps].ssid_len );
-				DBG_TRACE( DbgInfo, "BSSID           : %s\n",
-						   DbgHwAddr( aps[num_aps].bssid ));
+				DBG_TRACE(DbgInfo, "BSSID           : %pM\n",
+						   aps[num_aps].bssid);
 
 				if ( aps[num_aps].ssid_len != 0 ) {
 					DBG_TRACE( DbgInfo, "SSID            : %s.\n",
@@ -3112,35 +3105,44 @@ void wl_process_mailbox( struct wl_private *lp )
 				DBG_TRACE( DbgInfo, "(%s) durID       : 0x%04x.\n",
 						   lp->dev->name, probe_rsp->durID );
 
-				DBG_TRACE( DbgInfo, "(%s) address1    : %s\n",
-						   lp->dev->name, DbgHwAddr( probe_rsp->address1 ));
+				DBG_TRACE(DbgInfo, "(%s) address1    : %pM\n",
+					lp->dev->name, probe_rsp->address1);
 
-				DBG_TRACE( DbgInfo, "(%s) address2    : %s\n",
-						   lp->dev->name, DbgHwAddr( probe_rsp->address2 ));
+				DBG_TRACE(DbgInfo, "(%s) address2    : %pM\n",
+					lp->dev->name, probe_rsp->address2);
 
-				DBG_TRACE( DbgInfo, "(%s) BSSID       : %s\n",
-						   lp->dev->name, DbgHwAddr( probe_rsp->BSSID ));
+				DBG_TRACE(DbgInfo, "(%s) BSSID       : %pM\n",
+					lp->dev->name, probe_rsp->BSSID);
 
 				DBG_TRACE( DbgInfo, "(%s) sequence    : 0x%04x.\n",
 						   lp->dev->name, probe_rsp->sequence );
 
-				DBG_TRACE( DbgInfo, "(%s) address4    : %s\n",
-						   lp->dev->name, DbgHwAddr( probe_rsp->address4 ));
+				DBG_TRACE(DbgInfo, "(%s) address4    : %pM\n",
+					lp->dev->name, probe_rsp->address4);
 
 				DBG_TRACE( DbgInfo, "(%s) datalength  : 0x%04x.\n",
 						   lp->dev->name, probe_rsp->dataLength );
 
-				DBG_TRACE( DbgInfo, "(%s) DA          : %s\n",
-						   lp->dev->name, DbgHwAddr( probe_rsp->DA ));
+				DBG_TRACE(DbgInfo, "(%s) DA          : %pM\n",
+					lp->dev->name, probe_rsp->DA);
 
-				DBG_TRACE( DbgInfo, "(%s) SA          : %s\n",
-						   lp->dev->name, DbgHwAddr( probe_rsp->SA ));
+				DBG_TRACE(DbgInfo, "(%s) SA          : %pM\n",
+					lp->dev->name, probe_rsp->SA);
 
 				//DBG_TRACE( DbgInfo, "(%s) lenType     : 0x%04x.\n",
 				//           lp->dev->name, probe_rsp->lenType );
 
-				DBG_TRACE( DbgInfo, "(%s) timeStamp   : %s\n",
-						   lp->dev->name, DbgHwAddr( probe_rsp->timeStamp ));
+				DBG_TRACE(DbgInfo, "(%s) timeStamp   : "
+						"%d.%d.%d.%d.%d.%d.%d.%d\n",
+						lp->dev->name,
+						probe_rsp->timeStamp[0],
+						probe_rsp->timeStamp[1],
+						probe_rsp->timeStamp[2],
+						probe_rsp->timeStamp[3],
+						probe_rsp->timeStamp[4],
+						probe_rsp->timeStamp[5],
+						probe_rsp->timeStamp[6],
+						probe_rsp->timeStamp[7]);
 
 				DBG_TRACE( DbgInfo, "(%s) beaconInt   : 0x%04x.\n",
 						   lp->dev->name, probe_rsp->beaconInterval );
@@ -3293,12 +3295,12 @@ void wl_process_mailbox( struct wl_private *lp )
 				break;
 			}
 
-			DBG_TRACE( DbgInfo, "STA Address        : %s\n",
-					   DbgHwAddr( as->staAddr ));
+			DBG_TRACE(DbgInfo, "STA Address        : %pM\n",
+					   as->staAddr);
 
 			if (( as->assocStatus == 2 )  && ( as->len == 8 )) {
-				DBG_TRACE( DbgInfo, "Old AP Address     : %s\n",
-						   DbgHwAddr( as->oldApAddr ));
+				DBG_TRACE(DbgInfo, "Old AP Address     : %pM\n",
+						   as->oldApAddr);
 			}
 		}
 
@@ -3337,9 +3339,11 @@ void wl_process_mailbox( struct wl_private *lp )
 				break;
 			}
 
-			DBG_TRACE( DbgInfo, "STA Address     : %s\n", DbgHwAddr( ss->staAddr ));
+			DBG_TRACE(DbgInfo, "STA Address     : %pM\n",
+					ss->staAddr);
 
-			DBG_TRACE( DbgInfo, "Reason          : 0x%04x \n", ss->reason );
+			DBG_TRACE(DbgInfo, "Reason          : 0x%04x\n",
+					ss->reason);
 		}
 
 		break;

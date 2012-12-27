@@ -25,6 +25,8 @@ struct clockdomain;
  * @disable: fn ptr that enables the current clock in hardware
  * @find_idlest: function returning the IDLEST register for the clock's IP blk
  * @find_companion: function returning the "companion" clk reg for the clock
+ * @allow_idle: fn ptr that enables autoidle for the current clock in hardware
+ * @deny_idle: fn ptr that disables autoidle for the current clock in hardware
  *
  * A "companion" clk is an accompanying clock to the one being queried
  * that must be enabled for the IP module connected to the clock to
@@ -42,6 +44,8 @@ struct clkops {
 					       u8 *, u8 *);
 	void			(*find_companion)(struct clk *, void __iomem **,
 						  u8 *);
+	void			(*allow_idle)(struct clk *);
+	void			(*deny_idle)(struct clk *);
 };
 
 #ifdef CONFIG_ARCH_OMAP2PLUS
@@ -49,13 +53,23 @@ struct clkops {
 /* struct clksel_rate.flags possibilities */
 #define RATE_IN_242X		(1 << 0)
 #define RATE_IN_243X		(1 << 1)
-#define RATE_IN_3XXX		(1 << 2)	/* rates common to all OMAP3 */
-#define RATE_IN_3430ES2		(1 << 3)	/* 3430ES2 rates only */
+#define RATE_IN_3430ES1		(1 << 2)	/* 3430ES1 rates only */
+#define RATE_IN_3430ES2PLUS	(1 << 3)	/* 3430 ES >= 2 rates only */
 #define RATE_IN_36XX		(1 << 4)
 #define RATE_IN_4430		(1 << 5)
+#define RATE_IN_TI816X		(1 << 6)
+#define RATE_IN_4460		(1 << 7)
+#define RATE_IN_AM33XX		(1 << 8)
+#define RATE_IN_TI814X		(1 << 9)
 
 #define RATE_IN_24XX		(RATE_IN_242X | RATE_IN_243X)
-#define RATE_IN_3430ES2PLUS	(RATE_IN_3430ES2 | RATE_IN_36XX)
+#define RATE_IN_34XX		(RATE_IN_3430ES1 | RATE_IN_3430ES2PLUS)
+#define RATE_IN_3XXX		(RATE_IN_34XX | RATE_IN_36XX)
+#define RATE_IN_44XX		(RATE_IN_4430 | RATE_IN_4460)
+
+/* RATE_IN_3430ES2PLUS_36XX includes 34xx/35xx with ES >=2, and all 36xx/37xx */
+#define RATE_IN_3430ES2PLUS_36XX	(RATE_IN_3430ES2PLUS | RATE_IN_36XX)
+
 
 /**
  * struct clksel_rate - register bitfield values corresponding to clk divisors
@@ -68,13 +82,11 @@ struct clkops {
  *
  * @div is the divisor that should be applied to the parent clock's rate
  * to produce the current clock's rate.
- *
- * XXX @flags probably should be replaced with an struct omap_chip.
  */
 struct clksel_rate {
 	u32			val;
 	u8			div;
-	u8			flags;
+	u16			flags;
 };
 
 /**
@@ -99,7 +111,6 @@ struct clksel {
  * @clk_ref: struct clk pointer to the clock's reference clock input
  * @control_reg: register containing the DPLL mode bitfield
  * @enable_mask: mask of the DPLL mode bitfield in @control_reg
- * @rate_tolerance: maximum variance allowed from target rate (in Hz)
  * @last_rounded_rate: cache of the last rate result of omap2_dpll_round_rate()
  * @last_rounded_m: cache of the last M result of omap2_dpll_round_rate()
  * @max_multiplier: maximum valid non-bypass multiplier value (actual)
@@ -119,19 +130,15 @@ struct clksel {
  *
  * Possible values for @flags:
  * DPLL_J_TYPE: "J-type DPLL" (only some 36xx, 4xxx DPLLs)
- * NO_DCO_SEL: don't program DCO (only for some J-type DPLLs)
-
+ *
  * @freqsel_mask is only used on the OMAP34xx family and AM35xx.
  *
  * XXX Some DPLLs have multiple bypass inputs, so it's not technically
  * correct to only have one @clk_bypass pointer.
  *
- * XXX @rate_tolerance should probably be deprecated - currently there
- * don't seem to be any usecases for DPLL rounding that is not exact.
- *
  * XXX The runtime-variable fields (@last_rounded_rate, @last_rounded_m,
  * @last_rounded_n) should be separated from the runtime-fixed fields
- * and placed into a differenct structure, so that the runtime-fixed data
+ * and placed into a different structure, so that the runtime-fixed data
  * can be placed into read-only space.
  */
 struct dpll_data {
@@ -142,13 +149,12 @@ struct dpll_data {
 	struct clk		*clk_ref;
 	void __iomem		*control_reg;
 	u32			enable_mask;
-	unsigned int		rate_tolerance;
 	unsigned long		last_rounded_rate;
 	u16			last_rounded_m;
 	u16			max_multiplier;
 	u8			last_rounded_n;
 	u8			min_divider;
-	u8			max_divider;
+	u16			max_divider;
 	u8			modes;
 #if defined(CONFIG_ARCH_OMAP3) || defined(CONFIG_ARCH_OMAP4)
 	void __iomem		*autoidle_reg;
@@ -156,21 +162,35 @@ struct dpll_data {
 	u32			autoidle_mask;
 	u32			freqsel_mask;
 	u32			idlest_mask;
+	u32			dco_mask;
+	u32			sddiv_mask;
 	u8			auto_recal_bit;
 	u8			recal_en_bit;
 	u8			recal_st_bit;
-	u8			flags;
 #  endif
+	u8			flags;
 };
 
 #endif
 
-/* struct clk.flags possibilities */
+/*
+ * struct clk.flags possibilities
+ *
+ * XXX document the rest of the clock flags here
+ *
+ * CLOCK_CLKOUTX2: (OMAP4 only) DPLL CLKOUT and CLKOUTX2 GATE_CTRL
+ *     bits share the same register.  This flag allows the
+ *     omap4_dpllmx*() code to determine which GATE_CTRL bit field
+ *     should be used.  This is a temporary solution - a better approach
+ *     would be to associate clock type-specific data with the clock,
+ *     similar to the struct dpll_data approach.
+ */
 #define ENABLE_REG_32BIT	(1 << 0)	/* Use 32-bit access */
 #define CLOCK_IDLE_CONTROL	(1 << 1)
 #define CLOCK_NO_IDLE_PARENT	(1 << 2)
 #define ENABLE_ON_INIT		(1 << 3)	/* Enable upon framework init */
 #define INVERT_ENABLE		(1 << 4)	/* 0 enables, 1 disables */
+#define CLOCK_CLKOUTX2		(1 << 5)
 
 /**
  * struct clk - OMAP struct clk
@@ -252,8 +272,6 @@ struct clk {
 #endif
 };
 
-struct cpufreq_frequency_table;
-
 struct clk_functions {
 	int		(*clk_enable)(struct clk *clk);
 	void		(*clk_disable)(struct clk *clk);
@@ -263,10 +281,6 @@ struct clk_functions {
 	void		(*clk_allow_idle)(struct clk *clk);
 	void		(*clk_deny_idle)(struct clk *clk);
 	void		(*clk_disable_unused)(struct clk *clk);
-#ifdef CONFIG_CPU_FREQ
-	void		(*clk_init_cpufreq_table)(struct cpufreq_frequency_table **);
-	void		(*clk_exit_cpufreq_table)(struct cpufreq_frequency_table **);
-#endif
 };
 
 extern int mpurate;
@@ -281,11 +295,9 @@ extern void recalculate_root_clocks(void);
 extern unsigned long followparent_recalc(struct clk *clk);
 extern void clk_enable_init_clocks(void);
 unsigned long omap_fixed_divisor_recalc(struct clk *clk);
-#ifdef CONFIG_CPU_FREQ
-extern void clk_init_cpufreq_table(struct cpufreq_frequency_table **table);
-extern void clk_exit_cpufreq_table(struct cpufreq_frequency_table **table);
-#endif
 extern struct clk *omap_clk_get_by_name(const char *name);
+extern int omap_clk_enable_autoidle_all(void);
+extern int omap_clk_disable_autoidle_all(void);
 
 extern const struct clkops clkops_null;
 

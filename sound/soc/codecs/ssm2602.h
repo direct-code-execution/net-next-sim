@@ -116,15 +116,10 @@
 
 #define SSM2602_CACHEREGNUM 	10
 
-#define SSM2602_SYSCLK	0
-#define SSM2602_DAI		0
-
-struct ssm2602_setup_data {
-	int i2c_bus;
-	unsigned short i2c_address;
+enum ssm2602_clk {
+	SSM2602_SYSCLK,
+	SSM2602_CLK_CLKOUT,
+	SSM2602_CLK_XTO
 };
-
-extern struct snd_soc_dai ssm2602_dai;
-extern struct snd_soc_codec_device soc_codec_dev_ssm2602;
 
 #endif

@@ -92,8 +92,7 @@ struct ssi_priv {
 static int ssi_startup(struct snd_pcm_substream *substream,
 		       struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct ssi_priv *ssi = &ssi_cpu_data[rtd->dai->cpu_dai->id];
+	struct ssi_priv *ssi = &ssi_cpu_data[dai->id];
 	if (ssi->inuse) {
 		pr_debug("ssi: already in use!\n");
 		return -EBUSY;
@@ -105,8 +104,7 @@ static int ssi_startup(struct snd_pcm_substream *substream,
 static void ssi_shutdown(struct snd_pcm_substream *substream,
 			 struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct ssi_priv *ssi = &ssi_cpu_data[rtd->dai->cpu_dai->id];
+	struct ssi_priv *ssi = &ssi_cpu_data[dai->id];
 
 	ssi->inuse = 0;
 }
@@ -114,8 +112,7 @@ static void ssi_shutdown(struct snd_pcm_substream *substream,
 static int ssi_trigger(struct snd_pcm_substream *substream, int cmd,
 		       struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct ssi_priv *ssi = &ssi_cpu_data[rtd->dai->cpu_dai->id];
+	struct ssi_priv *ssi = &ssi_cpu_data[dai->id];
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
@@ -135,8 +132,7 @@ static int ssi_hw_params(struct snd_pcm_substream *substream,
 			 struct snd_pcm_hw_params *params,
 			 struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct ssi_priv *ssi = &ssi_cpu_data[rtd->dai->cpu_dai->id];
+	struct ssi_priv *ssi = &ssi_cpu_data[dai->id];
 	unsigned long ssicr = SSIREG(SSICR);
 	unsigned int bits, channels, swl, recv, i;
 
@@ -336,7 +332,7 @@ static int ssi_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	 SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_U24_3LE |	\
 	 SNDRV_PCM_FMTBIT_S32_LE  | SNDRV_PCM_FMTBIT_U32_LE)
 
-static struct snd_soc_dai_ops ssi_dai_ops = {
+static const struct snd_soc_dai_ops ssi_dai_ops = {
 	.startup	= ssi_startup,
 	.shutdown	= ssi_shutdown,
 	.trigger	= ssi_trigger,
@@ -346,10 +342,9 @@ static struct snd_soc_dai_ops ssi_dai_ops = {
 	.set_fmt	= ssi_set_fmt,
 };
 
-struct snd_soc_dai sh4_ssi_dai[] = {
+static struct snd_soc_dai_driver sh4_ssi_dai[] = {
 {
-	.name			= "SSI0",
-	.id			= 0,
+	.name			= "ssi-dai.0",
 	.playback = {
 		.rates		= SSI_RATES,
 		.formats	= SSI_FMTS,
@@ -366,8 +361,7 @@ struct snd_soc_dai sh4_ssi_dai[] = {
 },
 #ifdef CONFIG_CPU_SUBTYPE_SH7760
 {
-	.name			= "SSI1",
-	.id			= 1,
+	.name			= "ssi-dai.1",
 	.playback = {
 		.rates		= SSI_RATES,
 		.formats	= SSI_FMTS,
@@ -384,19 +378,30 @@ struct snd_soc_dai sh4_ssi_dai[] = {
 },
 #endif
 };
-EXPORT_SYMBOL_GPL(sh4_ssi_dai);
 
-static int __init sh4_ssi_init(void)
+static int __devinit sh4_soc_dai_probe(struct platform_device *pdev)
 {
-	return snd_soc_register_dais(sh4_ssi_dai, ARRAY_SIZE(sh4_ssi_dai));
+	return snd_soc_register_dais(&pdev->dev, sh4_ssi_dai,
+			ARRAY_SIZE(sh4_ssi_dai));
 }
-module_init(sh4_ssi_init);
 
-static void __exit sh4_ssi_exit(void)
+static int __devexit sh4_soc_dai_remove(struct platform_device *pdev)
 {
-	snd_soc_unregister_dais(sh4_ssi_dai, ARRAY_SIZE(sh4_ssi_dai));
+	snd_soc_unregister_dais(&pdev->dev, ARRAY_SIZE(sh4_ssi_dai));
+	return 0;
 }
-module_exit(sh4_ssi_exit);
+
+static struct platform_driver sh4_ssi_driver = {
+	.driver = {
+			.name = "sh4-ssi-dai",
+			.owner = THIS_MODULE,
+	},
+
+	.probe = sh4_soc_dai_probe,
+	.remove = __devexit_p(sh4_soc_dai_remove),
+};
+
+module_platform_driver(sh4_ssi_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("SuperH onchip SSI (I2S) audio driver");

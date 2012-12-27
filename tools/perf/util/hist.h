@@ -2,6 +2,7 @@
 #define __PERF_HIST_H
 
 #include <linux/types.h>
+#include <pthread.h>
 #include "callchain.h"
 
 extern struct callchain_param callchain_param;
@@ -9,33 +10,6 @@ extern struct callchain_param callchain_param;
 struct hist_entry;
 struct addr_location;
 struct symbol;
-struct rb_root;
-
-struct objdump_line {
-	struct list_head node;
-	s64		 offset;
-	char		 *line;
-};
-
-void objdump_line__free(struct objdump_line *self);
-struct objdump_line *objdump__get_next_ip_line(struct list_head *head,
-					       struct objdump_line *pos);
-
-struct sym_hist {
-	u64		sum;
-	u64		ip[0];
-};
-
-struct sym_ext {
-	struct rb_node	node;
-	double		percent;
-	char		*path;
-};
-
-struct sym_priv {
-	struct sym_hist	*hist;
-	struct sym_ext	*ext;
-};
 
 /*
  * The kernel collects the number of events it couldn't send in a stretch and
@@ -52,8 +26,13 @@ struct sym_priv {
 struct events_stats {
 	u64 total_period;
 	u64 total_lost;
+	u64 total_invalid_chains;
 	u32 nr_events[PERF_RECORD_HEADER_MAX];
+	u32 nr_lost_warned;
 	u32 nr_unknown_events;
+	u32 nr_invalid_chains;
+	u32 nr_unknown_id;
+	u32 nr_unprocessable_samples;
 };
 
 enum hist_column {
@@ -63,84 +42,126 @@ enum hist_column {
 	HISTC_COMM,
 	HISTC_PARENT,
 	HISTC_CPU,
+	HISTC_MISPREDICT,
+	HISTC_SYMBOL_FROM,
+	HISTC_SYMBOL_TO,
+	HISTC_DSO_FROM,
+	HISTC_DSO_TO,
 	HISTC_NR_COLS, /* Last entry */
 };
 
+struct thread;
+struct dso;
+
 struct hists {
-	struct rb_node		rb_node;
+	struct rb_root		entries_in_array[2];
+	struct rb_root		*entries_in;
 	struct rb_root		entries;
+	struct rb_root		entries_collapsed;
 	u64			nr_entries;
+	const struct thread	*thread_filter;
+	const struct dso	*dso_filter;
+	const char		*uid_filter_str;
+	const char		*symbol_filter_str;
+	pthread_mutex_t		lock;
 	struct events_stats	stats;
-	u64			config;
 	u64			event_stream;
-	u32			type;
 	u16			col_len[HISTC_NR_COLS];
+	/* Best would be to reuse the session callchain cursor */
+	struct callchain_cursor	callchain_cursor;
 };
 
 struct hist_entry *__hists__add_entry(struct hists *self,
 				      struct addr_location *al,
 				      struct symbol *parent, u64 period);
-extern int64_t hist_entry__cmp(struct hist_entry *, struct hist_entry *);
-extern int64_t hist_entry__collapse(struct hist_entry *, struct hist_entry *);
-int hist_entry__fprintf(struct hist_entry *self, struct hists *hists,
-			struct hists *pair_hists, bool show_displacement,
-			long displacement, FILE *fp, u64 total);
+int64_t hist_entry__cmp(struct hist_entry *left, struct hist_entry *right);
+int64_t hist_entry__collapse(struct hist_entry *left, struct hist_entry *right);
 int hist_entry__snprintf(struct hist_entry *self, char *bf, size_t size,
-			 struct hists *hists, struct hists *pair_hists,
-			 bool show_displacement, long displacement,
-			 bool color, u64 total);
+			 struct hists *hists);
 void hist_entry__free(struct hist_entry *);
 
+struct hist_entry *__hists__add_branch_entry(struct hists *self,
+					     struct addr_location *al,
+					     struct symbol *sym_parent,
+					     struct branch_info *bi,
+					     u64 period);
+
 void hists__output_resort(struct hists *self);
+void hists__output_resort_threaded(struct hists *hists);
 void hists__collapse_resort(struct hists *self);
+void hists__collapse_resort_threaded(struct hists *hists);
+
+void hists__decay_entries(struct hists *hists, bool zap_user, bool zap_kernel);
+void hists__decay_entries_threaded(struct hists *hists, bool zap_user,
+				   bool zap_kernel);
+void hists__output_recalc_col_len(struct hists *hists, int max_rows);
 
 void hists__inc_nr_events(struct hists *self, u32 type);
 size_t hists__fprintf_nr_events(struct hists *self, FILE *fp);
 
 size_t hists__fprintf(struct hists *self, struct hists *pair,
-		      bool show_displacement, FILE *fp);
+		      bool show_displacement, bool show_header,
+		      int max_rows, int max_cols, FILE *fp);
 
-int hist_entry__inc_addr_samples(struct hist_entry *self, u64 ip);
-int hist_entry__annotate(struct hist_entry *self, struct list_head *head,
-			 size_t privsize);
+int hist_entry__inc_addr_samples(struct hist_entry *self, int evidx, u64 addr);
+int hist_entry__annotate(struct hist_entry *self, size_t privsize);
 
-void hists__filter_by_dso(struct hists *self, const struct dso *dso);
-void hists__filter_by_thread(struct hists *self, const struct thread *thread);
+void hists__filter_by_dso(struct hists *hists);
+void hists__filter_by_thread(struct hists *hists);
+void hists__filter_by_symbol(struct hists *hists);
 
 u16 hists__col_len(struct hists *self, enum hist_column col);
 void hists__set_col_len(struct hists *self, enum hist_column col, u16 len);
 bool hists__new_col_len(struct hists *self, enum hist_column col, u16 len);
 
+struct perf_evlist;
+
 #ifdef NO_NEWT_SUPPORT
-static inline int hists__browse(struct hists *self __used,
-				const char *helpline __used,
-				const char *ev_name __used)
+static inline
+int perf_evlist__tui_browse_hists(struct perf_evlist *evlist __used,
+				  const char *help __used,
+				  void(*timer)(void *arg) __used,
+				  void *arg __used,
+				  int refresh __used)
 {
 	return 0;
 }
 
-static inline int hists__tui_browse_tree(struct rb_root *self __used,
-					 const char *help __used)
+static inline int hist_entry__tui_annotate(struct hist_entry *self __used,
+					   int evidx __used,
+					   void(*timer)(void *arg) __used,
+					   void *arg __used,
+					   int delay_secs __used)
 {
 	return 0;
 }
-
-static inline int hist_entry__tui_annotate(struct hist_entry *self __used)
-{
-	return 0;
-}
-#define KEY_LEFT -1
-#define KEY_RIGHT -2
+#define K_LEFT -1
+#define K_RIGHT -2
 #else
-#include <newt.h>
-int hists__browse(struct hists *self, const char *helpline,
-		  const char *ev_name);
-int hist_entry__tui_annotate(struct hist_entry *self);
+#include "ui/keysyms.h"
+int hist_entry__tui_annotate(struct hist_entry *he, int evidx,
+			     void(*timer)(void *arg), void *arg, int delay_secs);
 
-#define KEY_LEFT NEWT_KEY_LEFT
-#define KEY_RIGHT NEWT_KEY_RIGHT
+int perf_evlist__tui_browse_hists(struct perf_evlist *evlist, const char *help,
+				  void(*timer)(void *arg), void *arg,
+				  int refresh);
+#endif
 
-int hists__tui_browse_tree(struct rb_root *self, const char *help);
+#ifdef NO_GTK2_SUPPORT
+static inline
+int perf_evlist__gtk_browse_hists(struct perf_evlist *evlist __used,
+				  const char *help __used,
+				  void(*timer)(void *arg) __used,
+				  void *arg __used,
+				  int refresh __used)
+{
+	return 0;
+}
+
+#else
+int perf_evlist__gtk_browse_hists(struct perf_evlist *evlist, const char *help,
+				  void(*timer)(void *arg), void *arg,
+				  int refresh);
 #endif
 
 unsigned int hists__sort_list_width(struct hists *self);

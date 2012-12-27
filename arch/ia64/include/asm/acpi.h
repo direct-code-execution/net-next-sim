@@ -32,7 +32,6 @@
 
 #include <linux/init.h>
 #include <linux/numa.h>
-#include <asm/system.h>
 #include <asm/numa.h>
 
 #define COMPILER_DEPENDENT_INT64	long
@@ -128,9 +127,9 @@ static inline const char *acpi_get_sysname (void)
 int acpi_request_vector (u32 int_type);
 int acpi_gsi_to_irq (u32 gsi, unsigned int *irq);
 
-/* routines for saving/restoring kernel state */
-extern int acpi_save_state_mem(void);
-extern void acpi_restore_state_mem(void);
+/* Low-level suspend routine. */
+extern int acpi_suspend_lowlevel(void);
+
 extern unsigned long acpi_wakeup_address;
 
 /*

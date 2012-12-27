@@ -80,6 +80,11 @@ void raise_softirq_irqoff(unsigned int nr)
 
   sim_softirq_wakeup ();
 }
+void __raise_softirq_irqoff(unsigned int nr)
+{
+	//trace_softirq_raise(nr);
+	or_softirq_pending(1UL << nr);
+}
 int __cond_resched_softirq(void)
 {
   // tell the caller that we did not need to re-schedule.

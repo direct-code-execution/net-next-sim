@@ -1289,7 +1289,7 @@ start:
              memset(pDevice->skb->cb, 0, sizeof(pDevice->skb->cb));
              netif_rx(pDevice->skb);
              pDevice->skb = dev_alloc_skb((int)pDevice->rx_buf_sz);
-         };
+         }
    #ifdef WPA_SUPPLICANT_DRIVER_WEXT_SUPPORT
   // if(pDevice->bWPASuppWextEnabled == true)
       {
@@ -1327,13 +1327,13 @@ start:
     }
 
     if (pMgmt->eCurrMode == WMAC_MODE_IBSS_STA) {
-        // if adhoc started which essid is NULL string, rescaning.
+        // if adhoc started which essid is NULL string, rescanning.
         if ((pMgmt->eCurrState == WMAC_STATE_STARTED) && (pCurrSSID->len == 0)) {
             if (pDevice->uAutoReConnectTime < 10) {
                 pDevice->uAutoReConnectTime++;
             }
             else {
-                DBG_PRT(MSG_LEVEL_NOTICE, KERN_INFO "Adhoc re-scaning ...\n");
+                DBG_PRT(MSG_LEVEL_NOTICE, KERN_INFO "Adhoc re-scanning ...\n");
 	      pMgmt->eScanType = WMAC_SCAN_ACTIVE;
                 bScheduleCommand((void *) pDevice, WLAN_CMD_BSSID_SCAN, NULL);
                 bScheduleCommand((void *) pDevice, WLAN_CMD_SSID, NULL);
@@ -1489,7 +1489,7 @@ BSSvUpdateNodeTxCounter(
                     }
                 }
             }
-        };
+        }
 
         if ((pMgmt->eCurrMode == WMAC_MODE_IBSS_STA) ||
             (pMgmt->eCurrMode == WMAC_MODE_ESS_AP)) {
@@ -1543,9 +1543,9 @@ BSSvUpdateNodeTxCounter(
                         }
                     }
                 }
-            };
+            }
         }
-    };
+    }
 
     return;
 

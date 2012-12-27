@@ -14,7 +14,7 @@
 #include <linux/usb.h>
 #include <linux/firmware.h>
 #include <linux/mutex.h>
-#include <media/ir-core.h>
+#include <media/rc-core.h>
 
 #include "dvb_frontend.h"
 #include "dvb_demux.h"
@@ -75,17 +75,17 @@ struct dvb_usb_device_description {
 	struct usb_device_id *warm_ids[DVB_USB_ID_MAX_NUM];
 };
 
-static inline u8 rc5_custom(struct ir_scancode *key)
+static inline u8 rc5_custom(struct rc_map_table *key)
 {
 	return (key->scancode >> 8) & 0xff;
 }
 
-static inline u8 rc5_data(struct ir_scancode *key)
+static inline u8 rc5_data(struct rc_map_table *key)
 {
 	return key->scancode & 0xff;
 }
 
-static inline u8 rc5_scan(struct ir_scancode *key)
+static inline u16 rc5_scan(struct rc_map_table *key)
 {
 	return key->scancode & 0xffff;
 }
@@ -124,6 +124,8 @@ struct usb_data_stream_properties {
  * @caps: capabilities of the DVB USB device.
  * @pid_filter_count: number of PID filter position in the optional hardware
  *  PID-filter.
+ * @num_frontends: number of frontends of the DVB USB adapter.
+ * @frontend_ctrl: called to power on/off active frontend.
  * @streaming_ctrl: called to start and stop the MPEG2-TS streaming of the
  *  device (not URB submitting/killing).
  * @pid_filter_ctrl: called to en/disable the PID filter, if any.
@@ -134,7 +136,7 @@ struct usb_data_stream_properties {
  *  pll_desc and pll_init_buf of struct dvb_usb_device).
  * @stream: configuration of the USB streaming
  */
-struct dvb_usb_adapter_properties {
+struct dvb_usb_adapter_fe_properties {
 #define DVB_USB_ADAP_HAS_PID_FILTER               0x01
 #define DVB_USB_ADAP_PID_FILTER_CAN_BE_TURNED_OFF 0x02
 #define DVB_USB_ADAP_NEED_PID_FILTERING           0x04
@@ -152,16 +154,25 @@ struct dvb_usb_adapter_properties {
 	struct usb_data_stream_properties stream;
 
 	int size_of_priv;
+};
 
+#define MAX_NO_OF_FE_PER_ADAP 2
+struct dvb_usb_adapter_properties {
+	int size_of_priv;
+
+	int (*frontend_ctrl)   (struct dvb_frontend *, int);
 	int (*fe_ioctl_override) (struct dvb_frontend *,
 				  unsigned int, void *, unsigned int);
+
+	int num_frontends;
+	struct dvb_usb_adapter_fe_properties fe[MAX_NO_OF_FE_PER_ADAP];
 };
 
 /**
  * struct dvb_rc_legacy - old properties of remote controller
- * @rc_key_map: a hard-wired array of struct ir_scancode (NULL to disable
+ * @rc_map_table: a hard-wired array of struct rc_map_table (NULL to disable
  *  remote control handling).
- * @rc_key_map_size: number of items in @rc_key_map.
+ * @rc_map_size: number of items in @rc_map_table.
  * @rc_query: called to query an event event.
  * @rc_interval: time in ms between two queries.
  */
@@ -170,8 +181,8 @@ struct dvb_rc_legacy {
 #define REMOTE_NO_KEY_PRESSED      0x00
 #define REMOTE_KEY_PRESSED         0x01
 #define REMOTE_KEY_REPEAT          0x02
-	struct ir_scancode  *rc_key_map;
-	int rc_key_map_size;
+	struct rc_map_table  *rc_map_table;
+	int rc_map_size;
 	int (*rc_query) (struct dvb_usb_device *, u32 *, int *);
 	int rc_interval;
 };
@@ -180,18 +191,22 @@ struct dvb_rc_legacy {
  * struct dvb_rc properties of remote controller, using rc-core
  * @rc_codes: name of rc codes table
  * @protocol: type of protocol(s) currently used by the driver
+ * @allowed_protos: protocol(s) supported by the driver
+ * @driver_type: Used to point if a device supports raw mode
+ * @change_protocol: callback to change protocol
  * @rc_query: called to query an event event.
  * @rc_interval: time in ms between two queries.
- * @rc_props: remote controller properties
  * @bulk_mode: device supports bulk mode for RC (disable polling mode)
  */
 struct dvb_rc {
 	char *rc_codes;
 	u64 protocol;
+	u64 allowed_protos;
+	enum rc_driver_type driver_type;
+	int (*change_protocol)(struct rc_dev *dev, u64 rc_type);
 	char *module_name;
 	int (*rc_query) (struct dvb_usb_device *d);
 	int rc_interval;
-	struct ir_dev_props rc_props;
 	bool bulk_mode;				/* uses bulk mode */
 };
 
@@ -341,6 +356,20 @@ struct usb_data_stream {
  *
  * @stream: the usb data stream.
  */
+struct dvb_usb_fe_adapter {
+	struct dvb_frontend *fe;
+
+	int (*fe_init)  (struct dvb_frontend *);
+	int (*fe_sleep) (struct dvb_frontend *);
+
+	struct usb_data_stream stream;
+
+	int pid_filtering;
+	int max_feed_count;
+
+	void *priv;
+};
+
 struct dvb_usb_adapter {
 	struct dvb_usb_device *dev;
 	struct dvb_usb_adapter_properties props;
@@ -352,20 +381,16 @@ struct dvb_usb_adapter {
 	u8  id;
 
 	int feedcount;
-	int pid_filtering;
 
 	/* dvb */
 	struct dvb_adapter   dvb_adap;
 	struct dmxdev        dmxdev;
 	struct dvb_demux     demux;
 	struct dvb_net       dvb_net;
-	struct dvb_frontend *fe;
-	int                  max_feed_count;
 
-	int (*fe_init)  (struct dvb_frontend *);
-	int (*fe_sleep) (struct dvb_frontend *);
-
-	struct usb_data_stream stream;
+	struct dvb_usb_fe_adapter fe_adap[MAX_NO_OF_FE_PER_ADAP];
+	int active_fe;
+	int num_frontends_initialized;
 
 	void *priv;
 };
@@ -385,7 +410,8 @@ struct dvb_usb_adapter {
  *
  * @i2c_adap: device's i2c_adapter if it uses I2CoverUSB
  *
- * @rc_input_dev: input device for the remote control.
+ * @rc_dev: rc device for the remote control (rc-core mode)
+ * @input_dev: input device for the remote control (legacy mode)
  * @rc_query_work: struct work_struct frequent rc queries
  * @last_event: last triggered event
  * @last_state: last state (no, pressed, repeat)
@@ -418,7 +444,8 @@ struct dvb_usb_device {
 	struct dvb_usb_adapter adapter[MAX_NO_OF_ADAPTER_PER_DEVICE];
 
 	/* remote control */
-	struct input_dev *rc_input_dev;
+	struct rc_dev *rc_dev;
+	struct input_dev *input_dev;
 	char rc_phys[64];
 	struct delayed_work rc_query_work;
 	u32 last_event;

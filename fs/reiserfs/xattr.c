@@ -33,7 +33,7 @@
  * The xattrs themselves are protected by the xattr_sem.
  */
 
-#include <linux/reiserfs_fs.h>
+#include "reiserfs.h"
 #include <linux/capability.h>
 #include <linux/dcache.h>
 #include <linux/namei.h>
@@ -43,8 +43,8 @@
 #include <linux/file.h>
 #include <linux/pagemap.h>
 #include <linux/xattr.h>
-#include <linux/reiserfs_xattr.h>
-#include <linux/reiserfs_acl.h>
+#include "xattr.h"
+#include "acl.h"
 #include <asm/uaccess.h>
 #include <net/checksum.h>
 #include <linux/stat.h>
@@ -66,7 +66,7 @@ static int xattr_create(struct inode *dir, struct dentry *dentry, int mode)
 }
 #endif
 
-static int xattr_mkdir(struct inode *dir, struct dentry *dentry, int mode)
+static int xattr_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	BUG_ON(!mutex_is_locked(&dir->i_mutex));
 	return dir->i_op->mkdir(dir, dentry, mode);
@@ -98,14 +98,12 @@ static int xattr_rmdir(struct inode *dir, struct dentry *dentry)
 
 	reiserfs_mutex_lock_nested_safe(&dentry->d_inode->i_mutex,
 					I_MUTEX_CHILD, dir->i_sb);
-	dentry_unhash(dentry);
 	error = dir->i_op->rmdir(dir, dentry);
 	if (!error)
 		dentry->d_inode->i_flags |= S_DEAD;
 	mutex_unlock(&dentry->d_inode->i_mutex);
 	if (!error)
 		d_delete(dentry);
-	dput(dentry);
 
 	return error;
 }
@@ -396,7 +394,7 @@ static struct page *reiserfs_get_page(struct inode *dir, size_t n)
 	struct address_space *mapping = dir->i_mapping;
 	struct page *page;
 	/* We can deadlock if we try to free dentries,
-	   and an unlink/rmdir has just occured - GFP_NOFS avoids this */
+	   and an unlink/rmdir has just occurred - GFP_NOFS avoids this */
 	mapping_set_gfp_mask(mapping, GFP_NOFS);
 	page = read_mapping_page(mapping, n >> PAGE_CACHE_SHIFT, NULL);
 	if (!IS_ERR(page)) {
@@ -418,13 +416,11 @@ static inline __u32 xattr_hash(const char *msg, int len)
 
 int reiserfs_commit_write(struct file *f, struct page *page,
 			  unsigned from, unsigned to);
-int reiserfs_prepare_write(struct file *f, struct page *page,
-			   unsigned from, unsigned to);
 
 static void update_ctime(struct inode *inode)
 {
 	struct timespec now = current_fs_time(inode->i_sb);
-	if (hlist_unhashed(&inode->i_hash) || !inode->i_nlink ||
+	if (inode_unhashed(inode) || !inode->i_nlink ||
 	    timespec_equal(&inode->i_ctime, &now))
 		return;
 
@@ -532,8 +528,7 @@ reiserfs_xattr_set_handle(struct reiserfs_transaction_handle *th,
 			rxh->h_hash = cpu_to_le32(xahash);
 		}
 
-		err = reiserfs_prepare_write(NULL, page, page_offset,
-					    page_offset + chunk + skip);
+		err = __reiserfs_write_begin(page, page_offset, chunk + skip);
 		if (!err) {
 			if (buffer)
 				memcpy(data + skip, buffer + buffer_pos, chunk);
@@ -560,11 +555,10 @@ reiserfs_xattr_set_handle(struct reiserfs_transaction_handle *th,
 
 		reiserfs_write_unlock(inode->i_sb);
 		mutex_lock_nested(&dentry->d_inode->i_mutex, I_MUTEX_XATTR);
-		down_write(&dentry->d_inode->i_alloc_sem);
+		inode_dio_wait(dentry->d_inode);
 		reiserfs_write_lock(inode->i_sb);
 
 		err = reiserfs_setattr(dentry, &newattrs);
-		up_write(&dentry->d_inode->i_alloc_sem);
 		mutex_unlock(&dentry->d_inode->i_mutex);
 	} else
 		update_ctime(inode);
@@ -873,24 +867,6 @@ out:
 	return err;
 }
 
-static int reiserfs_check_acl(struct inode *inode, int mask)
-{
-	struct posix_acl *acl;
-	int error = -EAGAIN; /* do regular unix permission checks by default */
-
-	acl = reiserfs_get_acl(inode, ACL_TYPE_ACCESS);
-
-	if (acl) {
-		if (!IS_ERR(acl)) {
-			error = posix_acl_permission(inode, acl, mask);
-			posix_acl_release(acl);
-		} else if (PTR_ERR(acl) != -ENODATA)
-			error = PTR_ERR(acl);
-	}
-
-	return error;
-}
-
 static int create_privroot(struct dentry *dentry)
 {
 	int err;
@@ -963,14 +939,7 @@ int reiserfs_permission(struct inode *inode, int mask)
 	if (IS_PRIVATE(inode))
 		return 0;
 
-#ifdef CONFIG_REISERFS_FS_XATTR
-	/*
-	 * Stat data v1 doesn't support ACLs.
-	 */
-	if (get_inode_sd_version(inode) != STAT_DATA_V1)
-		return generic_permission(inode, mask, reiserfs_check_acl);
-#endif
-	return generic_permission(inode, mask, NULL);
+	return generic_permission(inode, mask);
 }
 
 static int xattr_hide_revalidate(struct dentry *dentry, struct nameidata *nd)
@@ -993,7 +962,7 @@ int reiserfs_lookup_privroot(struct super_block *s)
 				strlen(PRIVROOT_NAME));
 	if (!IS_ERR(dentry)) {
 		REISERFS_SB(s)->priv_root = dentry;
-		dentry->d_op = &xattr_lookup_poison_ops;
+		d_set_d_op(dentry, &xattr_lookup_poison_ops);
 		if (dentry->d_inode)
 			dentry->d_inode->i_flags |= S_PRIVATE;
 	} else

@@ -137,7 +137,7 @@ arcfour_hmac_md5_usage_to_salt(unsigned int usage, u8 salt[4])
 		ms_usage = 13;
 		break;
 	default:
-		return EINVAL;;
+		return -EINVAL;
 	}
 	salt[0] = (ms_usage >> 0) & 0xff;
 	salt[1] = (ms_usage >> 8) & 0xff;
@@ -600,11 +600,14 @@ gss_krb5_cts_crypt(struct crypto_blkcipher *cipher, struct xdr_buf *buf,
 	u32 ret;
 	struct scatterlist sg[1];
 	struct blkcipher_desc desc = { .tfm = cipher, .info = iv };
-	u8 data[crypto_blkcipher_blocksize(cipher) * 2];
+	u8 data[GSS_KRB5_MAX_BLOCKSIZE * 2];
 	struct page **save_pages;
 	u32 len = buf->len - offset;
 
-	BUG_ON(len > crypto_blkcipher_blocksize(cipher) * 2);
+	if (len > ARRAY_SIZE(data)) {
+		WARN_ON(0);
+		return -ENOMEM;
+	}
 
 	/*
 	 * For encryption, we want to read from the cleartext

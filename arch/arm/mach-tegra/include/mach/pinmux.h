@@ -2,6 +2,7 @@
  * linux/arch/arm/mach-tegra/include/mach/pinmux.h
  *
  * Copyright (C) 2010 Google, Inc.
+ * Copyright (C) 2010,2011 Nvidia, Inc.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -17,133 +18,13 @@
 #ifndef __MACH_TEGRA_PINMUX_H
 #define __MACH_TEGRA_PINMUX_H
 
-enum tegra_pingroup {
-	TEGRA_PINGROUP_ATA = 0,
-	TEGRA_PINGROUP_ATB,
-	TEGRA_PINGROUP_ATC,
-	TEGRA_PINGROUP_ATD,
-	TEGRA_PINGROUP_ATE,
-	TEGRA_PINGROUP_CDEV1,
-	TEGRA_PINGROUP_CDEV2,
-	TEGRA_PINGROUP_CRTP,
-	TEGRA_PINGROUP_CSUS,
-	TEGRA_PINGROUP_DAP1,
-	TEGRA_PINGROUP_DAP2,
-	TEGRA_PINGROUP_DAP3,
-	TEGRA_PINGROUP_DAP4,
-	TEGRA_PINGROUP_DDC,
-	TEGRA_PINGROUP_DTA,
-	TEGRA_PINGROUP_DTB,
-	TEGRA_PINGROUP_DTC,
-	TEGRA_PINGROUP_DTD,
-	TEGRA_PINGROUP_DTE,
-	TEGRA_PINGROUP_DTF,
-	TEGRA_PINGROUP_GMA,
-	TEGRA_PINGROUP_GMB,
-	TEGRA_PINGROUP_GMC,
-	TEGRA_PINGROUP_GMD,
-	TEGRA_PINGROUP_GME,
-	TEGRA_PINGROUP_GPU,
-	TEGRA_PINGROUP_GPU7,
-	TEGRA_PINGROUP_GPV,
-	TEGRA_PINGROUP_HDINT,
-	TEGRA_PINGROUP_I2CP,
-	TEGRA_PINGROUP_IRRX,
-	TEGRA_PINGROUP_IRTX,
-	TEGRA_PINGROUP_KBCA,
-	TEGRA_PINGROUP_KBCB,
-	TEGRA_PINGROUP_KBCC,
-	TEGRA_PINGROUP_KBCD,
-	TEGRA_PINGROUP_KBCE,
-	TEGRA_PINGROUP_KBCF,
-	TEGRA_PINGROUP_LCSN,
-	TEGRA_PINGROUP_LD0,
-	TEGRA_PINGROUP_LD1,
-	TEGRA_PINGROUP_LD10,
-	TEGRA_PINGROUP_LD11,
-	TEGRA_PINGROUP_LD12,
-	TEGRA_PINGROUP_LD13,
-	TEGRA_PINGROUP_LD14,
-	TEGRA_PINGROUP_LD15,
-	TEGRA_PINGROUP_LD16,
-	TEGRA_PINGROUP_LD17,
-	TEGRA_PINGROUP_LD2,
-	TEGRA_PINGROUP_LD3,
-	TEGRA_PINGROUP_LD4,
-	TEGRA_PINGROUP_LD5,
-	TEGRA_PINGROUP_LD6,
-	TEGRA_PINGROUP_LD7,
-	TEGRA_PINGROUP_LD8,
-	TEGRA_PINGROUP_LD9,
-	TEGRA_PINGROUP_LDC,
-	TEGRA_PINGROUP_LDI,
-	TEGRA_PINGROUP_LHP0,
-	TEGRA_PINGROUP_LHP1,
-	TEGRA_PINGROUP_LHP2,
-	TEGRA_PINGROUP_LHS,
-	TEGRA_PINGROUP_LM0,
-	TEGRA_PINGROUP_LM1,
-	TEGRA_PINGROUP_LPP,
-	TEGRA_PINGROUP_LPW0,
-	TEGRA_PINGROUP_LPW1,
-	TEGRA_PINGROUP_LPW2,
-	TEGRA_PINGROUP_LSC0,
-	TEGRA_PINGROUP_LSC1,
-	TEGRA_PINGROUP_LSCK,
-	TEGRA_PINGROUP_LSDA,
-	TEGRA_PINGROUP_LSDI,
-	TEGRA_PINGROUP_LSPI,
-	TEGRA_PINGROUP_LVP0,
-	TEGRA_PINGROUP_LVP1,
-	TEGRA_PINGROUP_LVS,
-	TEGRA_PINGROUP_OWC,
-	TEGRA_PINGROUP_PMC,
-	TEGRA_PINGROUP_PTA,
-	TEGRA_PINGROUP_RM,
-	TEGRA_PINGROUP_SDB,
-	TEGRA_PINGROUP_SDC,
-	TEGRA_PINGROUP_SDD,
-	TEGRA_PINGROUP_SDIO1,
-	TEGRA_PINGROUP_SLXA,
-	TEGRA_PINGROUP_SLXC,
-	TEGRA_PINGROUP_SLXD,
-	TEGRA_PINGROUP_SLXK,
-	TEGRA_PINGROUP_SPDI,
-	TEGRA_PINGROUP_SPDO,
-	TEGRA_PINGROUP_SPIA,
-	TEGRA_PINGROUP_SPIB,
-	TEGRA_PINGROUP_SPIC,
-	TEGRA_PINGROUP_SPID,
-	TEGRA_PINGROUP_SPIE,
-	TEGRA_PINGROUP_SPIF,
-	TEGRA_PINGROUP_SPIG,
-	TEGRA_PINGROUP_SPIH,
-	TEGRA_PINGROUP_UAA,
-	TEGRA_PINGROUP_UAB,
-	TEGRA_PINGROUP_UAC,
-	TEGRA_PINGROUP_UAD,
-	TEGRA_PINGROUP_UCA,
-	TEGRA_PINGROUP_UCB,
-	TEGRA_PINGROUP_UDA,
-	/* these pin groups only have pullup and pull down control */
-	TEGRA_PINGROUP_CK32,
-	TEGRA_PINGROUP_DDRC,
-	TEGRA_PINGROUP_PMCA,
-	TEGRA_PINGROUP_PMCB,
-	TEGRA_PINGROUP_PMCC,
-	TEGRA_PINGROUP_PMCD,
-	TEGRA_PINGROUP_PMCE,
-	TEGRA_PINGROUP_XM2C,
-	TEGRA_PINGROUP_XM2D,
-	TEGRA_MAX_PINGROUP,
-};
-
 enum tegra_mux_func {
 	TEGRA_MUX_RSVD = 0x8000,
 	TEGRA_MUX_RSVD1 = 0x8000,
 	TEGRA_MUX_RSVD2 = 0x8001,
 	TEGRA_MUX_RSVD3 = 0x8002,
 	TEGRA_MUX_RSVD4 = 0x8003,
+	TEGRA_MUX_INVALID = 0x4000,
 	TEGRA_MUX_NONE = -1,
 	TEGRA_MUX_AHB_CLK,
 	TEGRA_MUX_APB_CLK,
@@ -205,6 +86,50 @@ enum tegra_mux_func {
 	TEGRA_MUX_VI,
 	TEGRA_MUX_VI_SENSOR_CLK,
 	TEGRA_MUX_XIO,
+	TEGRA_MUX_BLINK,
+	TEGRA_MUX_CEC,
+	TEGRA_MUX_CLK12,
+	TEGRA_MUX_DAP,
+	TEGRA_MUX_DAPSDMMC2,
+	TEGRA_MUX_DDR,
+	TEGRA_MUX_DEV3,
+	TEGRA_MUX_DTV,
+	TEGRA_MUX_VI_ALT1,
+	TEGRA_MUX_VI_ALT2,
+	TEGRA_MUX_VI_ALT3,
+	TEGRA_MUX_EMC_DLL,
+	TEGRA_MUX_EXTPERIPH1,
+	TEGRA_MUX_EXTPERIPH2,
+	TEGRA_MUX_EXTPERIPH3,
+	TEGRA_MUX_GMI_ALT,
+	TEGRA_MUX_HDA,
+	TEGRA_MUX_HSI,
+	TEGRA_MUX_I2C4,
+	TEGRA_MUX_I2C5,
+	TEGRA_MUX_I2CPWR,
+	TEGRA_MUX_I2S0,
+	TEGRA_MUX_I2S1,
+	TEGRA_MUX_I2S2,
+	TEGRA_MUX_I2S3,
+	TEGRA_MUX_I2S4,
+	TEGRA_MUX_NAND_ALT,
+	TEGRA_MUX_POPSDIO4,
+	TEGRA_MUX_POPSDMMC4,
+	TEGRA_MUX_PWM0,
+	TEGRA_MUX_PWM1,
+	TEGRA_MUX_PWM2,
+	TEGRA_MUX_PWM3,
+	TEGRA_MUX_SATA,
+	TEGRA_MUX_SPI5,
+	TEGRA_MUX_SPI6,
+	TEGRA_MUX_SYSCLK,
+	TEGRA_MUX_VGP1,
+	TEGRA_MUX_VGP2,
+	TEGRA_MUX_VGP3,
+	TEGRA_MUX_VGP4,
+	TEGRA_MUX_VGP5,
+	TEGRA_MUX_VGP6,
+	TEGRA_MUX_SAFE,
 	TEGRA_MAX_MUX,
 };
 
@@ -219,8 +144,31 @@ enum tegra_tristate {
 	TEGRA_TRI_TRISTATE = 1,
 };
 
+enum tegra_pin_io {
+	TEGRA_PIN_OUTPUT = 0,
+	TEGRA_PIN_INPUT = 1,
+};
+
+enum tegra_vddio {
+	TEGRA_VDDIO_BB = 0,
+	TEGRA_VDDIO_LCD,
+	TEGRA_VDDIO_VI,
+	TEGRA_VDDIO_UART,
+	TEGRA_VDDIO_DDR,
+	TEGRA_VDDIO_NAND,
+	TEGRA_VDDIO_SYS,
+	TEGRA_VDDIO_AUDIO,
+	TEGRA_VDDIO_SD,
+	TEGRA_VDDIO_CAM,
+	TEGRA_VDDIO_GMI,
+	TEGRA_VDDIO_PEXCTL,
+	TEGRA_VDDIO_SDMMC1,
+	TEGRA_VDDIO_SDMMC3,
+	TEGRA_VDDIO_SDMMC4,
+};
+
 struct tegra_pingroup_config {
-	enum tegra_pingroup	pingroup;
+	int pingroup;
 	enum tegra_mux_func	func;
 	enum tegra_pullupdown	pupd;
 	enum tegra_tristate	tristate;
@@ -270,38 +218,6 @@ enum tegra_pull_strength {
 	TEGRA_MAX_PULL,
 };
 
-enum tegra_drive_pingroup {
-	TEGRA_DRIVE_PINGROUP_AO1 = 0,
-	TEGRA_DRIVE_PINGROUP_AO2,
-	TEGRA_DRIVE_PINGROUP_AT1,
-	TEGRA_DRIVE_PINGROUP_AT2,
-	TEGRA_DRIVE_PINGROUP_CDEV1,
-	TEGRA_DRIVE_PINGROUP_CDEV2,
-	TEGRA_DRIVE_PINGROUP_CSUS,
-	TEGRA_DRIVE_PINGROUP_DAP1,
-	TEGRA_DRIVE_PINGROUP_DAP2,
-	TEGRA_DRIVE_PINGROUP_DAP3,
-	TEGRA_DRIVE_PINGROUP_DAP4,
-	TEGRA_DRIVE_PINGROUP_DBG,
-	TEGRA_DRIVE_PINGROUP_LCD1,
-	TEGRA_DRIVE_PINGROUP_LCD2,
-	TEGRA_DRIVE_PINGROUP_SDMMC2,
-	TEGRA_DRIVE_PINGROUP_SDMMC3,
-	TEGRA_DRIVE_PINGROUP_SPI,
-	TEGRA_DRIVE_PINGROUP_UAA,
-	TEGRA_DRIVE_PINGROUP_UAB,
-	TEGRA_DRIVE_PINGROUP_UART2,
-	TEGRA_DRIVE_PINGROUP_UART3,
-	TEGRA_DRIVE_PINGROUP_VI1,
-	TEGRA_DRIVE_PINGROUP_VI2,
-	TEGRA_DRIVE_PINGROUP_XM2A,
-	TEGRA_DRIVE_PINGROUP_XM2C,
-	TEGRA_DRIVE_PINGROUP_XM2D,
-	TEGRA_DRIVE_PINGROUP_XM2CLK,
-	TEGRA_DRIVE_PINGROUP_MEMCOMP,
-	TEGRA_MAX_DRIVE_PINGROUP,
-};
-
 enum tegra_drive {
 	TEGRA_DRIVE_DIV_8 = 0,
 	TEGRA_DRIVE_DIV_4,
@@ -321,7 +237,7 @@ enum tegra_schmitt {
 };
 
 struct tegra_drive_pingroup_config {
-	enum tegra_drive_pingroup pingroup;
+	int pingroup;
 	enum tegra_hsm hsm;
 	enum tegra_schmitt schmitt;
 	enum tegra_drive drive;
@@ -331,18 +247,56 @@ struct tegra_drive_pingroup_config {
 	enum tegra_slew slew_falling;
 };
 
-int tegra_pinmux_set_func(enum tegra_pingroup pg, enum tegra_mux_func func);
-int tegra_pinmux_set_tristate(enum tegra_pingroup pg, enum tegra_tristate tristate);
-int tegra_pinmux_set_pullupdown(enum tegra_pingroup pg, enum tegra_pullupdown pupd);
+struct tegra_drive_pingroup_desc {
+	const char *name;
+	s16 reg_bank;
+	s16 reg;
+};
 
-void tegra_pinmux_config_pingroup(enum tegra_pingroup pingroup,
-	enum tegra_mux_func func, enum tegra_pullupdown pupd,
-	enum tegra_tristate tristate);
+struct tegra_pingroup_desc {
+	const char *name;
+	int funcs[4];
+	int func_safe;
+	int vddio;
+	enum tegra_pin_io io_default;
+	s16 tri_bank;	/* Register bank the tri_reg exists within */
+	s16 mux_bank;	/* Register bank the mux_reg exists within */
+	s16 pupd_bank;	/* Register bank the pupd_reg exists within */
+	s16 tri_reg; 	/* offset into the TRISTATE_REG_* register bank */
+	s16 mux_reg;	/* offset into the PIN_MUX_CTL_* register bank */
+	s16 pupd_reg;	/* offset into the PULL_UPDOWN_REG_* register bank */
+	s8 tri_bit; 	/* offset into the TRISTATE_REG_* register bit */
+	s8 mux_bit;	/* offset into the PIN_MUX_CTL_* register bit */
+	s8 pupd_bit;	/* offset into the PULL_UPDOWN_REG_* register bit */
+	s8 lock_bit;	/* offset of the LOCK bit into mux register bit */
+	s8 od_bit;	/* offset of the OD bit into mux register bit */
+	s8 ioreset_bit;	/* offset of the IO_RESET bit into mux register bit */
+};
 
-void tegra_pinmux_config_table(struct tegra_pingroup_config *config, int len);
+typedef void (*pinmux_init) (const struct tegra_pingroup_desc **pg,
+	int *pg_max, const struct tegra_drive_pingroup_desc **pgdrive,
+	int *pgdrive_max);
+
+void tegra20_pinmux_init(const struct tegra_pingroup_desc **pg, int *pg_max,
+	const struct tegra_drive_pingroup_desc **pgdrive, int *pgdrive_max);
+
+void tegra30_pinmux_init(const struct tegra_pingroup_desc **pg, int *pg_max,
+	const struct tegra_drive_pingroup_desc **pgdrive, int *pgdrive_max);
+
+int tegra_pinmux_set_tristate(int pg, enum tegra_tristate tristate);
+int tegra_pinmux_set_pullupdown(int pg, enum tegra_pullupdown pupd);
+
+void tegra_pinmux_config_table(const struct tegra_pingroup_config *config,
+	int len);
 
 void tegra_drive_pinmux_config_table(struct tegra_drive_pingroup_config *config,
 	int len);
-
+void tegra_pinmux_set_safe_pinmux_table(const struct tegra_pingroup_config *config,
+	int len);
+void tegra_pinmux_config_pinmux_table(const struct tegra_pingroup_config *config,
+	int len);
+void tegra_pinmux_config_tristate_table(const struct tegra_pingroup_config *config,
+	int len, enum tegra_tristate tristate);
+void tegra_pinmux_config_pullupdown_table(const struct tegra_pingroup_config *config,
+	int len, enum tegra_pullupdown pupd);
 #endif
-

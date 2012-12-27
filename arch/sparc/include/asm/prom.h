@@ -18,9 +18,11 @@
  * 2 of the License, or (at your option) any later version.
  */
 #include <linux/types.h>
+#include <linux/of_pdt.h>
 #include <linux/proc_fs.h>
 #include <linux/mutex.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
+#include <linux/irqdomain.h>
 
 #define OF_ROOT_NODE_ADDR_CELLS_DEFAULT	2
 #define OF_ROOT_NODE_SIZE_CELLS_DEFAULT	1
@@ -54,21 +56,12 @@ struct resource;
 extern void __iomem *of_ioremap(struct resource *res, unsigned long offset, unsigned long size, char *name);
 extern void of_iounmap(struct resource *res, void __iomem *base, unsigned long size);
 
-/* These routines are here to provide compatibility with how powerpc
- * handles IRQ mapping for OF device nodes.  We precompute and permanently
- * register them in the platform_device objects, whereas powerpc computes them
- * on request.
- */
-static inline void irq_dispose_mapping(unsigned int virq)
-{
-}
-
 extern struct device_node *of_console_device;
 extern char *of_console_path;
 extern char *of_console_options;
 
-extern void (*prom_build_more)(struct device_node *dp, struct device_node ***nextp);
-extern char *build_full_name(struct device_node *dp);
+extern void irq_trans_init(struct device_node *dp);
+extern char *build_path_component(struct device_node *dp);
 
 #endif /* __KERNEL__ */
 #endif /* _SPARC_PROM_H */

@@ -19,7 +19,7 @@
 	Copyright 2000,2001 Philipp Rumpf <prumpf@mandrakesoft.com>
 
 	Added generic RNG API
-	Copyright 2006 Michael Buesch <mbuesch@freenet.de>
+	Copyright 2006 Michael Buesch <m@bues.ch>
 	Copyright 2005 (c) MontaVista Software, Inc.
 
 	Please read Documentation/hw_random.txt for details on use.
@@ -37,7 +37,6 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/sched.h>
-#include <linux/smp_lock.h>
 #include <linux/init.h>
 #include <linux/miscdevice.h>
 #include <linux/delay.h>
@@ -170,6 +169,7 @@ static const struct file_operations rng_chrdev_ops = {
 	.owner		= THIS_MODULE,
 	.open		= rng_dev_open,
 	.read		= rng_dev_read,
+	.llseek		= noop_llseek,
 };
 
 static struct miscdevice rng_miscdev = {

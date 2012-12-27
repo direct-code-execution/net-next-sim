@@ -35,7 +35,7 @@ extern int dvb_usb_af9005_debug;
 #define deb_i2c(args...)  dprintk(dvb_usb_af9005_debug,0x10,args)
 #define deb_fw(args...)   dprintk(dvb_usb_af9005_debug,0x20,args)
 
-extern int dvb_usb_af9005_led;
+extern bool dvb_usb_af9005_led;
 
 /* firmware */
 #define FW_BULKOUT_SIZE 250
@@ -3490,7 +3490,7 @@ extern u8 regmask[8];
 /* remote control decoder */
 extern int af9005_rc_decode(struct dvb_usb_device *d, u8 * data, int len,
 			    u32 * event, int *state);
-extern struct ir_scancode ir_codes_af9005_table[];
-extern int ir_codes_af9005_table_size;
+extern struct rc_map_table rc_map_af9005_table[];
+extern int rc_map_af9005_table_size;
 
 #endif

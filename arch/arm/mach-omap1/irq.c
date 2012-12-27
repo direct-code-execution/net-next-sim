@@ -35,18 +35,19 @@
  * with this program; if not, write  to the Free Software Foundation, Inc.,
  * 675 Mass Ave, Cambridge, MA 02139, USA.
  */
-
+#include <linux/gpio.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 
-#include <mach/hardware.h>
 #include <asm/irq.h>
 #include <asm/mach/irq.h>
-#include <mach/gpio.h>
+
 #include <plat/cpu.h>
+
+#include <mach/hardware.h>
 
 #define IRQ_BANK(irq) ((irq) >> 5)
 #define IRQ_BIT(irq)  ((irq) & 0x1f)
@@ -57,6 +58,7 @@ struct omap_irq_bank {
 	unsigned long wake_enable;
 };
 
+u32 omap_irq_flags;
 static unsigned int irq_bank_count;
 static struct omap_irq_bank *irq_banks;
 
@@ -70,48 +72,48 @@ static inline void irq_bank_writel(unsigned long value, int bank, int offset)
 	omap_writel(value, irq_banks[bank].base_reg + offset);
 }
 
-static void omap_ack_irq(unsigned int irq)
+static void omap_ack_irq(struct irq_data *d)
 {
-	if (irq > 31)
+	if (d->irq > 31)
 		omap_writel(0x1, OMAP_IH2_BASE + IRQ_CONTROL_REG_OFFSET);
 
 	omap_writel(0x1, OMAP_IH1_BASE + IRQ_CONTROL_REG_OFFSET);
 }
 
-static void omap_mask_irq(unsigned int irq)
+static void omap_mask_irq(struct irq_data *d)
 {
-	int bank = IRQ_BANK(irq);
+	int bank = IRQ_BANK(d->irq);
 	u32 l;
 
 	l = omap_readl(irq_banks[bank].base_reg + IRQ_MIR_REG_OFFSET);
-	l |= 1 << IRQ_BIT(irq);
+	l |= 1 << IRQ_BIT(d->irq);
 	omap_writel(l, irq_banks[bank].base_reg + IRQ_MIR_REG_OFFSET);
 }
 
-static void omap_unmask_irq(unsigned int irq)
+static void omap_unmask_irq(struct irq_data *d)
 {
-	int bank = IRQ_BANK(irq);
+	int bank = IRQ_BANK(d->irq);
 	u32 l;
 
 	l = omap_readl(irq_banks[bank].base_reg + IRQ_MIR_REG_OFFSET);
-	l &= ~(1 << IRQ_BIT(irq));
+	l &= ~(1 << IRQ_BIT(d->irq));
 	omap_writel(l, irq_banks[bank].base_reg + IRQ_MIR_REG_OFFSET);
 }
 
-static void omap_mask_ack_irq(unsigned int irq)
+static void omap_mask_ack_irq(struct irq_data *d)
 {
-	omap_mask_irq(irq);
-	omap_ack_irq(irq);
+	omap_mask_irq(d);
+	omap_ack_irq(d);
 }
 
-static int omap_wake_irq(unsigned int irq, unsigned int enable)
+static int omap_wake_irq(struct irq_data *d, unsigned int enable)
 {
-	int bank = IRQ_BANK(irq);
+	int bank = IRQ_BANK(d->irq);
 
 	if (enable)
-		irq_banks[bank].wake_enable |= IRQ_BIT(irq);
+		irq_banks[bank].wake_enable |= IRQ_BIT(d->irq);
 	else
-		irq_banks[bank].wake_enable &= ~IRQ_BIT(irq);
+		irq_banks[bank].wake_enable &= ~IRQ_BIT(d->irq);
 
 	return 0;
 }
@@ -168,34 +170,38 @@ static struct omap_irq_bank omap1610_irq_banks[] = {
 
 static struct irq_chip omap_irq_chip = {
 	.name		= "MPU",
-	.ack		= omap_mask_ack_irq,
-	.mask		= omap_mask_irq,
-	.unmask		= omap_unmask_irq,
-	.set_wake	= omap_wake_irq,
+	.irq_ack	= omap_mask_ack_irq,
+	.irq_mask	= omap_mask_irq,
+	.irq_unmask	= omap_unmask_irq,
+	.irq_set_wake	= omap_wake_irq,
 };
 
-void __init omap_init_irq(void)
+void __init omap1_init_irq(void)
 {
 	int i, j;
 
 #if defined(CONFIG_ARCH_OMAP730) || defined(CONFIG_ARCH_OMAP850)
 	if (cpu_is_omap7xx()) {
+		omap_irq_flags = INT_7XX_IH2_IRQ;
 		irq_banks = omap7xx_irq_banks;
 		irq_bank_count = ARRAY_SIZE(omap7xx_irq_banks);
 	}
 #endif
 #ifdef CONFIG_ARCH_OMAP15XX
 	if (cpu_is_omap1510()) {
+		omap_irq_flags = INT_1510_IH2_IRQ;
 		irq_banks = omap1510_irq_banks;
 		irq_bank_count = ARRAY_SIZE(omap1510_irq_banks);
 	}
 	if (cpu_is_omap310()) {
+		omap_irq_flags = INT_1510_IH2_IRQ;
 		irq_banks = omap310_irq_banks;
 		irq_bank_count = ARRAY_SIZE(omap310_irq_banks);
 	}
 #endif
 #if defined(CONFIG_ARCH_OMAP16XX)
 	if (cpu_is_omap16xx()) {
+		omap_irq_flags = INT_1510_IH2_IRQ;
 		irq_banks = omap1610_irq_banks;
 		irq_bank_count = ARRAY_SIZE(omap1610_irq_banks);
 	}
@@ -225,8 +231,8 @@ void __init omap_init_irq(void)
 			irq_trigger = irq_banks[i].trigger_map >> IRQ_BIT(j);
 			omap_irq_set_cfg(j, 0, 0, irq_trigger);
 
-			set_irq_chip(j, &omap_irq_chip);
-			set_irq_handler(j, handle_level_irq);
+			irq_set_chip_and_handler(j, &omap_irq_chip,
+						 handle_level_irq);
 			set_irq_flags(j, IRQF_VALID);
 		}
 	}
@@ -234,9 +240,9 @@ void __init omap_init_irq(void)
 	/* Unmask level 2 handler */
 
 	if (cpu_is_omap7xx())
-		omap_unmask_irq(INT_7XX_IH2_IRQ);
+		omap_unmask_irq(irq_get_irq_data(INT_7XX_IH2_IRQ));
 	else if (cpu_is_omap15xx())
-		omap_unmask_irq(INT_1510_IH2_IRQ);
+		omap_unmask_irq(irq_get_irq_data(INT_1510_IH2_IRQ));
 	else if (cpu_is_omap16xx())
-		omap_unmask_irq(INT_1610_IH2_IRQ);
+		omap_unmask_irq(irq_get_irq_data(INT_1610_IH2_IRQ));
 }

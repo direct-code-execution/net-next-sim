@@ -204,7 +204,8 @@ ipq_build_packet_message(struct nf_queue_entry *entry, int *errp)
 	else
 		pmsg->outdev_name[0] = '\0';
 
-	if (entry->indev && entry->skb->dev) {
+	if (entry->indev && entry->skb->dev &&
+	    entry->skb->mac_header != entry->skb->network_header) {
 		pmsg->hw_type = entry->skb->dev->type;
 		pmsg->hw_addrlen = dev_parse_header(entry->skb, pmsg->hw_addr);
 	}
@@ -217,6 +218,7 @@ ipq_build_packet_message(struct nf_queue_entry *entry, int *errp)
 	return skb;
 
 nlmsg_failure:
+	kfree_skb(skb);
 	*errp = -EINVAL;
 	printk(KERN_ERR "ip6_queue: error creating packet message\n");
 	return NULL;
@@ -312,7 +314,7 @@ ipq_set_verdict(struct ipq_verdict_msg *vmsg, unsigned int len)
 {
 	struct nf_queue_entry *entry;
 
-	if (vmsg->value > NF_MAX_VERDICT)
+	if (vmsg->value > NF_MAX_VERDICT || vmsg->value == NF_STOLEN)
 		return -EINVAL;
 
 	entry = ipq_find_dequeue_entry(vmsg->id);
@@ -357,12 +359,9 @@ ipq_receive_peer(struct ipq_peer_msg *pmsg,
 		break;
 
 	case IPQM_VERDICT:
-		if (pmsg->msg.verdict.value > NF_MAX_VERDICT)
-			status = -EINVAL;
-		else
-			status = ipq_set_verdict(&pmsg->msg.verdict,
-						 len - sizeof(*pmsg));
-			break;
+		status = ipq_set_verdict(&pmsg->msg.verdict,
+					 len - sizeof(*pmsg));
+		break;
 	default:
 		status = -EINVAL;
 	}
@@ -403,8 +402,10 @@ ipq_dev_drop(int ifindex)
 static inline void
 __ipq_rcv_skb(struct sk_buff *skb)
 {
-	int status, type, pid, flags, nlmsglen, skblen;
+	int status, type, pid, flags;
+	unsigned int nlmsglen, skblen;
 	struct nlmsghdr *nlh;
+	bool enable_timestamp = false;
 
 	skblen = skb->len;
 	if (skblen < sizeof(*nlh))
@@ -431,7 +432,7 @@ __ipq_rcv_skb(struct sk_buff *skb)
 	if (type <= IPQM_BASE)
 		return;
 
-	if (security_netlink_recv(skb, CAP_NET_ADMIN))
+	if (!capable(CAP_NET_ADMIN))
 		RCV_SKB_FAIL(-EPERM);
 
 	spin_lock_bh(&queue_lock);
@@ -442,11 +443,13 @@ __ipq_rcv_skb(struct sk_buff *skb)
 			RCV_SKB_FAIL(-EBUSY);
 		}
 	} else {
-		net_enable_timestamp();
+		enable_timestamp = true;
 		peer_pid = pid;
 	}
 
 	spin_unlock_bh(&queue_lock);
+	if (enable_timestamp)
+		net_enable_timestamp();
 
 	status = ipq_receive_peer(NLMSG_DATA(nlh), type,
 				  nlmsglen - NLMSG_LENGTH(0));

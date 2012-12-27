@@ -58,7 +58,7 @@ _GLOBAL(slb_miss_kernel_load_linear)
 	li	r11,0
 BEGIN_FTR_SECTION
 	b	slb_finish_load
-END_FTR_SECTION_IFCLR(CPU_FTR_1T_SEGMENT)
+END_MMU_FTR_SECTION_IFCLR(MMU_FTR_1T_SEGMENT)
 	b	slb_finish_load_1T
 
 1:
@@ -87,7 +87,7 @@ _GLOBAL(slb_miss_kernel_load_vmemmap)
 6:
 BEGIN_FTR_SECTION
 	b	slb_finish_load
-END_FTR_SECTION_IFCLR(CPU_FTR_1T_SEGMENT)
+END_MMU_FTR_SECTION_IFCLR(MMU_FTR_1T_SEGMENT)
 	b	slb_finish_load_1T
 
 0:	/* user address: proto-VSID = context << 15 | ESID. First check
@@ -138,11 +138,11 @@ END_FTR_SECTION_IFCLR(CPU_FTR_1T_SEGMENT)
 	ld	r9,PACACONTEXTID(r13)
 BEGIN_FTR_SECTION
 	cmpldi	r10,0x1000
-END_FTR_SECTION_IFSET(CPU_FTR_1T_SEGMENT)
+END_MMU_FTR_SECTION_IFSET(MMU_FTR_1T_SEGMENT)
 	rldimi	r10,r9,USER_ESID_BITS,0
 BEGIN_FTR_SECTION
 	bge	slb_finish_load_1T
-END_FTR_SECTION_IFSET(CPU_FTR_1T_SEGMENT)
+END_MMU_FTR_SECTION_IFSET(MMU_FTR_1T_SEGMENT)
 	b	slb_finish_load
 
 8:	/* invalid EA */
@@ -217,21 +217,6 @@ slb_finish_load:
 	 * free slot first but that took too long. Unfortunately we
  	 * dont have any LRU information to help us choose a slot.
  	 */
-#ifdef CONFIG_PPC_ISERIES
-BEGIN_FW_FTR_SECTION
-	/*
-	 * On iSeries, the "bolted" stack segment can be cast out on
-	 * shared processor switch so we need to check for a miss on
-	 * it and restore it to the right slot.
-	 */
-	ld	r9,PACAKSAVE(r13)
-	clrrdi	r9,r9,28
-	clrrdi	r3,r3,28
-	li	r10,SLB_NUM_BOLTED-1	/* Stack goes in last bolted slot */
-	cmpld	r9,r3
-	beq	3f
-END_FW_FTR_SECTION_IFSET(FW_FEATURE_ISERIES)
-#endif /* CONFIG_PPC_ISERIES */
 
 7:	ld	r10,PACASTABRR(r13)
 	addi	r10,r10,1
@@ -282,7 +267,6 @@ _GLOBAL(slb_compare_rr_to_size)
 
 /*
  * Finish loading of a 1T SLB entry (for the kernel linear mapping) and return.
- * We assume legacy iSeries will never have 1T segments.
  *
  * r3 = EA, r10 = proto-VSID, r11 = flags, clobbers r9
  */

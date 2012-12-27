@@ -122,10 +122,6 @@ static int i2c_sendbytes(struct i2c_adapter *i2c_adap,
 
 	if (!i2c_wait_done(i2c_adap))
 		goto eio;
-	if (!i2c_slave_did_ack(i2c_adap)) {
-		retval = -ENXIO;
-		goto err;
-	}
 	if (i2c_debug) {
 		printk(" <W %02x %02x", msg->addr << 1, msg->buf[0]);
 		if (!(ctrl & I2C_NOSTOP))
@@ -158,7 +154,6 @@ static int i2c_sendbytes(struct i2c_adapter *i2c_adap,
 
  eio:
 	retval = -EIO;
- err:
 	if (i2c_debug)
 		printk(KERN_ERR " ERR: %d\n", retval);
 	return retval;
@@ -209,10 +204,6 @@ static int i2c_readbytes(struct i2c_adapter *i2c_adap,
 
 		if (!i2c_wait_done(i2c_adap))
 			goto eio;
-		if (cnt == 0 && !i2c_slave_did_ack(i2c_adap)) {
-			retval = -ENXIO;
-			goto err;
-		}
 		msg->buf[cnt] = cx_read(bus->reg_rdata) & 0xff;
 		if (i2c_debug) {
 			dprintk(1, " %02x", msg->buf[cnt]);
@@ -224,7 +215,6 @@ static int i2c_readbytes(struct i2c_adapter *i2c_adap,
 
  eio:
 	retval = -EIO;
- err:
 	if (i2c_debug)
 		printk(KERN_ERR " ERR: %d\n", retval);
 	return retval;
@@ -297,6 +287,7 @@ static char *i2c_devs[128] = {
 	[0x32 >> 1] = "cx24227",
 	[0x88 >> 1] = "cx25837",
 	[0x84 >> 1] = "tda8295",
+	[0x98 >> 1] = "flatiron",
 	[0xa0 >> 1] = "eeprom",
 	[0xc0 >> 1] = "tuner/mt2131/tda8275",
 	[0xc2 >> 1] = "tuner/mt2131/tda8275/xc5000/xc3028",
@@ -318,7 +309,7 @@ static void do_i2c_scan(char *name, struct i2c_client *c)
 	}
 }
 
-/* init + register i2c algo-bit adapter */
+/* init + register i2c adapter */
 int cx23885_i2c_register(struct cx23885_i2c *bus)
 {
 	struct cx23885_dev *dev = bus->dev;

@@ -17,7 +17,6 @@
 #include <linux/mm.h>
 #include <linux/init.h>
 #include <linux/serial.h>
-#include <linux/sched.h>
 #include <linux/tty.h>
 #include <linux/platform_device.h>
 #include <linux/serial_core.h>
@@ -28,13 +27,17 @@
 #include <linux/clocksource.h>
 #include <linux/clockchips.h>
 #include <linux/io.h>
+#include <linux/export.h>
 
 #include <mach/udc.h>
 #include <mach/hardware.h>
+#include <mach/io.h>
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/page.h>
 #include <asm/irq.h>
+#include <asm/sched_clock.h>
+#include <asm/system_misc.h>
 
 #include <asm/mach/map.h>
 #include <asm/mach/irq.h>
@@ -127,9 +130,9 @@ int irq_to_gpio(unsigned int irq)
 }
 EXPORT_SYMBOL(irq_to_gpio);
 
-static int ixp4xx_set_irq_type(unsigned int irq, unsigned int type)
+static int ixp4xx_set_irq_type(struct irq_data *d, unsigned int type)
 {
-	int line = irq2gpio[irq];
+	int line = irq2gpio[d->irq];
 	u32 int_style;
 	enum ixp4xx_irq_type irq_type;
 	volatile u32 *int_reg;
@@ -166,9 +169,9 @@ static int ixp4xx_set_irq_type(unsigned int irq, unsigned int type)
 	}
 
 	if (irq_type == IXP4XX_IRQ_EDGE)
-		ixp4xx_irq_edge |= (1 << irq);
+		ixp4xx_irq_edge |= (1 << d->irq);
 	else
-		ixp4xx_irq_edge &= ~(1 << irq);
+		ixp4xx_irq_edge &= ~(1 << d->irq);
 
 	if (line >= 8) {	/* pins 8-15 */
 		line -= 8;
@@ -187,22 +190,22 @@ static int ixp4xx_set_irq_type(unsigned int irq, unsigned int type)
 	*int_reg |= (int_style << (line * IXP4XX_GPIO_STYLE_SIZE));
 
 	/* Configure the line as an input */
-	gpio_line_config(irq2gpio[irq], IXP4XX_GPIO_IN);
+	gpio_line_config(irq2gpio[d->irq], IXP4XX_GPIO_IN);
 
 	return 0;
 }
 
-static void ixp4xx_irq_mask(unsigned int irq)
+static void ixp4xx_irq_mask(struct irq_data *d)
 {
-	if ((cpu_is_ixp46x() || cpu_is_ixp43x()) && irq >= 32)
-		*IXP4XX_ICMR2 &= ~(1 << (irq - 32));
+	if ((cpu_is_ixp46x() || cpu_is_ixp43x()) && d->irq >= 32)
+		*IXP4XX_ICMR2 &= ~(1 << (d->irq - 32));
 	else
-		*IXP4XX_ICMR &= ~(1 << irq);
+		*IXP4XX_ICMR &= ~(1 << d->irq);
 }
 
-static void ixp4xx_irq_ack(unsigned int irq)
+static void ixp4xx_irq_ack(struct irq_data *d)
 {
-	int line = (irq < 32) ? irq2gpio[irq] : -1;
+	int line = (d->irq < 32) ? irq2gpio[d->irq] : -1;
 
 	if (line >= 0)
 		*IXP4XX_GPIO_GPISR = (1 << line);
@@ -212,28 +215,34 @@ static void ixp4xx_irq_ack(unsigned int irq)
  * Level triggered interrupts on GPIO lines can only be cleared when the
  * interrupt condition disappears.
  */
-static void ixp4xx_irq_unmask(unsigned int irq)
+static void ixp4xx_irq_unmask(struct irq_data *d)
 {
-	if (!(ixp4xx_irq_edge & (1 << irq)))
-		ixp4xx_irq_ack(irq);
+	if (!(ixp4xx_irq_edge & (1 << d->irq)))
+		ixp4xx_irq_ack(d);
 
-	if ((cpu_is_ixp46x() || cpu_is_ixp43x()) && irq >= 32)
-		*IXP4XX_ICMR2 |= (1 << (irq - 32));
+	if ((cpu_is_ixp46x() || cpu_is_ixp43x()) && d->irq >= 32)
+		*IXP4XX_ICMR2 |= (1 << (d->irq - 32));
 	else
-		*IXP4XX_ICMR |= (1 << irq);
+		*IXP4XX_ICMR |= (1 << d->irq);
 }
 
 static struct irq_chip ixp4xx_irq_chip = {
 	.name		= "IXP4xx",
-	.ack		= ixp4xx_irq_ack,
-	.mask		= ixp4xx_irq_mask,
-	.unmask		= ixp4xx_irq_unmask,
-	.set_type	= ixp4xx_set_irq_type,
+	.irq_ack	= ixp4xx_irq_ack,
+	.irq_mask	= ixp4xx_irq_mask,
+	.irq_unmask	= ixp4xx_irq_unmask,
+	.irq_set_type	= ixp4xx_set_irq_type,
 };
 
 void __init ixp4xx_init_irq(void)
 {
 	int i = 0;
+
+	/*
+	 * ixp4xx does not implement the XScale PWRMODE register
+	 * so it must not call cpu_do_idle().
+	 */
+	disable_hlt();
 
 	/* Route all sources to IRQ instead of FIQ */
 	*IXP4XX_ICLR = 0x0;
@@ -251,8 +260,8 @@ void __init ixp4xx_init_irq(void)
 
         /* Default to all level triggered */
 	for(i = 0; i < NR_IRQS; i++) {
-		set_irq_chip(i, &ixp4xx_irq_chip);
-		set_irq_handler(i, handle_level_irq);
+		irq_set_chip_and_handler(i, &ixp4xx_irq_chip,
+					 handle_level_irq);
 		set_irq_flags(i, IRQF_VALID);
 	}
 }
@@ -399,41 +408,30 @@ void __init ixp4xx_sys_init(void)
 }
 
 /*
- * clocksource
+ * sched_clock()
  */
-static cycle_t ixp4xx_get_cycles(struct clocksource *cs)
+static u32 notrace ixp4xx_read_sched_clock(void)
 {
 	return *IXP4XX_OSTS;
 }
 
-static struct clocksource clocksource_ixp4xx = {
-	.name 		= "OSTS",
-	.rating		= 200,
-	.read		= ixp4xx_get_cycles,
-	.mask		= CLOCKSOURCE_MASK(32),
-	.shift 		= 20,
-	.flags		= CLOCK_SOURCE_IS_CONTINUOUS,
-};
+/*
+ * clocksource
+ */
 
-unsigned long ixp4xx_timer_freq = FREQ;
+static cycle_t ixp4xx_clocksource_read(struct clocksource *c)
+{
+	return *IXP4XX_OSTS;
+}
+
+unsigned long ixp4xx_timer_freq = IXP4XX_TIMER_FREQ;
 EXPORT_SYMBOL(ixp4xx_timer_freq);
 static void __init ixp4xx_clocksource_init(void)
 {
-	clocksource_ixp4xx.mult =
-		clocksource_hz2mult(ixp4xx_timer_freq,
-				    clocksource_ixp4xx.shift);
-	clocksource_register(&clocksource_ixp4xx);
-}
+	setup_sched_clock(ixp4xx_read_sched_clock, 32, ixp4xx_timer_freq);
 
-/*
- * sched_clock()
- */
-unsigned long long sched_clock(void)
-{
-	cycle_t cyc = ixp4xx_get_cycles(NULL);
-	struct clocksource *cs = &clocksource_ixp4xx;
-
-	return clocksource_cyc2ns(cyc, cs->mult, cs->shift);
+	clocksource_mmio_init(NULL, "OSTS", ixp4xx_timer_freq, 200, 32,
+			ixp4xx_clocksource_read);
 }
 
 /*
@@ -491,7 +489,7 @@ static struct clock_event_device clockevent_ixp4xx = {
 
 static void __init ixp4xx_clockevent_init(void)
 {
-	clockevent_ixp4xx.mult = div_sc(FREQ, NSEC_PER_SEC,
+	clockevent_ixp4xx.mult = div_sc(IXP4XX_TIMER_FREQ, NSEC_PER_SEC,
 					clockevent_ixp4xx.shift);
 	clockevent_ixp4xx.max_delta_ns =
 		clockevent_delta2ns(0xfffffffe, &clockevent_ixp4xx);
@@ -501,3 +499,55 @@ static void __init ixp4xx_clockevent_init(void)
 
 	clockevents_register_device(&clockevent_ixp4xx);
 }
+
+void ixp4xx_restart(char mode, const char *cmd)
+{
+	if ( 1 && mode == 's') {
+		/* Jump into ROM at address 0 */
+		soft_restart(0);
+	} else {
+		/* Use on-chip reset capability */
+
+		/* set the "key" register to enable access to
+		 * "timer" and "enable" registers
+		 */
+		*IXP4XX_OSWK = IXP4XX_WDT_KEY;
+
+		/* write 0 to the timer register for an immediate reset */
+		*IXP4XX_OSWT = 0;
+
+		*IXP4XX_OSWE = IXP4XX_WDT_RESET_ENABLE | IXP4XX_WDT_COUNT_ENABLE;
+	}
+}
+
+#ifdef CONFIG_IXP4XX_INDIRECT_PCI
+/*
+ * In the case of using indirect PCI, we simply return the actual PCI
+ * address and our read/write implementation use that to drive the
+ * access registers. If something outside of PCI is ioremap'd, we
+ * fallback to the default.
+ */
+
+static void __iomem *ixp4xx_ioremap_caller(unsigned long addr, size_t size,
+					   unsigned int mtype, void *caller)
+{
+	if (!is_pci_memory(addr))
+		return __arm_ioremap_caller(addr, size, mtype, caller);
+
+	return (void __iomem *)addr;
+}
+
+static void ixp4xx_iounmap(void __iomem *addr)
+{
+	if (!is_pci_memory((__force u32)addr))
+		__iounmap(addr);
+}
+
+void __init ixp4xx_init_early(void)
+{
+	arch_ioremap_caller = ixp4xx_ioremap_caller;
+	arch_iounmap = ixp4xx_iounmap;
+}
+#else
+void __init ixp4xx_init_early(void) {}
+#endif

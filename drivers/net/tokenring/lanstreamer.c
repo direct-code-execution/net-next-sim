@@ -127,7 +127,6 @@
 #include <net/checksum.h>
 
 #include <asm/io.h>
-#include <asm/system.h>
 
 #include "lanstreamer.h"
 
@@ -231,7 +230,7 @@ static const struct net_device_ops streamer_netdev_ops = {
 #if STREAMER_IOCTL
 	.ndo_do_ioctl		= streamer_ioctl,
 #endif
-	.ndo_set_multicast_list = streamer_set_rx_mode,
+	.ndo_set_rx_mode	= streamer_set_rx_mode,
 	.ndo_set_mac_address	= streamer_set_mac_address,
 };
 
@@ -1675,7 +1674,7 @@ drop_frame:
 			if (lan_status_diff & LSC_SOFT_ERR)
 				printk(KERN_WARNING "%s: Adapter transmitted Soft Error Report Mac Frame\n", dev->name);
 			if (lan_status_diff & LSC_TRAN_BCN)
-				printk(KERN_INFO "%s: We are tranmitting the beacon, aaah\n", dev->name);
+				printk(KERN_INFO "%s: We are transmitting the beacon, aaah\n", dev->name);
 			if (lan_status_diff & LSC_SS)
 				printk(KERN_INFO "%s: Single Station on the ring\n", dev->name);
 			if (lan_status_diff & LSC_RING_REC)

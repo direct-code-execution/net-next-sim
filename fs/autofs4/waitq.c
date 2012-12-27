@@ -56,14 +56,13 @@ void autofs4_catatonic_mode(struct autofs_sb_info *sbi)
 	mutex_unlock(&sbi->wq_mutex);
 }
 
-static int autofs4_write(struct file *file, const void *addr, int bytes)
+static int autofs4_write(struct autofs_sb_info *sbi,
+			 struct file *file, const void *addr, int bytes)
 {
 	unsigned long sigpipe, flags;
 	mm_segment_t fs;
 	const char *data = (const char *)addr;
 	ssize_t wr = 0;
-
-	/** WARNING: this is not safe for writing more than PIPE_BUF bytes! **/
 
 	sigpipe = sigismember(&current->pending.signal, SIGPIPE);
 
@@ -71,11 +70,13 @@ static int autofs4_write(struct file *file, const void *addr, int bytes)
 	fs = get_fs();
 	set_fs(KERNEL_DS);
 
+	mutex_lock(&sbi->pipe_mutex);
 	while (bytes &&
 	       (wr = file->f_op->write(file,data,bytes,&file->f_pos)) > 0) {
 		data += wr;
 		bytes -= wr;
 	}
+	mutex_unlock(&sbi->pipe_mutex);
 
 	set_fs(fs);
 
@@ -104,12 +105,19 @@ static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
 	size_t pktsz;
 
 	DPRINTK("wait id = 0x%08lx, name = %.*s, type=%d",
-		wq->wait_queue_token, wq->name.len, wq->name.name, type);
+		(unsigned long) wq->wait_queue_token, wq->name.len, wq->name.name, type);
 
 	memset(&pkt,0,sizeof pkt); /* For security reasons */
 
 	pkt.hdr.proto_version = sbi->version;
 	pkt.hdr.type = type;
+	mutex_lock(&sbi->wq_mutex);
+
+	/* Check if we have become catatonic */
+	if (sbi->catatonic) {
+		mutex_unlock(&sbi->wq_mutex);
+		return;
+	}
 	switch (type) {
 	/* Kernel protocol v4 missing and expire packets */
 	case autofs_ptype_missing:
@@ -163,22 +171,18 @@ static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
 	}
 	default:
 		printk("autofs4_notify_daemon: bad type %d!\n", type);
+		mutex_unlock(&sbi->wq_mutex);
 		return;
 	}
 
-	/* Check if we have become catatonic */
-	mutex_lock(&sbi->wq_mutex);
-	if (!sbi->catatonic) {
-		pipe = sbi->pipe;
-		get_file(pipe);
-	}
+	pipe = sbi->pipe;
+	get_file(pipe);
+
 	mutex_unlock(&sbi->wq_mutex);
 
-	if (pipe) {
-		if (autofs4_write(pipe, &pkt, pktsz))
-			autofs4_catatonic_mode(sbi);
-		fput(pipe);
-	}
+	if (autofs4_write(sbi, pipe, &pkt, pktsz))
+		autofs4_catatonic_mode(sbi);
+	fput(pipe);
 }
 
 static int autofs4_getpath(struct autofs_sb_info *sbi,
@@ -186,16 +190,26 @@ static int autofs4_getpath(struct autofs_sb_info *sbi,
 {
 	struct dentry *root = sbi->sb->s_root;
 	struct dentry *tmp;
-	char *buf = *name;
+	char *buf;
 	char *p;
-	int len = 0;
+	int len;
+	unsigned seq;
 
-	spin_lock(&dcache_lock);
+rename_retry:
+	buf = *name;
+	len = 0;
+
+	seq = read_seqbegin(&rename_lock);
+	rcu_read_lock();
+	spin_lock(&sbi->fs_lock);
 	for (tmp = dentry ; tmp != root ; tmp = tmp->d_parent)
 		len += tmp->d_name.len + 1;
 
 	if (!len || --len > NAME_MAX) {
-		spin_unlock(&dcache_lock);
+		spin_unlock(&sbi->fs_lock);
+		rcu_read_unlock();
+		if (read_seqretry(&rename_lock, seq))
+			goto rename_retry;
 		return 0;
 	}
 
@@ -208,7 +222,10 @@ static int autofs4_getpath(struct autofs_sb_info *sbi,
 		p -= tmp->d_name.len;
 		strncpy(p, tmp->d_name.name, tmp->d_name.len);
 	}
-	spin_unlock(&dcache_lock);
+	spin_unlock(&sbi->fs_lock);
+	rcu_read_unlock();
+	if (read_seqretry(&rename_lock, seq))
+		goto rename_retry;
 
 	return len;
 }
@@ -244,6 +261,9 @@ static int validate_request(struct autofs_wait_queue **wait,
 	struct autofs_wait_queue *wq;
 	struct autofs_info *ino;
 
+	if (sbi->catatonic)
+		return -ENOENT;
+
 	/* Wait in progress, continue; */
 	wq = autofs4_find_wait(sbi, qstr);
 	if (wq) {
@@ -276,6 +296,9 @@ static int validate_request(struct autofs_wait_queue **wait,
 			if (mutex_lock_interruptible(&sbi->wq_mutex))
 				return -EINTR;
 
+			if (sbi->catatonic)
+				return -ENOENT;
+
 			wq = autofs4_find_wait(sbi, qstr);
 			if (wq) {
 				*wait = wq;
@@ -296,6 +319,9 @@ static int validate_request(struct autofs_wait_queue **wait,
 	 * completed while we waited on the mutex ...
 	 */
 	if (notify == NFY_MOUNT) {
+		struct dentry *new = NULL;
+		int valid = 1;
+
 		/*
 		 * If the dentry was successfully mounted while we slept
 		 * on the wait queue mutex we can return success. If it
@@ -303,8 +329,20 @@ static int validate_request(struct autofs_wait_queue **wait,
 		 * a multi-mount with no mount at it's base) we can
 		 * continue on and create a new request.
 		 */
+		if (!IS_ROOT(dentry)) {
+			if (dentry->d_inode && d_unhashed(dentry)) {
+				struct dentry *parent = dentry->d_parent;
+				new = d_lookup(parent, &dentry->d_name);
+				if (new)
+					dentry = new;
+			}
+		}
 		if (have_submounts(dentry))
-			return 0;
+			valid = 0;
+
+		if (new)
+			dput(new);
+		return valid;
 	}
 
 	return 1;
@@ -361,7 +399,7 @@ int autofs4_wait(struct autofs_sb_info *sbi, struct dentry *dentry,
 
 	ret = validate_request(&wq, sbi, &qstr, dentry, notify);
 	if (ret <= 0) {
-		if (ret == 0)
+		if (ret != -EINTR)
 			mutex_unlock(&sbi->wq_mutex);
 		kfree(qstr.name);
 		return ret;

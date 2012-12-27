@@ -11,7 +11,7 @@
  * the Free Software Foundation; either version 2 of the License.
 */
 
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
@@ -20,10 +20,8 @@
 #include <linux/io.h>
 #include <linux/pwm.h>
 
-#include <mach/irqs.h>
 #include <mach/map.h>
 
-#include <plat/devs.h>
 #include <plat/regs-timer.h>
 
 struct pwm_device {
@@ -46,37 +44,6 @@ struct pwm_device {
 #define pwm_dbg(_pwm, msg...) dev_dbg(&(_pwm)->pdev->dev, msg)
 
 static struct clk *clk_scaler[2];
-
-/* Standard setup for a timer block. */
-
-#define TIMER_RESOURCE_SIZE (1)
-
-#define TIMER_RESOURCE(_tmr, _irq)			\
-	(struct resource [TIMER_RESOURCE_SIZE]) {	\
-		[0] = {					\
-			.start	= _irq,			\
-			.end	= _irq,			\
-			.flags	= IORESOURCE_IRQ	\
-		}					\
-	}
-
-#define DEFINE_S3C_TIMER(_tmr_no, _irq)			\
-	.name		= "s3c24xx-pwm",		\
-	.id		= _tmr_no,			\
-	.num_resources	= TIMER_RESOURCE_SIZE,		\
-	.resource	= TIMER_RESOURCE(_tmr_no, _irq),	\
-
-/* since we already have an static mapping for the timer, we do not
- * bother setting any IO resource for the base.
- */
-
-struct platform_device s3c_device_timer[] = {
-	[0] = { DEFINE_S3C_TIMER(0, IRQ_TIMER0) },
-	[1] = { DEFINE_S3C_TIMER(1, IRQ_TIMER1) },
-	[2] = { DEFINE_S3C_TIMER(2, IRQ_TIMER2) },
-	[3] = { DEFINE_S3C_TIMER(3, IRQ_TIMER3) },
-	[4] = { DEFINE_S3C_TIMER(4, IRQ_TIMER4) },
-};
 
 static inline int pwm_is_tdiv(struct pwm_device *pwm)
 {
@@ -332,6 +299,9 @@ static int s3c_pwm_probe(struct platform_device *pdev)
 		goto err_clk_tin;
 	}
 
+	clk_enable(pwm->clk);
+	clk_enable(pwm->clk_div);
+
 	local_irq_save(flags);
 
 	tcon = __raw_readl(S3C2410_TCON);
@@ -359,6 +329,8 @@ static int s3c_pwm_probe(struct platform_device *pdev)
 	return 0;
 
  err_clk_tdiv:
+	clk_disable(pwm->clk_div);
+	clk_disable(pwm->clk);
 	clk_put(pwm->clk_div);
 
  err_clk_tin:
@@ -373,6 +345,8 @@ static int __devexit s3c_pwm_remove(struct platform_device *pdev)
 {
 	struct pwm_device *pwm = platform_get_drvdata(pdev);
 
+	clk_disable(pwm->clk_div);
+	clk_disable(pwm->clk);
 	clk_put(pwm->clk_div);
 	clk_put(pwm->clk);
 	kfree(pwm);

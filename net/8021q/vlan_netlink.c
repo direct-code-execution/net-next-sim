@@ -11,6 +11,7 @@
 #include <linux/kernel.h>
 #include <linux/netdevice.h>
 #include <linux/if_vlan.h>
+#include <linux/module.h>
 #include <net/net_namespace.h>
 #include <net/netlink.h>
 #include <net/rtnetlink.h>
@@ -101,29 +102,10 @@ static int vlan_changelink(struct net_device *dev,
 	return 0;
 }
 
-static int vlan_get_tx_queues(struct net *net,
-			      struct nlattr *tb[],
-			      unsigned int *num_tx_queues,
-			      unsigned int *real_num_tx_queues)
-{
-	struct net_device *real_dev;
-
-	if (!tb[IFLA_LINK])
-		return -EINVAL;
-
-	real_dev = __dev_get_by_index(net, nla_get_u32(tb[IFLA_LINK]));
-	if (!real_dev)
-		return -ENODEV;
-
-	*num_tx_queues      = real_dev->num_tx_queues;
-	*real_num_tx_queues = real_dev->real_num_tx_queues;
-	return 0;
-}
-
 static int vlan_newlink(struct net *src_net, struct net_device *dev,
 			struct nlattr *tb[], struct nlattr *data[])
 {
-	struct vlan_dev_info *vlan = vlan_dev_info(dev);
+	struct vlan_dev_priv *vlan = vlan_dev_priv(dev);
 	struct net_device *real_dev;
 	int err;
 
@@ -167,7 +149,7 @@ static inline size_t vlan_qos_map_size(unsigned int n)
 
 static size_t vlan_get_size(const struct net_device *dev)
 {
-	struct vlan_dev_info *vlan = vlan_dev_info(dev);
+	struct vlan_dev_priv *vlan = vlan_dev_priv(dev);
 
 	return nla_total_size(2) +	/* IFLA_VLAN_ID */
 	       sizeof(struct ifla_vlan_flags) + /* IFLA_VLAN_FLAGS */
@@ -177,14 +159,14 @@ static size_t vlan_get_size(const struct net_device *dev)
 
 static int vlan_fill_info(struct sk_buff *skb, const struct net_device *dev)
 {
-	struct vlan_dev_info *vlan = vlan_dev_info(dev);
+	struct vlan_dev_priv *vlan = vlan_dev_priv(dev);
 	struct vlan_priority_tci_mapping *pm;
 	struct ifla_vlan_flags f;
 	struct ifla_vlan_qos_mapping m;
 	struct nlattr *nest;
 	unsigned int i;
 
-	NLA_PUT_U16(skb, IFLA_VLAN_ID, vlan_dev_info(dev)->vlan_id);
+	NLA_PUT_U16(skb, IFLA_VLAN_ID, vlan_dev_priv(dev)->vlan_id);
 	if (vlan->flags) {
 		f.flags = vlan->flags;
 		f.mask  = ~0;
@@ -236,8 +218,7 @@ struct rtnl_link_ops vlan_link_ops __read_mostly = {
 	.kind		= "vlan",
 	.maxtype	= IFLA_VLAN_MAX,
 	.policy		= vlan_policy,
-	.priv_size	= sizeof(struct vlan_dev_info),
-	.get_tx_queues  = vlan_get_tx_queues,
+	.priv_size	= sizeof(struct vlan_dev_priv),
 	.setup		= vlan_setup,
 	.validate	= vlan_validate,
 	.newlink	= vlan_newlink,

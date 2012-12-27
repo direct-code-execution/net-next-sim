@@ -8,6 +8,7 @@
 #include <linux/swap.h>
 #include <linux/bootmem.h>
 #include <linux/uaccess.h>
+#include <linux/export.h>
 #include <asm/bfin-global.h>
 #include <asm/pda.h>
 #include <asm/cplbinit.h>
@@ -158,5 +159,8 @@ void __init_refok free_initmem(void)
 	free_init_pages("unused kernel memory",
 			(unsigned long)(&__init_begin),
 			(unsigned long)(&__init_end));
+
+	if (memory_start == (unsigned long)(&__init_end))
+		memory_start = (unsigned long)(&__init_begin);
 #endif
 }

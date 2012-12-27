@@ -344,29 +344,10 @@ static inline void sh_rtc_setcie(struct device *dev, unsigned int enable)
 	spin_unlock_irq(&rtc->lock);
 }
 
-static int sh_rtc_ioctl(struct device *dev, unsigned int cmd, unsigned long arg)
+static int sh_rtc_alarm_irq_enable(struct device *dev, unsigned int enabled)
 {
-	struct sh_rtc *rtc = dev_get_drvdata(dev);
-	unsigned int ret = 0;
-
-	switch (cmd) {
-	case RTC_AIE_OFF:
-	case RTC_AIE_ON:
-		sh_rtc_setaie(dev, cmd == RTC_AIE_ON);
-		break;
-	case RTC_UIE_OFF:
-		rtc->periodic_freq &= ~PF_OXS;
-		sh_rtc_setcie(dev, 0);
-		break;
-	case RTC_UIE_ON:
-		rtc->periodic_freq |= PF_OXS;
-		sh_rtc_setcie(dev, 1);
-		break;
-	default:
-		ret = -ENOIOCTLCMD;
-	}
-
-	return ret;
+	sh_rtc_setaie(dev, enabled);
+	return 0;
 }
 
 static int sh_rtc_read_time(struct device *dev, struct rtc_time *tm)
@@ -596,14 +577,12 @@ static int sh_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *wkalrm)
 }
 
 static struct rtc_class_ops sh_rtc_ops = {
-	.ioctl		= sh_rtc_ioctl,
 	.read_time	= sh_rtc_read_time,
 	.set_time	= sh_rtc_set_time,
 	.read_alarm	= sh_rtc_read_alarm,
 	.set_alarm	= sh_rtc_set_alarm,
-	.irq_set_state	= sh_rtc_irq_set_state,
-	.irq_set_freq	= sh_rtc_irq_set_freq,
 	.proc		= sh_rtc_proc,
+	.alarm_irq_enable = sh_rtc_alarm_irq_enable,
 };
 
 static int __init sh_rtc_probe(struct platform_device *pdev)
@@ -687,7 +666,7 @@ static int __init sh_rtc_probe(struct platform_device *pdev)
 	if (rtc->carry_irq <= 0) {
 		/* register shared periodic/carry/alarm irq */
 		ret = request_irq(rtc->periodic_irq, sh_rtc_shared,
-				  IRQF_DISABLED, "sh-rtc", rtc);
+				  0, "sh-rtc", rtc);
 		if (unlikely(ret)) {
 			dev_err(&pdev->dev,
 				"request IRQ failed with %d, IRQ %d\n", ret,
@@ -697,7 +676,7 @@ static int __init sh_rtc_probe(struct platform_device *pdev)
 	} else {
 		/* register periodic/carry/alarm irqs */
 		ret = request_irq(rtc->periodic_irq, sh_rtc_periodic,
-				  IRQF_DISABLED, "sh-rtc period", rtc);
+				  0, "sh-rtc period", rtc);
 		if (unlikely(ret)) {
 			dev_err(&pdev->dev,
 				"request period IRQ failed with %d, IRQ %d\n",
@@ -706,7 +685,7 @@ static int __init sh_rtc_probe(struct platform_device *pdev)
 		}
 
 		ret = request_irq(rtc->carry_irq, sh_rtc_interrupt,
-				  IRQF_DISABLED, "sh-rtc carry", rtc);
+				  0, "sh-rtc carry", rtc);
 		if (unlikely(ret)) {
 			dev_err(&pdev->dev,
 				"request carry IRQ failed with %d, IRQ %d\n",
@@ -716,7 +695,7 @@ static int __init sh_rtc_probe(struct platform_device *pdev)
 		}
 
 		ret = request_irq(rtc->alarm_irq, sh_rtc_alarm,
-				  IRQF_DISABLED, "sh-rtc alarm", rtc);
+				  0, "sh-rtc alarm", rtc);
 		if (unlikely(ret)) {
 			dev_err(&pdev->dev,
 				"request alarm IRQ failed with %d, IRQ %d\n",
@@ -761,7 +740,7 @@ err_unmap:
 	clk_put(rtc->clk);
 	iounmap(rtc->regbase);
 err_badmap:
-	release_resource(rtc->res);
+	release_mem_region(rtc->res->start, rtc->regsize);
 err_badres:
 	kfree(rtc);
 
@@ -786,7 +765,7 @@ static int __exit sh_rtc_remove(struct platform_device *pdev)
 	}
 
 	iounmap(rtc->regbase);
-	release_resource(rtc->res);
+	release_mem_region(rtc->res->start, rtc->regsize);
 
 	clk_disable(rtc->clk);
 	clk_put(rtc->clk);
@@ -803,11 +782,11 @@ static void sh_rtc_set_irq_wake(struct device *dev, int enabled)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct sh_rtc *rtc = platform_get_drvdata(pdev);
 
-	set_irq_wake(rtc->periodic_irq, enabled);
+	irq_set_irq_wake(rtc->periodic_irq, enabled);
 
 	if (rtc->carry_irq > 0) {
-		set_irq_wake(rtc->carry_irq, enabled);
-		set_irq_wake(rtc->alarm_irq, enabled);
+		irq_set_irq_wake(rtc->carry_irq, enabled);
+		irq_set_irq_wake(rtc->alarm_irq, enabled);
 	}
 }
 

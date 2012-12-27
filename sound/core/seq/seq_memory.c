@@ -21,6 +21,7 @@
  */
 
 #include <linux/init.h>
+#include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <sound/core.h>
@@ -86,7 +87,7 @@ int snd_seq_dump_var_event(const struct snd_seq_event *event,
 
 	if (event->data.ext.len & SNDRV_SEQ_EXT_USRPTR) {
 		char buf[32];
-		char __user *curptr = (char __user *)event->data.ext.ptr;
+		char __user *curptr = (char __force __user *)event->data.ext.ptr;
 		while (len > 0) {
 			int size = sizeof(buf);
 			if (len < size)
@@ -157,7 +158,7 @@ int snd_seq_expand_var_event(const struct snd_seq_event *event, int count, char 
 	if (event->data.ext.len & SNDRV_SEQ_EXT_USRPTR) {
 		if (! in_kernel)
 			return -EINVAL;
-		if (copy_from_user(buf, (void __user *)event->data.ext.ptr, len))
+		if (copy_from_user(buf, (void __force __user *)event->data.ext.ptr, len))
 			return -EFAULT;
 		return newlen;
 	}
@@ -343,7 +344,7 @@ int snd_seq_event_dup(struct snd_seq_pool *pool, struct snd_seq_event *event,
 				tmp->event = src->event;
 				src = src->next;
 			} else if (is_usrptr) {
-				if (copy_from_user(&tmp->event, (char __user *)buf, size)) {
+				if (copy_from_user(&tmp->event, (char __force __user *)buf, size)) {
 					err = -EFAULT;
 					goto __error;
 				}

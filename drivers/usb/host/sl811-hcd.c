@@ -47,10 +47,10 @@
 #include <linux/usb/sl811.h>
 #include <linux/usb/hcd.h>
 #include <linux/platform_device.h>
+#include <linux/prefetch.h>
 
 #include <asm/io.h>
 #include <asm/irq.h>
-#include <asm/system.h>
 #include <asm/byteorder.h>
 #include <asm/unaligned.h>
 
@@ -70,12 +70,6 @@ MODULE_ALIAS("platform:sl811-hcd");
 
 /* for now, use only one transfer register bank */
 #undef	USE_B
-
-/* this doesn't understand urb->iso_frame_desc[], but if you had a driver
- * that just queued one ISO frame per URB then iso transfers "should" work
- * using the normal urb status fields.
- */
-#define	DISABLE_ISO
 
 // #define	QUIRK2
 #define	QUIRK3
@@ -807,7 +801,7 @@ static int sl811h_urb_enqueue(
 	int			retval;
 	struct usb_host_endpoint	*hep = urb->ep;
 
-#ifdef	DISABLE_ISO
+#ifndef CONFIG_USB_SL811_HCD_ISO
 	if (type == PIPE_ISOCHRONOUS)
 		return -ENOSPC;
 #endif
@@ -861,6 +855,7 @@ static int sl811h_urb_enqueue(
 			DBG("dev %d ep%d maxpacket %d\n",
 				udev->devnum, epnum, ep->maxpacket);
 			retval = -EINVAL;
+			kfree(ep);
 			goto fail;
 		}
 
@@ -1110,9 +1105,9 @@ sl811h_hub_descriptor (
 
 	desc->wHubCharacteristics = cpu_to_le16(temp);
 
-	/* two bitmaps:  ports removable, and legacy PortPwrCtrlMask */
-	desc->bitmap[0] = 0 << 1;
-	desc->bitmap[1] = ~0;
+	/* ports removable, and legacy PortPwrCtrlMask */
+	desc->u.hs.DeviceRemovable[0] = 0 << 1;
+	desc->u.hs.DeviceRemovable[1] = ~0;
 }
 
 static void
@@ -1636,6 +1631,9 @@ sl811h_probe(struct platform_device *dev)
 	u8			tmp, ioaddr = 0;
 	unsigned long		irqflags;
 
+	if (usb_disabled())
+		return -ENODEV;
+
 	/* basic sanity checks first.  board-specific init logic should
 	 * have initialized these three resources and probably board
 	 * specific platform_data.  we don't probe for IRQs, and do only
@@ -1733,7 +1731,7 @@ sl811h_probe(struct platform_device *dev)
 	 * Use resource IRQ flags if set by platform device setup.
 	 */
 	irqflags |= IRQF_SHARED;
-	retval = usb_add_hcd(hcd, irq, IRQF_DISABLED | irqflags);
+	retval = usb_add_hcd(hcd, irq, irqflags);
 	if (retval != 0)
 		goto err6;
 
@@ -1821,20 +1819,4 @@ struct platform_driver sl811h_driver = {
 };
 EXPORT_SYMBOL(sl811h_driver);
 
-/*-------------------------------------------------------------------------*/
-
-static int __init sl811h_init(void)
-{
-	if (usb_disabled())
-		return -ENODEV;
-
-	INFO("driver %s, %s\n", hcd_name, DRIVER_VERSION);
-	return platform_driver_register(&sl811h_driver);
-}
-module_init(sl811h_init);
-
-static void __exit sl811h_cleanup(void)
-{
-	platform_driver_unregister(&sl811h_driver);
-}
-module_exit(sl811h_cleanup);
+module_platform_driver(sl811h_driver);

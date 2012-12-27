@@ -60,7 +60,7 @@ struct atmel_ssc_mask {
  * This structure, shared between the PCM driver and the interface,
  * contains all information required by the PCM driver to perform the
  * PDC DMA operation.  All fields except dma_intr_handler() are initialized
- * by the interface.  The dms_intr_handler() pointer is set by the PCM
+ * by the interface.  The dma_intr_handler() pointer is set by the PCM
  * driver and called by the interface SSC interrupt handler if it is
  * non-NULL.
  */
@@ -73,9 +73,6 @@ struct atmel_pcm_dma_params {
 	struct snd_pcm_substream *substream;
 	void (*dma_intr_handler)(u32, struct snd_pcm_substream *);
 };
-
-extern struct snd_soc_platform atmel_soc_platform;
-
 
 /*
  * SSC register access (since ssc_writel() / ssc_readl() require literal name)

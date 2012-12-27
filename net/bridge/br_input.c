@@ -16,10 +16,15 @@
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/netfilter_bridge.h>
+#include <linux/export.h>
 #include "br_private.h"
 
 /* Bridge group multicast address 802.1d (pg 51). */
 const u8 br_group_address[ETH_ALEN] = { 0x01, 0x80, 0xc2, 0x00, 0x00, 0x00 };
+
+/* Hook for brouter */
+br_should_route_hook_t __rcu *br_should_route_hook __read_mostly;
+EXPORT_SYMBOL(br_should_route_hook);
 
 static int br_pass_frame_up(struct sk_buff *skb)
 {
@@ -56,7 +61,7 @@ int br_handle_frame_finish(struct sk_buff *skb)
 	br = p->br;
 	br_fdb_update(br, p, eth_hdr(skb)->h_source);
 
-	if (is_multicast_ether_addr(dest) &&
+	if (!is_broadcast_ether_addr(dest) && is_multicast_ether_addr(dest) &&
 	    br_multicast_rcv(br, p, skb))
 		goto drop;
 
@@ -73,10 +78,12 @@ int br_handle_frame_finish(struct sk_buff *skb)
 
 	dst = NULL;
 
-	if (is_multicast_ether_addr(dest)) {
+	if (is_broadcast_ether_addr(dest))
+		skb2 = skb;
+	else if (is_multicast_ether_addr(dest)) {
 		mdst = br_mdb_get(br, skb);
 		if (mdst || BR_INPUT_SKB_CB_MROUTERS_ONLY(skb)) {
-			if ((mdst && !hlist_unhashed(&mdst->mglist)) ||
+			if ((mdst && mdst->mglist) ||
 			    br_multicast_is_router(br))
 				skb2 = skb;
 			br_multicast_forward(mdst, skb, skb2);
@@ -94,9 +101,10 @@ int br_handle_frame_finish(struct sk_buff *skb)
 	}
 
 	if (skb) {
-		if (dst)
+		if (dst) {
+			dst->used = jiffies;
 			br_forward(dst->dst, skb, skb2);
-		else
+		} else
 			br_flood_forward(br, skb, skb2);
 	}
 
@@ -135,47 +143,75 @@ static inline int is_link_local(const unsigned char *dest)
  * Return NULL if skb is handled
  * note: already called with rcu_read_lock
  */
-struct sk_buff *br_handle_frame(struct sk_buff *skb)
+rx_handler_result_t br_handle_frame(struct sk_buff **pskb)
 {
 	struct net_bridge_port *p;
+	struct sk_buff *skb = *pskb;
 	const unsigned char *dest = eth_hdr(skb)->h_dest;
-	int (*rhook)(struct sk_buff *skb);
+	br_should_route_hook_t *rhook;
 
-	if (skb->pkt_type == PACKET_LOOPBACK)
-		return skb;
+	if (unlikely(skb->pkt_type == PACKET_LOOPBACK))
+		return RX_HANDLER_PASS;
 
 	if (!is_valid_ether_addr(eth_hdr(skb)->h_source))
 		goto drop;
 
 	skb = skb_share_check(skb, GFP_ATOMIC);
 	if (!skb)
-		return NULL;
+		return RX_HANDLER_CONSUMED;
 
 	p = br_port_get_rcu(skb->dev);
 
 	if (unlikely(is_link_local(dest))) {
-		/* Pause frames shouldn't be passed up by driver anyway */
-		if (skb->protocol == htons(ETH_P_PAUSE))
+		/*
+		 * See IEEE 802.1D Table 7-10 Reserved addresses
+		 *
+		 * Assignment		 		Value
+		 * Bridge Group Address		01-80-C2-00-00-00
+		 * (MAC Control) 802.3		01-80-C2-00-00-01
+		 * (Link Aggregation) 802.3	01-80-C2-00-00-02
+		 * 802.1X PAE address		01-80-C2-00-00-03
+		 *
+		 * 802.1AB LLDP 		01-80-C2-00-00-0E
+		 *
+		 * Others reserved for future standardization
+		 */
+		switch (dest[5]) {
+		case 0x00:	/* Bridge Group Address */
+			/* If STP is turned off,
+			   then must forward to keep loop detection */
+			if (p->br->stp_enabled == BR_NO_STP)
+				goto forward;
+			break;
+
+		case 0x01:	/* IEEE MAC (Pause) */
 			goto drop;
 
-		/* If STP is turned off, then forward */
-		if (p->br->stp_enabled == BR_NO_STP && dest[5] == 0)
-			goto forward;
+		default:
+			/* Allow selective forwarding for most other protocols */
+			if (p->br->group_fwd_mask & (1u << dest[5]))
+				goto forward;
+		}
 
+		/* Deliver packet to local host only */
 		if (NF_HOOK(NFPROTO_BRIDGE, NF_BR_LOCAL_IN, skb, skb->dev,
-			    NULL, br_handle_local_finish))
-			return NULL;	/* frame consumed by filter */
-		else
-			return skb;	/* continue processing */
+			    NULL, br_handle_local_finish)) {
+			return RX_HANDLER_CONSUMED; /* consumed by filter */
+		} else {
+			*pskb = skb;
+			return RX_HANDLER_PASS;	/* continue processing */
+		}
 	}
 
 forward:
 	switch (p->state) {
 	case BR_STATE_FORWARDING:
 		rhook = rcu_dereference(br_should_route_hook);
-		if (rhook != NULL) {
-			if (rhook(skb))
-				return skb;
+		if (rhook) {
+			if ((*rhook)(skb)) {
+				*pskb = skb;
+				return RX_HANDLER_PASS;
+			}
 			dest = eth_hdr(skb)->h_dest;
 		}
 		/* fall through */
@@ -190,5 +226,5 @@ forward:
 drop:
 		kfree_skb(skb);
 	}
-	return NULL;
+	return RX_HANDLER_CONSUMED;
 }

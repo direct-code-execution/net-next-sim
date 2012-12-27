@@ -11,7 +11,6 @@
 
 #include <linux/slab.h>
 #include <linux/mount.h>
-#include <linux/buffer_head.h>
 #include "internal.h"
 
 #define list_to_page(head) (list_entry((head)->prev, struct page, lru))
@@ -197,7 +196,7 @@ struct fscache_object *cachefiles_grab_object(struct fscache_object *_object)
 }
 
 /*
- * update the auxilliary data for an object object on disk
+ * update the auxiliary data for an object object on disk
  */
 static void cachefiles_update_object(struct fscache_object *_object)
 {

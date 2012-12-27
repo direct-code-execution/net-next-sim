@@ -24,7 +24,6 @@
 #include <linux/skbuff.h>
 #include <net/sock.h>
 #include <asm/uaccess.h>
-#include <asm/system.h>
 #include <linux/fcntl.h>
 #include <linux/mm.h>
 #include <linux/interrupt.h>
@@ -58,7 +57,7 @@ EXPORT_SYMBOL_GPL(ax25_register_pid);
 
 void ax25_protocol_release(unsigned int pid)
 {
-	struct ax25_protocol *s, *protocol;
+	struct ax25_protocol *protocol;
 
 	write_lock_bh(&protocol_list_lock);
 	protocol = protocol_list;
@@ -72,7 +71,6 @@ void ax25_protocol_release(unsigned int pid)
 
 	while (protocol != NULL && protocol->next != NULL) {
 		if (protocol->next->pid == pid) {
-			s = protocol->next;
 			protocol->next = protocol->next->next;
 			goto out;
 		}

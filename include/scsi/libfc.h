@@ -30,10 +30,13 @@
 
 #include <scsi/fc/fc_fcp.h>
 #include <scsi/fc/fc_ns.h>
+#include <scsi/fc/fc_ms.h>
 #include <scsi/fc/fc_els.h>
 #include <scsi/fc/fc_gs.h>
 
 #include <scsi/fc_frame.h>
+
+#define	FC_FC4_PROV_SIZE	(FC_TYPE_FCP + 1)	/* size of tables */
 
 /*
  * libfc error codes
@@ -50,6 +53,8 @@
  * @LPORT_ST_RPN_ID:   Register port name by ID (RPN_ID) sent
  * @LPORT_ST_RFT_ID:   Register Fibre Channel types by ID (RFT_ID) sent
  * @LPORT_ST_RFF_ID:   Register FC-4 Features by ID (RFF_ID) sent
+ * @LPORT_ST_FDMI:     Waiting for mgmt server rport to become ready
+ * @LPORT_ST_RHBA:
  * @LPORT_ST_SCR:      State Change Register (SCR) sent
  * @LPORT_ST_READY:    Ready for use
  * @LPORT_ST_LOGO:     Local port logout (LOGO) sent
@@ -64,6 +69,11 @@ enum fc_lport_state {
 	LPORT_ST_RSPN_ID,
 	LPORT_ST_RFT_ID,
 	LPORT_ST_RFF_ID,
+	LPORT_ST_FDMI,
+	LPORT_ST_RHBA,
+	LPORT_ST_RPA,
+	LPORT_ST_DHBA,
+	LPORT_ST_DPRT,
 	LPORT_ST_SCR,
 	LPORT_ST_READY,
 	LPORT_ST_LOGO,
@@ -156,6 +166,7 @@ struct fc_rport_libfc_priv {
 	#define FC_RP_FLAGS_REC_SUPPORTED	(1 << 0)
 	#define FC_RP_FLAGS_RETRY		(1 << 1)
 	#define FC_RP_STARTED			(1 << 2)
+	#define FC_RP_FLAGS_CONF_REQ		(1 << 3)
 	unsigned int	           e_d_tov;
 	unsigned int	           r_a_tov;
 };
@@ -179,6 +190,7 @@ struct fc_rport_libfc_priv {
  * @rp_mutex:       The mutex that protects the remote port
  * @retry_work:     Handle for retries
  * @event_callback: Callback when READY, FAILED or LOGO states complete
+ * @prli_count:     Count of open PRLI sessions in providers
  * @rcu:	    Structure used for freeing in an RCU-safe manner
  */
 struct fc_rport_priv {
@@ -202,7 +214,13 @@ struct fc_rport_priv {
 	struct list_head            peers;
 	struct work_struct          event_work;
 	u32			    supported_classes;
+	u16                         prli_count;
 	struct rcu_head		    rcu;
+	u16			    sp_features;
+	u8			    spp_type;
+	void			    (*lld_event_callback)(struct fc_lport *,
+						      struct fc_rport_priv *,
+						      enum fc_rport_event);
 };
 
 /**
@@ -221,8 +239,8 @@ struct fc_rport_priv {
  * @InputRequests:         Number of input requests
  * @OutputRequests:        Number of output requests
  * @ControlRequests:       Number of control requests
- * @InputMegabytes:        Number of received megabytes
- * @OutputMegabytes:       Number of transmitted megabytes
+ * @InputBytes:            Number of received bytes
+ * @OutputBytes:           Number of transmitted bytes
  * @VLinkFailureCount:     Number of virtual link failures
  * @MissDiscAdvCount:      Number of missing FIP discovery advertisement
  */
@@ -241,8 +259,8 @@ struct fcoe_dev_stats {
 	u64		InputRequests;
 	u64		OutputRequests;
 	u64		ControlRequests;
-	u64		InputMegabytes;
-	u64		OutputMegabytes;
+	u64		InputBytes;
+	u64		OutputBytes;
 	u64		VLinkFailureCount;
 	u64		MissDiscAdvCount;
 };
@@ -250,7 +268,7 @@ struct fcoe_dev_stats {
 /**
  * struct fc_seq_els_data - ELS data used for passing ELS specific responses
  * @reason: The reason for rejection
- * @explan: The explaination of the rejection
+ * @explan: The explanation of the rejection
  *
  * Mainly used by the exchange manager layer.
  */
@@ -263,7 +281,6 @@ struct fc_seq_els_data {
  * struct fc_fcp_pkt - FCP request structure (one for each scsi_cmnd request)
  * @lp:              The associated local port
  * @state:           The state of the I/O
- * @tgt_flags:       Target's flags
  * @ref_cnt:         Reference count
  * @scsi_pkt_lock:   Lock to protect the SCSI packet (must be taken before the
  *                   host_lock if both are to be held at the same time)
@@ -272,9 +289,6 @@ struct fc_seq_els_data {
  * @timer:           The command timer
  * @tm_done:         Completion indicator
  * @wait_for_comp:   Indicator to wait for completion of the I/O (in jiffies)
- * @start_time:      Timestamp indicating the start of the I/O (in jiffies)
- * @end_time:        Timestamp indicating the end of the I/O (in jiffies)
- * @last_pkt_time:   Timestamp of the last frame received (in jiffies)
  * @data_len:        The length of the data
  * @cdb_cmd:         The CDB command
  * @xfer_len:        The transfer length
@@ -295,51 +309,46 @@ struct fc_seq_els_data {
  * @recov_seq:       The sequence for REC or SRR
  */
 struct fc_fcp_pkt {
-	/* Housekeeping information */
-	struct fc_lport   *lp;
-	u16		  state;
-	u16		  tgt_flags;
-	atomic_t	  ref_cnt;
 	spinlock_t	  scsi_pkt_lock;
+	atomic_t	  ref_cnt;
+
+	/* SCSI command and data transfer information */
+	u32		  data_len;
 
 	/* SCSI I/O related information */
 	struct scsi_cmnd  *cmd;
 	struct list_head  list;
 
-	/* Timeout related information */
-	struct timer_list timer;
-	struct completion tm_done;
-	int	          wait_for_comp;
-	unsigned long	  start_time;
-	unsigned long	  end_time;
-	unsigned long	  last_pkt_time;
-
-	/* SCSI command and data transfer information */
-	u32		  data_len;
-
-	/* Transport related veriables */
-	struct fcp_cmnd   cdb_cmd;
-	size_t		  xfer_len;
-	u16		  xfer_ddp;
-	u32		  xfer_contig_end;
-	u16		  max_payload;
+	/* Housekeeping information */
+	struct fc_lport   *lp;
+	u8		  state;
 
 	/* SCSI/FCP return status */
-	u32		  io_status;
 	u8		  cdb_status;
 	u8		  status_code;
 	u8		  scsi_comp_flags;
+	u32		  io_status;
 	u32		  req_flags;
 	u32		  scsi_resid;
+
+	/* Transport related veriables */
+	size_t		  xfer_len;
+	struct fcp_cmnd   cdb_cmd;
+	u32		  xfer_contig_end;
+	u16		  max_payload;
+	u16		  xfer_ddp;
 
 	/* Associated structures */
 	struct fc_rport	  *rport;
 	struct fc_seq	  *seq_ptr;
 
-	/* Error Processing information */
-	u8		  recov_retry;
+	/* Timeout/error related information */
+	struct timer_list timer;
+	int	          wait_for_comp;
+	u32		  recov_retry;
 	struct fc_seq	  *recov_seq;
-};
+	struct completion tm_done;
+} ____cacheline_aligned_in_smp;
 
 /*
  * Structure and function definitions for managing Fibre Channel Exchanges
@@ -405,35 +414,32 @@ struct fc_seq {
  *	sequence allocation
  */
 struct fc_exch {
-	struct fc_exch_mgr  *em;
-	struct fc_exch_pool *pool;
-	u32		    state;
-	u16		    xid;
-	struct list_head    ex_list;
 	spinlock_t	    ex_lock;
 	atomic_t	    ex_refcnt;
-	struct delayed_work timeout_work;
+	enum fc_class	    class;
+	struct fc_exch_mgr  *em;
+	struct fc_exch_pool *pool;
+	struct list_head    ex_list;
 	struct fc_lport	    *lp;
+	u32		    esb_stat;
+	u8		    state;
+	u8		    fh_type;
+	u8		    seq_id;
+	u8		    encaps;
+	u16		    xid;
 	u16		    oxid;
 	u16		    rxid;
 	u32		    oid;
 	u32		    sid;
 	u32		    did;
-	u32		    esb_stat;
 	u32		    r_a_tov;
-	u8		    seq_id;
-	u8		    encaps;
 	u32		    f_ctl;
-	u8		    fh_type;
-	enum fc_class	    class;
-	struct fc_seq	    seq;
-
+	struct fc_seq       seq;
 	void		    (*resp)(struct fc_seq *, struct fc_frame *, void *);
 	void		    *arg;
-
 	void		    (*destructor)(struct fc_seq *, void *);
-
-};
+	struct delayed_work timeout_work;
+} ____cacheline_aligned_in_smp;
 #define	fc_seq_exch(sp) container_of(sp, struct fc_exch, seq)
 
 
@@ -503,6 +509,14 @@ struct libfc_function_template {
 	 */
 	int (*ddp_done)(struct fc_lport *, u16);
 	/*
+	 * Sets up the DDP context for a given exchange id on the given
+	 * scatterlist if LLD supports DDP for FCoE target.
+	 *
+	 * STATUS: OPTIONAL
+	 */
+	int (*ddp_target)(struct fc_lport *, u16, struct scatterlist *,
+			  unsigned int);
+	/*
 	 * Allow LLD to fill its own Link Error Status Block
 	 *
 	 * STATUS: OPTIONAL
@@ -517,7 +531,7 @@ struct libfc_function_template {
 			struct fc_frame *);
 
 	/*
-	 * Send an ELS response using infomation from the received frame.
+	 * Send an ELS response using information from the received frame.
 	 *
 	 * STATUS: OPTIONAL
 	 */
@@ -553,11 +567,28 @@ struct libfc_function_template {
 	struct fc_seq *(*seq_start_next)(struct fc_seq *);
 
 	/*
+	 * Set a response handler for the exchange of the sequence.
+	 *
+	 * STATUS: OPTIONAL
+	 */
+	void (*seq_set_resp)(struct fc_seq *sp,
+			     void (*resp)(struct fc_seq *, struct fc_frame *,
+					  void *),
+			     void *arg);
+
+	/*
 	 * Assign a sequence for an incoming request frame.
 	 *
 	 * STATUS: OPTIONAL
 	 */
 	struct fc_seq *(*seq_assign)(struct fc_lport *, struct fc_frame *);
+
+	/*
+	 * Release the reference on the sequence returned by seq_assign().
+	 *
+	 * STATUS: OPTIONAL
+	 */
+	void (*seq_release)(struct fc_seq *);
 
 	/*
 	 * Reset an exchange manager, completing all sequences and exchanges.
@@ -638,7 +669,7 @@ struct libfc_function_template {
 	int (*rport_logoff)(struct fc_rport_priv *);
 
 	/*
-	 * Recieve a request from a remote port.
+	 * Receive a request from a remote port.
 	 *
 	 * STATUS: OPTIONAL
 	 */
@@ -658,6 +689,15 @@ struct libfc_function_template {
 	void (*rport_destroy)(struct kref *);
 
 	/*
+	 * Callback routine after the remote port is logged in
+	 *
+	 * STATUS: OPTIONAL
+	 */
+	void (*rport_event_callback)(struct fc_lport *,
+				     struct fc_rport_priv *,
+				     enum fc_rport_event);
+
+	/*
 	 * Send a fcp cmd from fsp pkt.
 	 * Called with the SCSI host lock unlocked and irqs disabled.
 	 *
@@ -670,7 +710,7 @@ struct libfc_function_template {
 					 void *));
 
 	/*
-	 * Cleanup the FCP layer, used durring link down and reset
+	 * Cleanup the FCP layer, used during link down and reset
 	 *
 	 * STATUS: OPTIONAL
 	 */
@@ -721,7 +761,7 @@ struct libfc_function_template {
  * struct fc_disc - Discovery context
  * @retry_count:   Number of retries
  * @pending:       1 if discovery is pending, 0 if not
- * @requesting:    1 if discovery has been requested, 0 if not
+ * @requested:     1 if discovery has been requested, 0 if not
  * @seq_count:     Number of sequences used for discovery
  * @buf_len:       Length of the discovery buffer
  * @disc_id:       Discovery ID
@@ -751,11 +791,21 @@ struct fc_disc {
 			      enum fc_disc_event);
 };
 
+/*
+ * Local port notifier and events.
+ */
+extern struct blocking_notifier_head fc_lport_notifier_head;
+enum fc_lport_event {
+	FC_LPORT_EV_ADD,
+	FC_LPORT_EV_DEL,
+};
+
 /**
  * struct fc_lport - Local port
  * @host:                  The SCSI host associated with a local port
  * @ema_list:              Exchange manager anchor list
  * @dns_rdata:             The directory server remote port
+ * @ms_rdata:		   The management server remote port
  * @ptp_rdata:             Point to point remote port
  * @scsi_priv:             FCP layer internal data
  * @disc:                  Discovery context
@@ -791,14 +841,17 @@ struct fc_disc {
  * @lso_max:               The maximum large offload send size
  * @fcts:                  FC-4 type mask
  * @lp_mutex:              Mutex to protect the local port
- * @list:                  Handle for list of local ports
+ * @list:                  Linkage on list of vport peers
  * @retry_work:            Handle to local port for delayed retry context
+ * @prov:		   Pointers available for use by passive FC-4 providers
+ * @lport_list:            Linkage on module-wide list of local ports
  */
 struct fc_lport {
 	/* Associations */
 	struct Scsi_Host	       *host;
 	struct list_head	       ema_list;
 	struct fc_rport_priv	       *dns_rdata;
+	struct fc_rport_priv	       *ms_rdata;
 	struct fc_rport_priv	       *ptp_rdata;
 	void			       *scsi_priv;
 	struct fc_disc                 disc;
@@ -814,7 +867,7 @@ struct fc_lport {
 	enum fc_lport_state	       state;
 	unsigned long		       boot_time;
 	struct fc_host_statistics      host_stats;
-	struct fcoe_dev_stats	       *dev_stats;
+	struct fcoe_dev_stats __percpu *dev_stats;
 	u8			       retry_count;
 
 	/* Fabric information */
@@ -834,6 +887,7 @@ struct fc_lport {
 	u32			       does_npiv:1;
 	u32			       npiv_enabled:1;
 	u32			       point_to_multipoint:1;
+	u32			       fdmi_enabled:1;
 	u32			       mfs;
 	u8			       max_retry_count;
 	u8			       max_rport_retry_count;
@@ -848,7 +902,31 @@ struct fc_lport {
 	struct mutex                   lp_mutex;
 	struct list_head               list;
 	struct delayed_work	       retry_work;
+	void			       *prov[FC_FC4_PROV_SIZE];
+	struct list_head               lport_list;
 };
+
+/**
+ * struct fc4_prov - FC-4 provider registration
+ * @prli:               Handler for incoming PRLI
+ * @prlo:               Handler for session reset
+ * @recv:		Handler for incoming request
+ * @module:		Pointer to module.  May be NULL.
+ */
+struct fc4_prov {
+	int (*prli)(struct fc_rport_priv *, u32 spp_len,
+		    const struct fc_els_spp *spp_in,
+		    struct fc_els_spp *spp_out);
+	void (*prlo)(struct fc_rport_priv *);
+	void (*recv)(struct fc_lport *, struct fc_frame *);
+	struct module *module;
+};
+
+/*
+ * Register FC-4 provider with libfc.
+ */
+int fc_fc4_register_provider(enum fc_fh_type type, struct fc4_prov *);
+void fc_fc4_deregister_provider(enum fc_fh_type type, struct fc4_prov *);
 
 /*
  * FC_LPORT HELPER FUNCTIONS
@@ -980,6 +1058,7 @@ struct fc_lport *libfc_vport_create(struct fc_vport *, int privsize);
 struct fc_lport *fc_vport_id_lookup(struct fc_lport *, u32 port_id);
 int fc_lport_bsg_request(struct fc_bsg_job *);
 void fc_lport_set_local_id(struct fc_lport *, u32 port_id);
+void fc_lport_iterate(void (*func)(struct fc_lport *, void *), void *);
 
 /*
  * REMOTE PORT LAYER
@@ -1006,8 +1085,7 @@ void fc_fcp_destroy(struct fc_lport *);
 /*
  * SCSI INTERACTION LAYER
  *****************************/
-int fc_queuecommand(struct scsi_cmnd *,
-		    void (*done)(struct scsi_cmnd *));
+int fc_queuecommand(struct Scsi_Host *, struct scsi_cmnd *);
 int fc_eh_abort(struct scsi_cmnd *);
 int fc_eh_device_reset(struct scsi_cmnd *);
 int fc_eh_host_reset(struct scsi_cmnd *);

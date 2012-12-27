@@ -137,7 +137,7 @@
 /*          - Fix path/name for scsi_hosts.h include for 2.6 kernels         */
 /*          - Fix sort order of 7k                                           */
 /*          - Remove 3 unused "inline" functions                             */
-/* 7.12.xx  - Use STATIC functions whereever possible                        */
+/* 7.12.xx  - Use STATIC functions wherever possible                        */
 /*          - Clean up deprecated MODULE_PARM calls                          */
 /* 7.12.05  - Remove Version Matching per IBM request                        */
 /*****************************************************************************/
@@ -232,7 +232,7 @@ static int ips_detect(struct scsi_host_template *);
 static int ips_release(struct Scsi_Host *);
 static int ips_eh_abort(struct scsi_cmnd *);
 static int ips_eh_reset(struct scsi_cmnd *);
-static int ips_queue(struct scsi_cmnd *, void (*)(struct scsi_cmnd *));
+static int ips_queue(struct Scsi_Host *, struct scsi_cmnd *);
 static const char *ips_info(struct Scsi_Host *);
 static irqreturn_t do_ipsintr(int, void *);
 static int ips_hainit(ips_ha_t *);
@@ -1046,7 +1046,7 @@ static int ips_eh_reset(struct scsi_cmnd *SC)
 /*    Linux obtains io_request_lock before calling this function            */
 /*                                                                          */
 /****************************************************************************/
-static int ips_queue(struct scsi_cmnd *SC, void (*done) (struct scsi_cmnd *))
+static int ips_queue_lck(struct scsi_cmnd *SC, void (*done) (struct scsi_cmnd *))
 {
 	ips_ha_t *ha;
 	ips_passthru_t *pt;
@@ -1136,6 +1136,8 @@ static int ips_queue(struct scsi_cmnd *SC, void (*done) (struct scsi_cmnd *))
 
 	return (0);
 }
+
+static DEF_SCSI_QCMD(ips_queue)
 
 /****************************************************************************/
 /*                                                                          */
@@ -1509,14 +1511,14 @@ static int ips_is_passthru(struct scsi_cmnd *SC)
                 /* kmap_atomic() ensures addressability of the user buffer.*/
                 /* local_irq_save() protects the KM_IRQ0 address slot.     */
                 local_irq_save(flags);
-                buffer = kmap_atomic(sg_page(sg), KM_IRQ0) + sg->offset;
+                buffer = kmap_atomic(sg_page(sg)) + sg->offset;
                 if (buffer && buffer[0] == 'C' && buffer[1] == 'O' &&
                     buffer[2] == 'P' && buffer[3] == 'P') {
-                        kunmap_atomic(buffer - sg->offset, KM_IRQ0);
+                        kunmap_atomic(buffer - sg->offset);
                         local_irq_restore(flags);
                         return 1;
                 }
-                kunmap_atomic(buffer - sg->offset, KM_IRQ0);
+                kunmap_atomic(buffer - sg->offset);
                 local_irq_restore(flags);
 	}
 	return 0;
@@ -1663,7 +1665,7 @@ ips_flash_copperhead(ips_ha_t * ha, ips_passthru_t * pt, ips_scb_t * scb)
 	int datasize;
 
 	/* Trombone is the only copperhead that can do packet flash, but only
-	 * for firmware. No one said it had to make sence. */
+	 * for firmware. No one said it had to make sense. */
 	if (IPS_IS_TROMBONE(ha) && pt->CoppCP.cmd.flashfw.type == IPS_FW_IMAGE) {
 		if (ips_usrcmd(ha, pt, scb))
 			return IPS_SUCCESS;
@@ -4492,7 +4494,7 @@ ips_init_scb(ips_ha_t * ha, ips_scb_t * scb)
 /*                                                                          */
 /*   Initialize a CCB to default values                                     */
 /*                                                                          */
-/* ASSUMED to be callled from within a lock                                 */
+/* ASSUMED to be called from within a lock                                 */
 /*                                                                          */
 /****************************************************************************/
 static ips_scb_t *

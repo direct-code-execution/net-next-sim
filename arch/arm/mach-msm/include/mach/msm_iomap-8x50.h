@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2008-2010, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2008-2011 Code Aurora Forum. All rights reserved.
  * Author: Brian Swetland <swetland@google.com>
  *
  * This software is licensed under the terms of the GNU General Public
@@ -39,28 +39,18 @@
 #define MSM_VIC_PHYS          0xAC000000
 #define MSM_VIC_SIZE          SZ_4K
 
-#define MSM_CSR_BASE          IOMEM(0xE0001000)
-#define MSM_CSR_PHYS          0xAC100000
-#define MSM_CSR_SIZE          SZ_4K
-
-#define MSM_TMR_PHYS          MSM_CSR_PHYS
-#define MSM_TMR_BASE          MSM_CSR_BASE
-#define MSM_TMR_SIZE          SZ_4K
-
-#define MSM_GPT_BASE          MSM_TMR_BASE
-#define MSM_DGT_BASE          (MSM_TMR_BASE + 0x10)
+#define QSD8X50_CSR_PHYS      0xAC100000
+#define QSD8X50_CSR_SIZE      SZ_4K
 
 #define MSM_DMOV_BASE         IOMEM(0xE0002000)
 #define MSM_DMOV_PHYS         0xA9700000
 #define MSM_DMOV_SIZE         SZ_4K
 
-#define MSM_GPIO1_BASE        IOMEM(0xE0003000)
-#define MSM_GPIO1_PHYS        0xA9000000
-#define MSM_GPIO1_SIZE        SZ_4K
+#define QSD8X50_GPIO1_PHYS        0xA9000000
+#define QSD8X50_GPIO1_SIZE        SZ_4K
 
-#define MSM_GPIO2_BASE        IOMEM(0xE0004000)
-#define MSM_GPIO2_PHYS        0xA9100000
-#define MSM_GPIO2_SIZE        SZ_4K
+#define QSD8X50_GPIO2_PHYS        0xA9100000
+#define QSD8X50_GPIO2_SIZE        SZ_4K
 
 #define MSM_CLK_CTL_BASE      IOMEM(0xE0005000)
 #define MSM_CLK_CTL_PHYS      0xA8600000
@@ -93,18 +83,6 @@
 #define MSM_UART3_PHYS        0xA9C00000
 #define MSM_UART3_SIZE        SZ_4K
 
-#ifdef CONFIG_MSM_DEBUG_UART
-#define MSM_DEBUG_UART_BASE   0xE1000000
-#if CONFIG_MSM_DEBUG_UART == 1
-#define MSM_DEBUG_UART_PHYS   MSM_UART1_PHYS
-#elif CONFIG_MSM_DEBUG_UART == 2
-#define MSM_DEBUG_UART_PHYS   MSM_UART2_PHYS
-#elif CONFIG_MSM_DEBUG_UART == 3
-#define MSM_DEBUG_UART_PHYS   MSM_UART3_PHYS
-#endif
-#define MSM_DEBUG_UART_SIZE   SZ_4K
-#endif
-
 #define MSM_MDC_BASE	      IOMEM(0xE0200000)
 #define MSM_MDC_PHYS	      0xAA500000
 #define MSM_MDC_SIZE	      SZ_1M
@@ -132,16 +110,20 @@
 #define MSM_UART2DM_PHYS      0xA0900000
 
 
-#define MSM_SDC1_PHYS          0xA0400000
+#define MSM_SDC1_PHYS          0xA0300000
 #define MSM_SDC1_SIZE          SZ_4K
 
-#define MSM_SDC2_PHYS          0xA0500000
+#define MSM_SDC2_PHYS          0xA0400000
 #define MSM_SDC2_SIZE          SZ_4K
 
-#define MSM_SDC3_PHYS          0xA0600000
+#define MSM_SDC3_PHYS          0xA0500000
 #define MSM_SDC3_SIZE           SZ_4K
 
-#define MSM_SDC4_PHYS          0xA0700000
+#define MSM_SDC4_PHYS          0xA0600000
 #define MSM_SDC4_SIZE          SZ_4K
+
+#ifndef __ASSEMBLY__
+extern void msm_map_qsd8x50_io(void);
+#endif
 
 #endif

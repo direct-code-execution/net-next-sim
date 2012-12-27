@@ -24,18 +24,19 @@
 #include <linux/tpm.h>
 #include <linux/audit.h>
 
+#include "../integrity.h"
+
 enum ima_show_type { IMA_SHOW_BINARY, IMA_SHOW_ASCII };
 enum tpm_pcrs { TPM_PCR0 = 0, TPM_PCR8 = 8 };
 
 /* digest size for IMA, fits SHA1 or MD5 */
-#define IMA_DIGEST_SIZE		20
+#define IMA_DIGEST_SIZE		SHA1_DIGEST_SIZE
 #define IMA_EVENT_NAME_LEN_MAX	255
 
 #define IMA_HASH_BITS 9
 #define IMA_MEASURE_HTABLE_SIZE (1 << IMA_HASH_BITS)
 
 /* set during initialization */
-extern int iint_initialized;
 extern int ima_initialized;
 extern int ima_used_chip;
 extern char *ima_hash;
@@ -70,6 +71,7 @@ int ima_init(void);
 void ima_cleanup(void);
 int ima_fs_init(void);
 void ima_fs_cleanup(void);
+int ima_inode_alloc(struct inode *inode);
 int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 			   const char *op, struct inode *inode);
 int ima_calc_hash(struct file *file, char *digest);
@@ -95,40 +97,21 @@ static inline unsigned long ima_hash_key(u8 *digest)
 	return hash_long(*digest, IMA_HASH_BITS);
 }
 
-/* iint cache flags */
-#define IMA_MEASURED		1
-
-/* integrity data associated with an inode */
-struct ima_iint_cache {
-	u64 version;		/* track inode changes */
-	unsigned long flags;
-	u8 digest[IMA_DIGEST_SIZE];
-	struct mutex mutex;	/* protects: version, flags, digest */
-	long readcount;		/* measured files readcount */
-	long writecount;	/* measured files writecount */
-	long opencount;		/* opens reference count */
-	struct kref refcount;	/* ima_iint_cache reference count */
-	struct rcu_head rcu;
-};
-
 /* LIM API function definitions */
-int ima_must_measure(struct ima_iint_cache *iint, struct inode *inode,
-		     int mask, int function);
-int ima_collect_measurement(struct ima_iint_cache *iint, struct file *file);
-void ima_store_measurement(struct ima_iint_cache *iint, struct file *file,
+int ima_must_measure(struct inode *inode, int mask, int function);
+int ima_collect_measurement(struct integrity_iint_cache *iint,
+			    struct file *file);
+void ima_store_measurement(struct integrity_iint_cache *iint, struct file *file,
 			   const unsigned char *filename);
 int ima_store_template(struct ima_template_entry *entry, int violation,
 		       struct inode *inode);
-void ima_template_show(struct seq_file *m, void *e,
-		       enum ima_show_type show);
+void ima_template_show(struct seq_file *m, void *e, enum ima_show_type show);
 
-/* radix tree calls to lookup, insert, delete
+/* rbtree tree calls to lookup, insert, delete
  * integrity data associated with an inode.
  */
-struct ima_iint_cache *ima_iint_insert(struct inode *inode);
-struct ima_iint_cache *ima_iint_find_get(struct inode *inode);
-void iint_free(struct kref *kref);
-void iint_rcu_free(struct rcu_head *rcu);
+struct integrity_iint_cache *integrity_iint_insert(struct inode *inode);
+struct integrity_iint_cache *integrity_iint_find(struct inode *inode);
 
 /* IMA policy related functions */
 enum ima_hooks { FILE_CHECK = 1, FILE_MMAP, BPRM_CHECK };

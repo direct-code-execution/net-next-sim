@@ -47,7 +47,7 @@ static void cell_edac_count_ce(struct mem_ctl_info *mci, int chan, u64 ar)
 	offset = address & ~PAGE_MASK;
 	syndrome = (ar & 0x000000001fe00000ul) >> 21;
 
-	/* TODO: Decoding of the error addresss */
+	/* TODO: Decoding of the error address */
 	edac_mc_handle_ce(mci, csrow->first_page + pfn, offset,
 			  syndrome, 0, chan, "");
 }
@@ -68,7 +68,7 @@ static void cell_edac_count_ue(struct mem_ctl_info *mci, int chan, u64 ar)
 	pfn = address >> PAGE_SHIFT;
 	offset = address & ~PAGE_MASK;
 
-	/* TODO: Decoding of the error addresss */
+	/* TODO: Decoding of the error address */
 	edac_mc_handle_ue(mci, csrow->first_page + pfn, offset, 0, "");
 }
 
@@ -140,7 +140,7 @@ static void __devinit cell_edac_init_csrows(struct mem_ctl_info *mci)
 		if (of_node_to_nid(np) != priv->node)
 			continue;
 		csrow->first_page = r.start >> PAGE_SHIFT;
-		csrow->nr_pages = (r.end - r.start + 1) >> PAGE_SHIFT;
+		csrow->nr_pages = resource_size(&r) >> PAGE_SHIFT;
 		csrow->last_page = csrow->first_page + csrow->nr_pages - 1;
 		csrow->mtype = MEM_XDR;
 		csrow->edac_mode = EDAC_SECDED;

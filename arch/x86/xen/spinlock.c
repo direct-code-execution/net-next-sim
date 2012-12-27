@@ -116,9 +116,26 @@ static inline void spin_time_accum_blocked(u64 start)
 }
 #endif  /* CONFIG_XEN_DEBUG_FS */
 
+/*
+ * Size struct xen_spinlock so it's the same as arch_spinlock_t.
+ */
+#if NR_CPUS < 256
+typedef u8 xen_spinners_t;
+# define inc_spinners(xl) \
+	asm(LOCK_PREFIX " incb %0" : "+m" ((xl)->spinners) : : "memory");
+# define dec_spinners(xl) \
+	asm(LOCK_PREFIX " decb %0" : "+m" ((xl)->spinners) : : "memory");
+#else
+typedef u16 xen_spinners_t;
+# define inc_spinners(xl) \
+	asm(LOCK_PREFIX " incw %0" : "+m" ((xl)->spinners) : : "memory");
+# define dec_spinners(xl) \
+	asm(LOCK_PREFIX " decw %0" : "+m" ((xl)->spinners) : : "memory");
+#endif
+
 struct xen_spinlock {
 	unsigned char lock;		/* 0 -> free; 1 -> locked */
-	unsigned short spinners;	/* count of waiting cpus */
+	xen_spinners_t spinners;	/* count of waiting cpus */
 };
 
 static int xen_spin_is_locked(struct arch_spinlock *lock)
@@ -159,13 +176,12 @@ static inline struct xen_spinlock *spinning_lock(struct xen_spinlock *xl)
 {
 	struct xen_spinlock *prev;
 
-	prev = __get_cpu_var(lock_spinners);
-	__get_cpu_var(lock_spinners) = xl;
+	prev = __this_cpu_read(lock_spinners);
+	__this_cpu_write(lock_spinners, xl);
 
 	wmb();			/* set lock of interest before count */
 
-	asm(LOCK_PREFIX " incw %0"
-	    : "+m" (xl->spinners) : : "memory");
+	inc_spinners(xl);
 
 	return prev;
 }
@@ -176,17 +192,16 @@ static inline struct xen_spinlock *spinning_lock(struct xen_spinlock *xl)
  */
 static inline void unspinning_lock(struct xen_spinlock *xl, struct xen_spinlock *prev)
 {
-	asm(LOCK_PREFIX " decw %0"
-	    : "+m" (xl->spinners) : : "memory");
+	dec_spinners(xl);
 	wmb();			/* decrement count before restoring lock */
-	__get_cpu_var(lock_spinners) = prev;
+	__this_cpu_write(lock_spinners, prev);
 }
 
 static noinline int xen_spin_lock_slow(struct arch_spinlock *lock, bool irq_enable)
 {
 	struct xen_spinlock *xl = (struct xen_spinlock *)lock;
 	struct xen_spinlock *prev;
-	int irq = __get_cpu_var(lock_kicker_irq);
+	int irq = __this_cpu_read(lock_kicker_irq);
 	int ret;
 	u64 start;
 
@@ -224,7 +239,7 @@ static noinline int xen_spin_lock_slow(struct arch_spinlock *lock, bool irq_enab
 			goto out;
 		}
 
-		flags = __raw_local_save_flags();
+		flags = arch_local_save_flags();
 		if (irq_enable) {
 			ADD_STATS(taken_slow_irqenable, 1);
 			raw_local_irq_enable();
@@ -373,6 +388,8 @@ void xen_uninit_lock_cpu(int cpu)
 
 void __init xen_init_spinlocks(void)
 {
+	BUILD_BUG_ON(sizeof(struct xen_spinlock) > sizeof(arch_spinlock_t));
+
 	pv_lock_ops.spin_is_locked = xen_spin_is_locked;
 	pv_lock_ops.spin_is_contended = xen_spin_is_contended;
 	pv_lock_ops.spin_lock = xen_spin_lock;

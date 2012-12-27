@@ -21,7 +21,7 @@
 #include <linux/timex.h>
 #include <linux/smp.h>
 #include <linux/spinlock.h>
-#include <linux/module.h>
+#include <linux/export.h>
 
 #include <asm/cpu-features.h>
 #include <asm/div64.h>
@@ -102,7 +102,7 @@ static __init int cpu_has_mfc0_count_bug(void)
 	case CPU_R4400SC:
 	case CPU_R4400MC:
 		/*
-		 * The published errata for the R4400 upto 3.0 say the CPU
+		 * The published errata for the R4400 up to 3.0 say the CPU
 		 * has the mfc0 from count bug.
 		 */
 		if ((current_cpu_data.processor_id & 0xff) <= 0x30)

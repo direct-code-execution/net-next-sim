@@ -23,7 +23,7 @@
 #include "stb0899_priv.h"
 #include "stb0899_reg.h"
 
-inline u32 stb0899_do_div(u64 n, u32 d)
+static inline u32 stb0899_do_div(u64 n, u32 d)
 {
 	/* wrap do_div() for ease of use */
 
@@ -357,6 +357,9 @@ static enum stb0899_status stb0899_check_data(struct stb0899_state *state)
 		dataTime = 1000;
 	else
 		dataTime = 500;
+
+	/* clear previous failed END_LOOPVIT */
+	stb0899_read_reg(state, STB0899_VSTATUS);
 
 	stb0899_write_reg(state, STB0899_DSTATUS2, 0x00); /* force search loop	*/
 	while (1) {

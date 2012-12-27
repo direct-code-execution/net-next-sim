@@ -19,12 +19,13 @@
 #include <linux/string.h>
 #include <linux/io.h>
 #include <linux/spinlock.h>
+#include <linux/clkdev.h>
 
 #include <mach/hardware.h>
 
-#include <asm/clkdev.h>
 #include <asm/div64.h>
 
+#include "soc.h"
 
 struct clk {
 	struct clk	*parent;
@@ -358,8 +359,7 @@ static int calc_clk_div(struct clk *clk, unsigned long rate,
 	int i, found = 0, __div = 0, __pdiv = 0;
 
 	/* Don't exceed the maximum rate */
-	max_rate = max(max(clk_pll1.rate / 4, clk_pll2.rate / 4),
-		       clk_xtali.rate / 4);
+	max_rate = max3(clk_pll1.rate / 4, clk_pll2.rate / 4, clk_xtali.rate / 4);
 	rate = min(rate, max_rate);
 
 	/*

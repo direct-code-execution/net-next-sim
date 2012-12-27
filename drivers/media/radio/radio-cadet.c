@@ -30,7 +30,6 @@
  *		Changed API to V4L2
  */
 
-#include <linux/version.h>
 #include <linux/module.h>	/* Modules 			*/
 #include <linux/init.h>		/* Initdata			*/
 #include <linux/ioport.h>	/* request_region		*/
@@ -46,6 +45,7 @@
 MODULE_AUTHOR("Fred Gleason, Russell Kroll, Quay Lu, Donald Song, Jason Lewis, Scott McGrath, William McGrath");
 MODULE_DESCRIPTION("A driver for the ADS Cadet AM/FM/RDS radio card.");
 MODULE_LICENSE("GPL");
+MODULE_VERSION("0.3.4");
 
 static int io = -1;		/* default to isapnp activation */
 static int radio_nr = -1;
@@ -53,8 +53,6 @@ static int radio_nr = -1;
 module_param(io, int, 0);
 MODULE_PARM_DESC(io, "I/O address of Cadet card (0x330,0x332,0x334,0x336,0x338,0x33a,0x33c,0x33e)");
 module_param(radio_nr, int, 0);
-
-#define CADET_VERSION KERNEL_VERSION(0, 3, 3)
 
 #define RDS_BUFFER 256
 #define RDS_RX_FLAG 1
@@ -328,11 +326,10 @@ static ssize_t cadet_read(struct file *file, char __user *data, size_t count, lo
 	unsigned char readbuf[RDS_BUFFER];
 	int i = 0;
 
+	mutex_lock(&dev->lock);
 	if (dev->rdsstat == 0) {
-		mutex_lock(&dev->lock);
 		dev->rdsstat = 1;
 		outb(0x80, dev->io);        /* Select RDS fifo */
-		mutex_unlock(&dev->lock);
 		init_timer(&dev->readtimer);
 		dev->readtimer.function = cadet_handler;
 		dev->readtimer.data = (unsigned long)dev;
@@ -340,12 +337,15 @@ static ssize_t cadet_read(struct file *file, char __user *data, size_t count, lo
 		add_timer(&dev->readtimer);
 	}
 	if (dev->rdsin == dev->rdsout) {
+		mutex_unlock(&dev->lock);
 		if (file->f_flags & O_NONBLOCK)
 			return -EWOULDBLOCK;
 		interruptible_sleep_on(&dev->read_queue);
+		mutex_lock(&dev->lock);
 	}
 	while (i < count && dev->rdsin != dev->rdsout)
 		readbuf[i++] = dev->rdsbuf[dev->rdsout++];
+	mutex_unlock(&dev->lock);
 
 	if (copy_to_user(data, readbuf, i))
 		return -EFAULT;
@@ -359,7 +359,6 @@ static int vidioc_querycap(struct file *file, void *priv,
 	strlcpy(v->driver, "ADS Cadet", sizeof(v->driver));
 	strlcpy(v->card, "ADS Cadet", sizeof(v->card));
 	strlcpy(v->bus_info, "ISA", sizeof(v->bus_info));
-	v->version = CADET_VERSION;
 	v->capabilities = V4L2_CAP_TUNER | V4L2_CAP_RADIO |
 			  V4L2_CAP_READWRITE | V4L2_CAP_RDS_CAPTURE;
 	return 0;
@@ -374,7 +373,8 @@ static int vidioc_g_tuner(struct file *file, void *priv,
 	switch (v->index) {
 	case 0:
 		strlcpy(v->name, "FM", sizeof(v->name));
-		v->capability = V4L2_TUNER_CAP_STEREO | V4L2_TUNER_CAP_RDS;
+		v->capability = V4L2_TUNER_CAP_STEREO | V4L2_TUNER_CAP_RDS |
+			V4L2_TUNER_CAP_RDS_BLOCK_IO;
 		v->rangelow = 1400;     /* 87.5 MHz */
 		v->rangehigh = 1728;    /* 108.0 MHz */
 		v->rxsubchans = cadet_getstereo(dev);
@@ -524,9 +524,11 @@ static int cadet_open(struct file *file)
 {
 	struct cadet *dev = video_drvdata(file);
 
+	mutex_lock(&dev->lock);
 	dev->users++;
 	if (1 == dev->users)
 		init_waitqueue_head(&dev->read_queue);
+	mutex_unlock(&dev->lock);
 	return 0;
 }
 
@@ -534,11 +536,13 @@ static int cadet_release(struct file *file)
 {
 	struct cadet *dev = video_drvdata(file);
 
+	mutex_lock(&dev->lock);
 	dev->users--;
 	if (0 == dev->users) {
 		del_timer_sync(&dev->readtimer);
 		dev->rdsstat = 0;
 	}
+	mutex_unlock(&dev->lock);
 	return 0;
 }
 
@@ -558,7 +562,7 @@ static const struct v4l2_file_operations cadet_fops = {
 	.open		= cadet_open,
 	.release       	= cadet_release,
 	.read		= cadet_read,
-	.ioctl		= video_ioctl2,
+	.unlocked_ioctl	= video_ioctl2,
 	.poll		= cadet_poll,
 };
 

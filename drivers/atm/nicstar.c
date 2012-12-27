@@ -51,7 +51,7 @@
 #include <linux/idr.h>
 #include <asm/io.h>
 #include <asm/uaccess.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include "nicstar.h"
 #ifdef CONFIG_ATM_NICSTAR_USE_SUNI
 #include "suni.h"
@@ -771,7 +771,8 @@ static int __devinit ns_init_card(int i, struct pci_dev *pcidev)
 	}
 
 	/* Register device */
-	card->atmdev = atm_dev_register("nicstar", &atm_ops, -1, NULL);
+	card->atmdev = atm_dev_register("nicstar", &card->pcidev->dev, &atm_ops,
+					-1, NULL);
 	if (card->atmdev == NULL) {
 		printk("nicstar%d: can't register device.\n", i);
 		error = 17;

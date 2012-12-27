@@ -9,6 +9,7 @@
 #include <linux/types.h>
 #include <linux/pci.h>
 #include <linux/init.h>
+#include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/of_device.h>
@@ -503,8 +504,7 @@ static struct pci_pbm_info * __devinit psycho_find_sibling(u32 upa_portid)
 
 #define PSYCHO_CONFIGSPACE	0x001000000UL
 
-static int __devinit psycho_probe(struct platform_device *op,
-				  const struct of_device_id *match)
+static int __devinit psycho_probe(struct platform_device *op)
 {
 	const struct linux_prom64_registers *pr_regs;
 	struct device_node *dp = op->dev.of_node;
@@ -593,7 +593,7 @@ out_err:
 	return err;
 }
 
-static struct of_device_id __initdata psycho_match[] = {
+static const struct of_device_id psycho_match[] = {
 	{
 		.name = "pci",
 		.compatible = "pci108e,8000",
@@ -601,7 +601,7 @@ static struct of_device_id __initdata psycho_match[] = {
 	{},
 };
 
-static struct of_platform_driver psycho_driver = {
+static struct platform_driver psycho_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
 		.owner = THIS_MODULE,
@@ -612,7 +612,7 @@ static struct of_platform_driver psycho_driver = {
 
 static int __init psycho_init(void)
 {
-	return of_register_platform_driver(&psycho_driver);
+	return platform_driver_register(&psycho_driver);
 }
 
 subsys_initcall(psycho_init);

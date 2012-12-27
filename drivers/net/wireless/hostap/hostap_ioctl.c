@@ -5,6 +5,7 @@
 #include <linux/sched.h>
 #include <linux/ethtool.h>
 #include <linux/if_arp.h>
+#include <linux/module.h>
 #include <net/lib80211.h>
 
 #include "hostap_wlan.h"
@@ -1696,7 +1697,7 @@ static int prism2_request_scan(struct net_device *dev)
 		hostap_set_word(dev, HFA384X_RID_CNFROAMINGMODE,
 				HFA384X_ROAMING_FIRMWARE);
 
-	return 0;
+	return ret;
 }
 
 #else /* !PRISM2_NO_STATION_MODES */
@@ -1945,7 +1946,7 @@ static char * __prism2_translate_scan(local_info_t *local,
 }
 
 
-/* Translate scan data returned from the card to a card independant
+/* Translate scan data returned from the card to a card independent
  * format that the Wireless Tools will understand - Jean II */
 static inline int prism2_translate_scan(local_info_t *local,
 					struct iw_request_info *info,
@@ -2043,7 +2044,7 @@ static inline int prism2_ioctl_giwscan_sta(struct net_device *dev,
 		 * until results are ready for various reasons.
 		 * First, managing wait queues is complex and racy
 		 * (there may be multiple simultaneous callers).
-		 * Second, we grab some rtnetlink lock before comming
+		 * Second, we grab some rtnetlink lock before coming
 		 * here (in dev_ioctl()).
 		 * Third, the caller can wait on the Wireless Event
 		 * - Jean II */
@@ -3871,8 +3872,8 @@ static void prism2_get_drvinfo(struct net_device *dev,
 	iface = netdev_priv(dev);
 	local = iface->local;
 
-	strncpy(info->driver, "hostap", sizeof(info->driver) - 1);
-	snprintf(info->fw_version, sizeof(info->fw_version) - 1,
+	strlcpy(info->driver, "hostap", sizeof(info->driver));
+	snprintf(info->fw_version, sizeof(info->fw_version),
 		 "%d.%d.%d", (local->sta_fw_ver >> 16) & 0xff,
 		 (local->sta_fw_ver >> 8) & 0xff,
 		 local->sta_fw_ver & 0xff);

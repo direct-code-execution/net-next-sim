@@ -25,6 +25,7 @@
 #include <linux/slab.h>
 #include <linux/moduleparam.h>
 #include <linux/vmalloc.h>
+#include <linux/export.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/info.h>
@@ -253,7 +254,7 @@ static int snd_pcm_lib_preallocate_pages1(struct snd_pcm_substream *substream,
  * snd_pcm_lib_preallocate_pages - pre-allocation for the given DMA type
  * @substream: the pcm substream instance
  * @type: DMA type (SNDRV_DMA_TYPE_*)
- * @data: DMA type dependant data
+ * @data: DMA type dependent data
  * @size: the requested pre-allocation size in bytes
  * @max: the max. allowed pre-allocation size
  *
@@ -278,10 +279,10 @@ int snd_pcm_lib_preallocate_pages(struct snd_pcm_substream *substream,
 EXPORT_SYMBOL(snd_pcm_lib_preallocate_pages);
 
 /**
- * snd_pcm_lib_preallocate_pages_for_all - pre-allocation for continous memory type (all substreams)
+ * snd_pcm_lib_preallocate_pages_for_all - pre-allocation for continuous memory type (all substreams)
  * @pcm: the pcm instance
  * @type: DMA type (SNDRV_DMA_TYPE_*)
- * @data: DMA type dependant data
+ * @data: DMA type dependent data
  * @size: the requested pre-allocation size in bytes
  * @max: the max. allowed pre-allocation size
  *

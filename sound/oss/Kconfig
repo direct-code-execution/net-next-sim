@@ -22,10 +22,6 @@ config SOUND_VWSND
 	  <file:Documentation/sound/oss/vwsnd> for more info on this driver's
 	  capabilities.
 
-config SOUND_AU1550_AC97
-	tristate "Au1550/Au1200 AC97 Sound"
-	depends on SOC_AU1550 || SOC_AU1200
-
 config SOUND_MSNDCLAS
 	tristate "Support for Turtle Beach MultiSound Classic, Tahiti, Monterey"
 	depends on (m || !STANDALONE) && ISA
@@ -436,9 +432,7 @@ config SOUND_SB
 	  ALS-007 and ALS-1X0 chips (read <file:Documentation/sound/oss/ALS>) and
 	  for cards based on ESS chips (read
 	  <file:Documentation/sound/oss/ESS1868> and
-	  <file:Documentation/sound/oss/ESS>). If you have an SB AWE 32 or SB AWE
-	  64, say Y here and also to "AWE32 synth" below and read
-	  <file:Documentation/sound/oss/INSTALL.awe>. If you have an IBM Mwave
+	  <file:Documentation/sound/oss/ESS>). If you have an IBM Mwave
 	  card, say Y here and read <file:Documentation/sound/oss/mwave>.
 
 	  If you compile the driver into the kernel and don't want to use
@@ -527,7 +521,7 @@ config SC6600_CDROMBASE
 
 config SOUND_VIDC
 	tristate "VIDC 16-bit sound"
-	depends on ARM && (ARCH_ACORN || ARCH_CLPS7500)
+	depends on ARM && ARCH_ACORN
 	help
 	  16-bit support for the VIDC onboard sound hardware found on Acorn
 	  machines.
@@ -545,11 +539,3 @@ config SOUND_KAHLUA
 
 endif	# SOUND_OSS
 
-config SOUND_SH_DAC_AUDIO
-	tristate "SuperH DAC audio support"
-	depends on CPU_SH3 && HIGH_RES_TIMERS
-
-config SOUND_SH_DAC_AUDIO_CHANNEL
-	int "DAC channel"
-	default "1"
-	depends on SOUND_SH_DAC_AUDIO

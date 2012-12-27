@@ -198,7 +198,7 @@ static void free_object(struct debug_obj *obj)
 	 * initialized:
 	 */
 	if (obj_pool_free > ODEBUG_POOL_SIZE && obj_cache)
-		sched = !work_pending(&debug_obj_work);
+		sched = keventd_up() && !work_pending(&debug_obj_work);
 	hlist_add_head(&obj->node, &obj_pool);
 	obj_pool_free++;
 	obj_pool_used--;
@@ -249,14 +249,17 @@ static struct debug_bucket *get_bucket(unsigned long addr)
 
 static void debug_print_object(struct debug_obj *obj, char *msg)
 {
+	struct debug_obj_descr *descr = obj->descr;
 	static int limit;
 
-	if (limit < 5 && obj->descr != descr_test) {
+	if (limit < 5 && descr != descr_test) {
+		void *hint = descr->debug_hint ?
+			descr->debug_hint(obj->object) : NULL;
 		limit++;
 		WARN(1, KERN_ERR "ODEBUG: %s %s (active state %u) "
-				 "object type: %s\n",
+				 "object type: %s hint: %pS\n",
 			msg, obj_states[obj->state], obj->astate,
-			obj->descr->name);
+			descr->name, hint);
 	}
 	debug_objects_warnings++;
 }
@@ -265,12 +268,16 @@ static void debug_print_object(struct debug_obj *obj, char *msg)
  * Try to repair the damage, so we have a better chance to get useful
  * debug output.
  */
-static void
+static int
 debug_object_fixup(int (*fixup)(void *addr, enum debug_obj_state state),
 		   void * addr, enum debug_obj_state state)
 {
+	int fixed = 0;
+
 	if (fixup)
-		debug_objects_fixups += fixup(addr, state);
+		fixed = fixup(addr, state);
+	debug_objects_fixups += fixed;
+	return fixed;
 }
 
 static void debug_object_is_on_stack(void *addr, int onstack)
@@ -383,6 +390,9 @@ void debug_object_activate(void *addr, struct debug_obj_descr *descr)
 	struct debug_bucket *db;
 	struct debug_obj *obj;
 	unsigned long flags;
+	struct debug_obj o = { .object = addr,
+			       .state = ODEBUG_STATE_NOTAVAILABLE,
+			       .descr = descr };
 
 	if (!debug_objects_enabled)
 		return;
@@ -422,8 +432,9 @@ void debug_object_activate(void *addr, struct debug_obj_descr *descr)
 	 * let the type specific code decide whether this is
 	 * true or not.
 	 */
-	debug_object_fixup(descr->fixup_activate, addr,
-			   ODEBUG_STATE_NOTAVAILABLE);
+	if (debug_object_fixup(descr->fixup_activate, addr,
+			   ODEBUG_STATE_NOTAVAILABLE))
+		debug_print_object(&o, "activate");
 }
 
 /**
@@ -556,6 +567,44 @@ void debug_object_free(void *addr, struct debug_obj_descr *descr)
 		return;
 	}
 out_unlock:
+	raw_spin_unlock_irqrestore(&db->lock, flags);
+}
+
+/**
+ * debug_object_assert_init - debug checks when object should be init-ed
+ * @addr:	address of the object
+ * @descr:	pointer to an object specific debug description structure
+ */
+void debug_object_assert_init(void *addr, struct debug_obj_descr *descr)
+{
+	struct debug_bucket *db;
+	struct debug_obj *obj;
+	unsigned long flags;
+
+	if (!debug_objects_enabled)
+		return;
+
+	db = get_bucket((unsigned long) addr);
+
+	raw_spin_lock_irqsave(&db->lock, flags);
+
+	obj = lookup_object(addr, db);
+	if (!obj) {
+		struct debug_obj o = { .object = addr,
+				       .state = ODEBUG_STATE_NOTAVAILABLE,
+				       .descr = descr };
+
+		raw_spin_unlock_irqrestore(&db->lock, flags);
+		/*
+		 * Maybe the object is static.  Let the type specific
+		 * code decide what to do.
+		 */
+		if (debug_object_fixup(descr->fixup_assert_init, addr,
+				       ODEBUG_STATE_NOTAVAILABLE))
+			debug_print_object(&o, "assert_init");
+		return;
+	}
+
 	raw_spin_unlock_irqrestore(&db->lock, flags);
 }
 
@@ -769,17 +818,9 @@ static int __init fixup_activate(void *addr, enum debug_obj_state state)
 		if (obj->static_init == 1) {
 			debug_object_init(obj, &descr_type_test);
 			debug_object_activate(obj, &descr_type_test);
-			/*
-			 * Real code should return 0 here ! This is
-			 * not a fixup of some bad behaviour. We
-			 * merily call the debug_init function to keep
-			 * track of the object.
-			 */
-			return 1;
-		} else {
-			/* Real code needs to emit a warning here */
+			return 0;
 		}
-		return 0;
+		return 1;
 
 	case ODEBUG_STATE_ACTIVE:
 		debug_object_deactivate(obj, &descr_type_test);
@@ -918,7 +959,7 @@ static void __init debug_objects_selftest(void)
 
 	obj.static_init = 1;
 	debug_object_activate(&obj, &descr_type_test);
-	if (check_results(&obj, ODEBUG_STATE_ACTIVE, ++fixups, warnings))
+	if (check_results(&obj, ODEBUG_STATE_ACTIVE, fixups, warnings))
 		goto out;
 	debug_object_init(&obj, &descr_type_test);
 	if (check_results(&obj, ODEBUG_STATE_INIT, ++fixups, ++warnings))

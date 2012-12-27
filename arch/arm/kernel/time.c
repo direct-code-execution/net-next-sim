@@ -11,7 +11,7 @@
  *  This file contains the ARM-specific time handling details:
  *  reading the RTC at bootup, etc...
  */
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
 #include <linux/time.h>
@@ -21,29 +21,27 @@
 #include <linux/timex.h>
 #include <linux/errno.h>
 #include <linux/profile.h>
-#include <linux/sysdev.h>
+#include <linux/syscore_ops.h>
 #include <linux/timer.h>
 #include <linux/irq.h>
 
-#include <linux/mc146818rtc.h>
-
 #include <asm/leds.h>
 #include <asm/thread_info.h>
+#include <asm/sched_clock.h>
 #include <asm/stacktrace.h>
+#include <asm/mach/arch.h>
 #include <asm/mach/time.h>
 
 /*
  * Our system timer.
  */
-struct sys_timer *system_timer;
+static struct sys_timer *system_timer;
 
-#if defined(CONFIG_RTC_DRV_CMOS) || defined(CONFIG_RTC_DRV_CMOS_MODULE)
+#if defined(CONFIG_RTC_DRV_CMOS) || defined(CONFIG_RTC_DRV_CMOS_MODULE) || \
+    defined(CONFIG_NVRAM) || defined(CONFIG_NVRAM_MODULE)
 /* this needs a better home */
 DEFINE_SPINLOCK(rtc_lock);
-
-#ifdef CONFIG_RTC_DRV_CMOS_MODULE
 EXPORT_SYMBOL(rtc_lock);
-#endif
 #endif	/* pc-style 'CMOS' RTC support */
 
 /* change this if you have some constant time drift */
@@ -105,9 +103,7 @@ void timer_tick(void)
 {
 	profile_tick(CPU_PROFILING);
 	do_leds();
-	write_seqlock(&xtime_lock);
-	do_timer(1);
-	write_sequnlock(&xtime_lock);
+	xtime_update(1);
 #ifndef CONFIG_SMP
 	update_process_times(user_mode(get_irq_regs()));
 #endif
@@ -115,51 +111,42 @@ void timer_tick(void)
 #endif
 
 #if defined(CONFIG_PM) && !defined(CONFIG_GENERIC_CLOCKEVENTS)
-static int timer_suspend(struct sys_device *dev, pm_message_t state)
+static int timer_suspend(void)
 {
-	struct sys_timer *timer = container_of(dev, struct sys_timer, dev);
-
-	if (timer->suspend != NULL)
-		timer->suspend();
+	if (system_timer->suspend)
+		system_timer->suspend();
 
 	return 0;
 }
 
-static int timer_resume(struct sys_device *dev)
+static void timer_resume(void)
 {
-	struct sys_timer *timer = container_of(dev, struct sys_timer, dev);
-
-	if (timer->resume != NULL)
-		timer->resume();
-
-	return 0;
+	if (system_timer->resume)
+		system_timer->resume();
 }
 #else
 #define timer_suspend NULL
 #define timer_resume NULL
 #endif
 
-static struct sysdev_class timer_sysclass = {
-	.name		= "timer",
+static struct syscore_ops timer_syscore_ops = {
 	.suspend	= timer_suspend,
 	.resume		= timer_resume,
 };
 
-static int __init timer_init_sysfs(void)
+static int __init timer_init_syscore_ops(void)
 {
-	int ret = sysdev_class_register(&timer_sysclass);
-	if (ret == 0) {
-		system_timer->dev.cls = &timer_sysclass;
-		ret = sysdev_register(&system_timer->dev);
-	}
+	register_syscore_ops(&timer_syscore_ops);
 
-	return ret;
+	return 0;
 }
 
-device_initcall(timer_init_sysfs);
+device_initcall(timer_init_syscore_ops);
 
 void __init time_init(void)
 {
+	system_timer = machine_desc->timer;
 	system_timer->init();
+	sched_clock_postinit();
 }
 

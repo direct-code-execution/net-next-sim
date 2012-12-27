@@ -52,30 +52,37 @@ int of_mdiobus_register(struct mii_bus *mdio, struct device_node *np)
 
 	/* Loop over the child nodes and register a phy_device for each one */
 	for_each_child_of_node(np, child) {
-		const __be32 *addr;
+		const __be32 *paddr;
+		u32 addr;
 		int len;
 
 		/* A PHY must have a reg property in the range [0-31] */
-		addr = of_get_property(child, "reg", &len);
-		if (!addr || len < sizeof(*addr) || *addr >= 32 || *addr < 0) {
+		paddr = of_get_property(child, "reg", &len);
+		if (!paddr || len < sizeof(*paddr)) {
 			dev_err(&mdio->dev, "%s has invalid PHY address\n",
 				child->full_name);
 			continue;
 		}
 
-		if (mdio->irq) {
-			mdio->irq[*addr] = irq_of_parse_and_map(child, 0);
-			if (!mdio->irq[*addr])
-				mdio->irq[*addr] = PHY_POLL;
-		}
-
-		phy = get_phy_device(mdio, be32_to_cpup(addr));
-		if (!phy || IS_ERR(phy)) {
-			dev_err(&mdio->dev, "error probing PHY at address %i\n",
-				*addr);
+		addr = be32_to_cpup(paddr);
+		if (addr >= 32) {
+			dev_err(&mdio->dev, "%s PHY address %i is too large\n",
+				child->full_name, addr);
 			continue;
 		}
-		phy_scan_fixups(phy);
+
+		if (mdio->irq) {
+			mdio->irq[addr] = irq_of_parse_and_map(child, 0);
+			if (!mdio->irq[addr])
+				mdio->irq[addr] = PHY_POLL;
+		}
+
+		phy = get_phy_device(mdio, addr);
+		if (!phy || IS_ERR(phy)) {
+			dev_err(&mdio->dev, "error probing PHY at address %i\n",
+				addr);
+			continue;
+		}
 
 		/* Associate the OF node with the device structure so it
 		 * can be looked up later */
@@ -91,7 +98,7 @@ int of_mdiobus_register(struct mii_bus *mdio, struct device_node *np)
 		}
 
 		dev_dbg(&mdio->dev, "registered phy %s at address %i\n",
-			child->name, *addr);
+			child->name, addr);
 	}
 
 	return 0;
@@ -128,7 +135,7 @@ EXPORT_SYMBOL(of_phy_find_device);
  * @hndlr: Link state callback for the network device
  * @iface: PHY data interface type
  *
- * Returns a pointer to the phy_device if successfull.  NULL otherwise
+ * Returns a pointer to the phy_device if successful.  NULL otherwise
  */
 struct phy_device *of_phy_connect(struct net_device *dev,
 				  struct device_node *phy_np,
@@ -175,7 +182,7 @@ struct phy_device *of_phy_connect_fixed_link(struct net_device *dev,
 	if (!phy_id || sz < sizeof(*phy_id))
 		return NULL;
 
-	sprintf(bus_id, PHY_ID_FMT, "0", be32_to_cpu(phy_id[0]));
+	sprintf(bus_id, PHY_ID_FMT, "fixed-0", be32_to_cpu(phy_id[0]));
 
 	phy = phy_connect(dev, bus_id, hndlr, 0, iface);
 	return IS_ERR(phy) ? NULL : phy;

@@ -1,8 +1,20 @@
 #ifndef __LINUX_PAGE_CGROUP_H
 #define __LINUX_PAGE_CGROUP_H
 
+enum {
+	/* flags for mem_cgroup */
+	PCG_LOCK,  /* Lock for pc->mem_cgroup and following bits. */
+	PCG_USED, /* this object is in use. */
+	PCG_MIGRATION, /* under page migration */
+	__NR_PCG_FLAGS,
+};
+
+#ifndef __GENERATING_BOUNDS_H
+#include <generated/bounds.h>
+
 #ifdef CONFIG_CGROUP_MEM_RES_CTLR
 #include <linux/bit_spinlock.h>
+
 /*
  * Page Cgroup can be considered as an extended mem_map.
  * A page_cgroup page is associated with every page descriptor. The
@@ -13,8 +25,6 @@
 struct page_cgroup {
 	unsigned long flags;
 	struct mem_cgroup *mem_cgroup;
-	struct page *page;
-	struct list_head lru;		/* per cgroup LRU list */
 };
 
 void __meminit pgdat_page_cgroup_init(struct pglist_data *pgdat);
@@ -32,16 +42,7 @@ static inline void __init page_cgroup_init(void)
 #endif
 
 struct page_cgroup *lookup_page_cgroup(struct page *page);
-
-enum {
-	/* flags for mem_cgroup */
-	PCG_LOCK,  /* page cgroup is locked */
-	PCG_CACHE, /* charged as cache */
-	PCG_USED, /* this object is in use. */
-	PCG_ACCT_LRU, /* page has been accounted for */
-	PCG_FILE_MAPPED, /* page is accounted as "mapped" */
-	PCG_MIGRATION, /* under page migration */
-};
+struct page *lookup_cgroup_page(struct page_cgroup *pc);
 
 #define TESTPCGFLAG(uname, lname)			\
 static inline int PageCgroup##uname(struct page_cgroup *pc)	\
@@ -59,43 +60,20 @@ static inline void ClearPageCgroup##uname(struct page_cgroup *pc)	\
 static inline int TestClearPageCgroup##uname(struct page_cgroup *pc)	\
 	{ return test_and_clear_bit(PCG_##lname, &pc->flags);  }
 
-TESTPCGFLAG(Locked, LOCK)
-
-/* Cache flag is set only once (at allocation) */
-TESTPCGFLAG(Cache, CACHE)
-CLEARPCGFLAG(Cache, CACHE)
-SETPCGFLAG(Cache, CACHE)
-
 TESTPCGFLAG(Used, USED)
 CLEARPCGFLAG(Used, USED)
 SETPCGFLAG(Used, USED)
-
-SETPCGFLAG(AcctLRU, ACCT_LRU)
-CLEARPCGFLAG(AcctLRU, ACCT_LRU)
-TESTPCGFLAG(AcctLRU, ACCT_LRU)
-TESTCLEARPCGFLAG(AcctLRU, ACCT_LRU)
-
-
-SETPCGFLAG(FileMapped, FILE_MAPPED)
-CLEARPCGFLAG(FileMapped, FILE_MAPPED)
-TESTPCGFLAG(FileMapped, FILE_MAPPED)
 
 SETPCGFLAG(Migration, MIGRATION)
 CLEARPCGFLAG(Migration, MIGRATION)
 TESTPCGFLAG(Migration, MIGRATION)
 
-static inline int page_cgroup_nid(struct page_cgroup *pc)
-{
-	return page_to_nid(pc->page);
-}
-
-static inline enum zone_type page_cgroup_zid(struct page_cgroup *pc)
-{
-	return page_zonenum(pc->page);
-}
-
 static inline void lock_page_cgroup(struct page_cgroup *pc)
 {
+	/*
+	 * Don't take this lock in IRQ context.
+	 * This lock is for pc->mem_cgroup, USED, MIGRATION
+	 */
 	bit_spin_lock(PCG_LOCK, &pc->flags);
 }
 
@@ -124,7 +102,7 @@ static inline void __init page_cgroup_init_flatmem(void)
 {
 }
 
-#endif
+#endif /* CONFIG_CGROUP_MEM_RES_CTLR */
 
 #include <linux/swap.h>
 
@@ -132,7 +110,7 @@ static inline void __init page_cgroup_init_flatmem(void)
 extern unsigned short swap_cgroup_cmpxchg(swp_entry_t ent,
 					unsigned short old, unsigned short new);
 extern unsigned short swap_cgroup_record(swp_entry_t ent, unsigned short id);
-extern unsigned short lookup_swap_cgroup(swp_entry_t ent);
+extern unsigned short lookup_swap_cgroup_id(swp_entry_t ent);
 extern int swap_cgroup_swapon(int type, unsigned long max_pages);
 extern void swap_cgroup_swapoff(int type);
 #else
@@ -144,7 +122,7 @@ unsigned short swap_cgroup_record(swp_entry_t ent, unsigned short id)
 }
 
 static inline
-unsigned short lookup_swap_cgroup(swp_entry_t ent)
+unsigned short lookup_swap_cgroup_id(swp_entry_t ent)
 {
 	return 0;
 }
@@ -160,5 +138,8 @@ static inline void swap_cgroup_swapoff(int type)
 	return;
 }
 
-#endif
-#endif
+#endif /* CONFIG_CGROUP_MEM_RES_CTLR_SWAP */
+
+#endif /* !__GENERATING_BOUNDS_H */
+
+#endif /* __LINUX_PAGE_CGROUP_H */

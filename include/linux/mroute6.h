@@ -43,8 +43,10 @@ typedef unsigned short mifi_t;
 typedef	__u32		if_mask;
 #define NIFBITS (sizeof(if_mask) * 8)        /* bits per mask */
 
-#if !defined(__KERNEL__) && !defined(DIV_ROUND_UP)
+#if !defined(__KERNEL__)
+#if !defined(DIV_ROUND_UP)
 #define	DIV_ROUND_UP(x,y)	(((x) + ((y) - 1)) / (y))
+#endif
 #endif
 
 typedef struct if_set {
@@ -136,6 +138,7 @@ extern int ip6_mroute_setsockopt(struct sock *, int, char __user *, unsigned int
 extern int ip6_mroute_getsockopt(struct sock *, int, char __user *, int __user *);
 extern int ip6_mr_input(struct sk_buff *skb);
 extern int ip6mr_ioctl(struct sock *sk, int cmd, void __user *arg);
+extern int ip6mr_compat_ioctl(struct sock *sk, unsigned int cmd, void __user *arg);
 extern int ip6_mr_init(void);
 extern void ip6_mr_cleanup(void);
 #else
@@ -248,7 +251,7 @@ static inline int ip6mr_sk_done(struct sock *sk)
  * Structure used to communicate from kernel to multicast router.
  * We'll overlay the structure onto an MLD header (not an IPv6 heder like igmpmsg{}
  * used for IPv4 implementation). This is because this structure will be passed via an
- * IPv6 raw socket, on wich an application will only receiver the payload i.e the data after
+ * IPv6 raw socket, on which an application will only receiver the payload i.e the data after
  * the IPv6 header and all the extension headers. (See section 3 of RFC 3542)
  */
 

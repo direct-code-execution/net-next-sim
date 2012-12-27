@@ -26,6 +26,7 @@
 #include <linux/timer.h>
 #include <linux/slab.h>
 #include <linux/err.h>
+#include <linux/export.h>
 
 #include <scsi/fc/fc_fc2.h>
 
@@ -38,7 +39,7 @@ u16	fc_cpu_mask;		/* cpu mask for possible cpus */
 EXPORT_SYMBOL(fc_cpu_mask);
 static u16	fc_cpu_order;	/* 2's power to represent total possible cpus */
 static struct kmem_cache *fc_em_cachep;	       /* cache for exchanges */
-struct workqueue_struct *fc_exch_workqueue;
+static struct workqueue_struct *fc_exch_workqueue;
 
 /*
  * Structure and function definitions for managing Fibre Channel Exchanges
@@ -65,11 +66,15 @@ struct workqueue_struct *fc_exch_workqueue;
  * assigned range of exchanges to per cpu pool.
  */
 struct fc_exch_pool {
-	u16		 next_index;
-	u16		 total_exches;
 	spinlock_t	 lock;
 	struct list_head ex_list;
-};
+	u16		 next_index;
+	u16		 total_exches;
+
+	/* two cache of free slot in exch array */
+	u16		 left;
+	u16		 right;
+} ____cacheline_aligned_in_smp;
 
 /**
  * struct fc_exch_mgr - The Exchange Manager (EM).
@@ -86,13 +91,13 @@ struct fc_exch_pool {
  * It manages the allocation of exchange IDs.
  */
 struct fc_exch_mgr {
+	struct fc_exch_pool __percpu *pool;
+	mempool_t	*ep_pool;
 	enum fc_class	class;
 	struct kref	kref;
 	u16		min_xid;
 	u16		max_xid;
-	mempool_t	*ep_pool;
 	u16		pool_max_index;
-	struct fc_exch_pool *pool;
 
 	/*
 	 * currently exchange mgr stats are updated but not used.
@@ -108,7 +113,6 @@ struct fc_exch_mgr {
 		atomic_t non_bls_resp;
 	} stats;
 };
-#define	fc_seq_exch(sp) container_of(sp, struct fc_exch, seq)
 
 /**
  * struct fc_exch_mgr_anchor - primary structure for list of EMs
@@ -397,13 +401,23 @@ static inline void fc_exch_ptr_set(struct fc_exch_pool *pool, u16 index,
 static void fc_exch_delete(struct fc_exch *ep)
 {
 	struct fc_exch_pool *pool;
+	u16 index;
 
 	pool = ep->pool;
 	spin_lock_bh(&pool->lock);
 	WARN_ON(pool->total_exches <= 0);
 	pool->total_exches--;
-	fc_exch_ptr_set(pool, (ep->xid - ep->em->min_xid) >> fc_cpu_order,
-			NULL);
+
+	/* update cache of free slot */
+	index = (ep->xid - ep->em->min_xid) >> fc_cpu_order;
+	if (pool->left == FC_XID_UNKNOWN)
+		pool->left = index;
+	else if (pool->right == FC_XID_UNKNOWN)
+		pool->right = index;
+	else
+		pool->next_index = index;
+
+	fc_exch_ptr_set(pool, index, NULL);
 	list_del(&ep->ex_list);
 	spin_unlock_bh(&pool->lock);
 	fc_exch_release(ep);	/* drop hold for exch in mp */
@@ -456,6 +470,7 @@ static int fc_seq_send(struct fc_lport *lport, struct fc_seq *sp,
 	struct fc_frame_header *fh = fc_frame_header_get(fp);
 	int error;
 	u32 f_ctl;
+	u8 fh_type = fh->fh_type;
 
 	ep = fc_seq_exch(sp);
 	WARN_ON((ep->esb_stat & ESB_ST_SEQ_INIT) != ESB_ST_SEQ_INIT);
@@ -479,6 +494,9 @@ static int fc_seq_send(struct fc_lport *lport, struct fc_seq *sp,
 	 * Send the frame.
 	 */
 	error = lport->tt.frame_send(lport, fp);
+
+	if (fh_type == FC_TYPE_BLS)
+		return error;
 
 	/*
 	 * Update the exchange and sequence flags,
@@ -544,43 +562,52 @@ static struct fc_seq *fc_seq_start_next(struct fc_seq *sp)
 	return sp;
 }
 
+/*
+ * Set the response handler for the exchange associated with a sequence.
+ */
+static void fc_seq_set_resp(struct fc_seq *sp,
+			    void (*resp)(struct fc_seq *, struct fc_frame *,
+					 void *),
+			    void *arg)
+{
+	struct fc_exch *ep = fc_seq_exch(sp);
+
+	spin_lock_bh(&ep->ex_lock);
+	ep->resp = resp;
+	ep->arg = arg;
+	spin_unlock_bh(&ep->ex_lock);
+}
+
 /**
- * fc_seq_exch_abort() - Abort an exchange and sequence
- * @req_sp:	The sequence to be aborted
+ * fc_exch_abort_locked() - Abort an exchange
+ * @ep:	The exchange to be aborted
  * @timer_msec: The period of time to wait before aborting
  *
- * Generally called because of a timeout or an abort from the upper layer.
+ * Locking notes:  Called with exch lock held
+ *
+ * Return value: 0 on success else error code
  */
-static int fc_seq_exch_abort(const struct fc_seq *req_sp,
-			     unsigned int timer_msec)
+static int fc_exch_abort_locked(struct fc_exch *ep,
+				unsigned int timer_msec)
 {
 	struct fc_seq *sp;
-	struct fc_exch *ep;
 	struct fc_frame *fp;
 	int error;
 
-	ep = fc_seq_exch(req_sp);
-
-	spin_lock_bh(&ep->ex_lock);
 	if (ep->esb_stat & (ESB_ST_COMPLETE | ESB_ST_ABNORMAL) ||
-	    ep->state & (FC_EX_DONE | FC_EX_RST_CLEANUP)) {
-		spin_unlock_bh(&ep->ex_lock);
+	    ep->state & (FC_EX_DONE | FC_EX_RST_CLEANUP))
 		return -ENXIO;
-	}
 
 	/*
 	 * Send the abort on a new sequence if possible.
 	 */
 	sp = fc_seq_start_next_locked(&ep->seq);
-	if (!sp) {
-		spin_unlock_bh(&ep->ex_lock);
+	if (!sp)
 		return -ENOMEM;
-	}
 
 	ep->esb_stat |= ESB_ST_SEQ_INIT | ESB_ST_ABNORMAL;
 	if (timer_msec)
 		fc_exch_timer_set_locked(ep, timer_msec);
-	spin_unlock_bh(&ep->ex_lock);
 
 	/*
 	 * If not logged into the fabric, don't send ABTS but leave
@@ -599,6 +626,28 @@ static int fc_seq_exch_abort(const struct fc_seq *req_sp,
 		error = fc_seq_send(ep->lp, sp, fp);
 	} else
 		error = -ENOBUFS;
+	return error;
+}
+
+/**
+ * fc_seq_exch_abort() - Abort an exchange and sequence
+ * @req_sp:	The sequence to be aborted
+ * @timer_msec: The period of time to wait before aborting
+ *
+ * Generally called because of a timeout or an abort from the upper layer.
+ *
+ * Return value: 0 on success else error code
+ */
+static int fc_seq_exch_abort(const struct fc_seq *req_sp,
+			     unsigned int timer_msec)
+{
+	struct fc_exch *ep;
+	int error;
+
+	ep = fc_seq_exch(req_sp);
+	spin_lock_bh(&ep->ex_lock);
+	error = fc_exch_abort_locked(ep, timer_msec);
+	spin_unlock_bh(&ep->ex_lock);
 	return error;
 }
 
@@ -679,6 +728,19 @@ static struct fc_exch *fc_exch_em_alloc(struct fc_lport *lport,
 	pool = per_cpu_ptr(mp->pool, cpu);
 	spin_lock_bh(&pool->lock);
 	put_cpu();
+
+	/* peek cache of free slot */
+	if (pool->left != FC_XID_UNKNOWN) {
+		index = pool->left;
+		pool->left = FC_XID_UNKNOWN;
+		goto hit;
+	}
+	if (pool->right != FC_XID_UNKNOWN) {
+		index = pool->right;
+		pool->right = FC_XID_UNKNOWN;
+		goto hit;
+	}
+
 	index = pool->next_index;
 	/* allocate new exch from pool */
 	while (fc_exch_ptr_get(pool, index)) {
@@ -687,7 +749,7 @@ static struct fc_exch *fc_exch_em_alloc(struct fc_lport *lport,
 			goto err;
 	}
 	pool->next_index = index == mp->pool_max_index ? 0 : index + 1;
-
+hit:
 	fc_exch_hold(ep);	/* hold for exch in mp */
 	spin_lock_init(&ep->ex_lock);
 	/*
@@ -759,10 +821,8 @@ static struct fc_exch *fc_exch_find(struct fc_exch_mgr *mp, u16 xid)
 		pool = per_cpu_ptr(mp->pool, xid & fc_cpu_mask);
 		spin_lock_bh(&pool->lock);
 		ep = fc_exch_ptr_get(pool, (xid - mp->min_xid) >> fc_cpu_order);
-		if (ep) {
+		if (ep && ep->xid == xid)
 			fc_exch_hold(ep);
-			WARN_ON(ep->xid != xid);
-		}
 		spin_unlock_bh(&pool->lock);
 	}
 	return ep;
@@ -922,8 +982,30 @@ static enum fc_pf_rjt_reason fc_seq_lookup_recip(struct fc_lport *lport,
 		sp = &ep->seq;
 		if (sp->id != fh->fh_seq_id) {
 			atomic_inc(&mp->stats.seq_not_found);
-			reject = FC_RJT_SEQ_ID;	/* sequence/exch should exist */
-			goto rel;
+			if (f_ctl & FC_FC_END_SEQ) {
+				/*
+				 * Update sequence_id based on incoming last
+				 * frame of sequence exchange. This is needed
+				 * for FCoE target where DDP has been used
+				 * on target where, stack is indicated only
+				 * about last frame's (payload _header) header.
+				 * Whereas "seq_id" which is part of
+				 * frame_header is allocated by initiator
+				 * which is totally different from "seq_id"
+				 * allocated when XFER_RDY was sent by target.
+				 * To avoid false -ve which results into not
+				 * sending RSP, hence write request on other
+				 * end never finishes.
+				 */
+				spin_lock_bh(&ep->ex_lock);
+				sp->ssb_stat |= SSB_ST_RESP;
+				sp->id = fh->fh_seq_id;
+				spin_unlock_bh(&ep->ex_lock);
+			} else {
+				/* sequence/exch should exist */
+				reject = FC_RJT_SEQ_ID;
+				goto rel;
+			}
 		}
 	}
 	WARN_ON(ep != fc_seq_exch(sp));
@@ -999,7 +1081,7 @@ static void fc_exch_set_addr(struct fc_exch *ep,
 }
 
 /**
- * fc_seq_els_rsp_send() - Send an ELS response using infomation from
+ * fc_seq_els_rsp_send() - Send an ELS response using information from
  *			   the existing sequence/exchange.
  * @fp:	      The received frame
  * @els_cmd:  The ELS command to be sent
@@ -1110,7 +1192,7 @@ static void fc_seq_send_ack(struct fc_seq *sp, const struct fc_frame *rx_fp)
  * fc_exch_send_ba_rjt() - Send BLS Reject
  * @rx_fp:  The frame being rejected
  * @reason: The reason the frame is being rejected
- * @explan: The explaination for the rejection
+ * @explan: The explanation for the rejection
  *
  * This is for rejecting BA_ABTS only.
  */
@@ -1236,6 +1318,8 @@ free:
  * @fp:    The request frame
  *
  * On success, the sequence pointer will be returned and also in fr_seq(@fp).
+ * A reference will be held on the exchange/sequence for the caller, which
+ * must call fc_seq_release().
  */
 static struct fc_seq *fc_seq_assign(struct fc_lport *lport, struct fc_frame *fp)
 {
@@ -1247,9 +1331,18 @@ static struct fc_seq *fc_seq_assign(struct fc_lport *lport, struct fc_frame *fp)
 
 	list_for_each_entry(ema, &lport->ema_list, ema_list)
 		if ((!ema->match || ema->match(fp)) &&
-		    fc_seq_lookup_recip(lport, ema->mp, fp) != FC_RJT_NONE)
+		    fc_seq_lookup_recip(lport, ema->mp, fp) == FC_RJT_NONE)
 			break;
 	return fr_seq(fp);
+}
+
+/**
+ * fc_seq_release() - Release the hold
+ * @sp:    The sequence.
+ */
+static void fc_seq_release(struct fc_seq *sp)
+{
+	fc_exch_release(fc_seq_exch(sp));
 }
 
 /**
@@ -1343,7 +1436,7 @@ static void fc_exch_recv_seq_resp(struct fc_exch_mgr *mp, struct fc_frame *fp)
 	}
 	if (ep->esb_stat & ESB_ST_COMPLETE) {
 		atomic_inc(&mp->stats.xid_not_found);
-		goto out;
+		goto rel;
 	}
 	if (ep->rxid == FC_XID_UNKNOWN)
 		ep->rxid = ntohs(fh->fh_rx_id);
@@ -1380,6 +1473,7 @@ static void fc_exch_recv_seq_resp(struct fc_exch_mgr *mp, struct fc_frame *fp)
 	    (f_ctl & (FC_FC_LAST_SEQ | FC_FC_END_SEQ)) ==
 	    (FC_FC_LAST_SEQ | FC_FC_END_SEQ)) {
 		spin_lock_bh(&ep->ex_lock);
+		resp = ep->resp;
 		rc = fc_exch_done_locked(ep);
 		WARN_ON(fc_seq_exch(sp) != ep);
 		spin_unlock_bh(&ep->ex_lock);
@@ -1548,9 +1642,10 @@ static void fc_exch_recv_bls(struct fc_exch_mgr *mp, struct fc_frame *fp)
 		case FC_RCTL_ACK_0:
 			break;
 		default:
-			FC_EXCH_DBG(ep, "BLS rctl %x - %s received",
-				    fh->fh_r_ctl,
-				    fc_exch_rctl_name(fh->fh_r_ctl));
+			if (ep)
+				FC_EXCH_DBG(ep, "BLS rctl %x - %s received",
+					    fh->fh_r_ctl,
+					    fc_exch_rctl_name(fh->fh_r_ctl));
 			break;
 		}
 		fc_frame_free(fp);
@@ -1640,6 +1735,7 @@ static void fc_exch_reset(struct fc_exch *ep)
 	int rc = 1;
 
 	spin_lock_bh(&ep->ex_lock);
+	fc_exch_abort_locked(ep, 0);
 	ep->state |= FC_EX_RST_CLEANUP;
 	if (cancel_delayed_work(&ep->timeout_work))
 		atomic_dec(&ep->ex_refcnt);	/* drop hold for timer */
@@ -1699,6 +1795,9 @@ restart:
 			goto restart;
 		}
 	}
+	pool->next_index = 0;
+	pool->left = FC_XID_UNKNOWN;
+	pool->right = FC_XID_UNKNOWN;
 	spin_unlock_bh(&pool->lock);
 }
 
@@ -1887,6 +1986,7 @@ static struct fc_seq *fc_exch_seq_send(struct fc_lport *lport,
 	struct fc_exch *ep;
 	struct fc_seq *sp = NULL;
 	struct fc_frame_header *fh;
+	struct fc_fcp_pkt *fsp = NULL;
 	int rc = 1;
 
 	ep = fc_exch_alloc(lport, fp);
@@ -1909,8 +2009,10 @@ static struct fc_seq *fc_exch_seq_send(struct fc_lport *lport,
 	fc_exch_setup_hdr(ep, fp, ep->f_ctl);
 	sp->cnt++;
 
-	if (ep->xid <= lport->lro_xid && fh->fh_r_ctl == FC_RCTL_DD_UNSOL_CMD)
+	if (ep->xid <= lport->lro_xid && fh->fh_r_ctl == FC_RCTL_DD_UNSOL_CMD) {
+		fsp = fr_fsp(fp);
 		fc_fcp_ddp_setup(fr_fsp(fp), ep->xid);
+	}
 
 	if (unlikely(lport->tt.frame_send(lport, fp)))
 		goto err;
@@ -1924,6 +2026,8 @@ static struct fc_seq *fc_exch_seq_send(struct fc_lport *lport,
 	spin_unlock_bh(&ep->ex_lock);
 	return sp;
 err:
+	if (fsp)
+		fc_fcp_ddp_done(fsp);
 	rc = fc_exch_done_locked(ep);
 	spin_unlock_bh(&ep->ex_lock);
 	if (!rc)
@@ -2121,6 +2225,7 @@ err:
 		fc_exch_mgr_del(ema);
 	return -ENOMEM;
 }
+EXPORT_SYMBOL(fc_exch_mgr_list_clone);
 
 /**
  * fc_exch_mgr_alloc() - Allocate an exchange manager
@@ -2158,7 +2263,18 @@ struct fc_exch_mgr *fc_exch_mgr_alloc(struct fc_lport *lport,
 	mp->class = class;
 	/* adjust em exch xid range for offload */
 	mp->min_xid = min_xid;
-	mp->max_xid = max_xid;
+
+       /* reduce range so per cpu pool fits into PCPU_MIN_UNIT_SIZE pool */
+	pool_exch_range = (PCPU_MIN_UNIT_SIZE - sizeof(*pool)) /
+		sizeof(struct fc_exch *);
+	if ((max_xid - min_xid + 1) / (fc_cpu_mask + 1) > pool_exch_range) {
+		mp->max_xid = pool_exch_range * (fc_cpu_mask + 1) +
+			min_xid - 1;
+	} else {
+		mp->max_xid = max_xid;
+		pool_exch_range = (mp->max_xid - mp->min_xid + 1) /
+			(fc_cpu_mask + 1);
+	}
 
 	mp->ep_pool = mempool_create_slab_pool(2, fc_em_cachep);
 	if (!mp->ep_pool)
@@ -2169,7 +2285,6 @@ struct fc_exch_mgr *fc_exch_mgr_alloc(struct fc_lport *lport,
 	 * divided across all cpus. The exch pointers array memory is
 	 * allocated for exch range per pool.
 	 */
-	pool_exch_range = (mp->max_xid - mp->min_xid + 1) / (fc_cpu_mask + 1);
 	mp->pool_max_index = pool_exch_range - 1;
 
 	/*
@@ -2181,6 +2296,9 @@ struct fc_exch_mgr *fc_exch_mgr_alloc(struct fc_lport *lport,
 		goto free_mempool;
 	for_each_possible_cpu(cpu) {
 		pool = per_cpu_ptr(mp->pool, cpu);
+		pool->next_index = 0;
+		pool->left = FC_XID_UNKNOWN;
+		pool->right = FC_XID_UNKNOWN;
 		spin_lock_init(&pool->lock);
 		INIT_LIST_HEAD(&pool->ex_list);
 	}
@@ -2222,16 +2340,45 @@ void fc_exch_mgr_free(struct fc_lport *lport)
 EXPORT_SYMBOL(fc_exch_mgr_free);
 
 /**
+ * fc_find_ema() - Lookup and return appropriate Exchange Manager Anchor depending
+ * upon 'xid'.
+ * @f_ctl: f_ctl
+ * @lport: The local port the frame was received on
+ * @fh: The received frame header
+ */
+static struct fc_exch_mgr_anchor *fc_find_ema(u32 f_ctl,
+					      struct fc_lport *lport,
+					      struct fc_frame_header *fh)
+{
+	struct fc_exch_mgr_anchor *ema;
+	u16 xid;
+
+	if (f_ctl & FC_FC_EX_CTX)
+		xid = ntohs(fh->fh_ox_id);
+	else {
+		xid = ntohs(fh->fh_rx_id);
+		if (xid == FC_XID_UNKNOWN)
+			return list_entry(lport->ema_list.prev,
+					  typeof(*ema), ema_list);
+	}
+
+	list_for_each_entry(ema, &lport->ema_list, ema_list) {
+		if ((xid >= ema->mp->min_xid) &&
+		    (xid <= ema->mp->max_xid))
+			return ema;
+	}
+	return NULL;
+}
+/**
  * fc_exch_recv() - Handler for received frames
  * @lport: The local port the frame was received on
- * @fp:	   The received frame
+ * @fp:	The received frame
  */
 void fc_exch_recv(struct fc_lport *lport, struct fc_frame *fp)
 {
 	struct fc_frame_header *fh = fc_frame_header_get(fp);
 	struct fc_exch_mgr_anchor *ema;
-	u32 f_ctl, found = 0;
-	u16 oxid;
+	u32 f_ctl;
 
 	/* lport lock ? */
 	if (!lport || lport->state == LPORT_ST_DISABLED) {
@@ -2242,24 +2389,17 @@ void fc_exch_recv(struct fc_lport *lport, struct fc_frame *fp)
 	}
 
 	f_ctl = ntoh24(fh->fh_f_ctl);
-	oxid = ntohs(fh->fh_ox_id);
-	if (f_ctl & FC_FC_EX_CTX) {
-		list_for_each_entry(ema, &lport->ema_list, ema_list) {
-			if ((oxid >= ema->mp->min_xid) &&
-			    (oxid <= ema->mp->max_xid)) {
-				found = 1;
-				break;
-			}
-		}
-
-		if (!found) {
-			FC_LPORT_DBG(lport, "Received response for out "
-				     "of range oxid:%hx\n", oxid);
-			fc_frame_free(fp);
-			return;
-		}
-	} else
-		ema = list_entry(lport->ema_list.prev, typeof(*ema), ema_list);
+	ema = fc_find_ema(f_ctl, lport, fh);
+	if (!ema) {
+		FC_LPORT_DBG(lport, "Unable to find Exchange Manager Anchor,"
+				    "fc_ctl <0x%x>, xid <0x%x>\n",
+				     f_ctl,
+				     (f_ctl & FC_FC_EX_CTX) ?
+				     ntohs(fh->fh_ox_id) :
+				     ntohs(fh->fh_rx_id));
+		fc_frame_free(fp);
+		return;
+	}
 
 	/*
 	 * If frame is marked invalid, just drop it.
@@ -2297,6 +2437,9 @@ int fc_exch_init(struct fc_lport *lport)
 	if (!lport->tt.seq_start_next)
 		lport->tt.seq_start_next = fc_seq_start_next;
 
+	if (!lport->tt.seq_set_resp)
+		lport->tt.seq_set_resp = fc_seq_set_resp;
+
 	if (!lport->tt.exch_seq_send)
 		lport->tt.exch_seq_send = fc_exch_seq_send;
 
@@ -2318,6 +2461,9 @@ int fc_exch_init(struct fc_lport *lport)
 	if (!lport->tt.seq_assign)
 		lport->tt.seq_assign = fc_seq_assign;
 
+	if (!lport->tt.seq_release)
+		lport->tt.seq_release = fc_seq_release;
+
 	return 0;
 }
 EXPORT_SYMBOL(fc_exch_init);
@@ -2325,7 +2471,7 @@ EXPORT_SYMBOL(fc_exch_init);
 /**
  * fc_setup_exch_mgr() - Setup an exchange manager
  */
-int fc_setup_exch_mgr()
+int fc_setup_exch_mgr(void)
 {
 	fc_em_cachep = kmem_cache_create("libfc_em", sizeof(struct fc_exch),
 					 0, SLAB_HWCACHE_ALIGN, NULL);
@@ -2356,14 +2502,17 @@ int fc_setup_exch_mgr()
 
 	fc_exch_workqueue = create_singlethread_workqueue("fc_exch_workqueue");
 	if (!fc_exch_workqueue)
-		return -ENOMEM;
+		goto err;
 	return 0;
+err:
+	kmem_cache_destroy(fc_em_cachep);
+	return -ENOMEM;
 }
 
 /**
  * fc_destroy_exch_mgr() - Destroy an exchange manager
  */
-void fc_destroy_exch_mgr()
+void fc_destroy_exch_mgr(void)
 {
 	destroy_workqueue(fc_exch_workqueue);
 	kmem_cache_destroy(fc_em_cachep);

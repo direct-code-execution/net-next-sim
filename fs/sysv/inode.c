@@ -219,7 +219,7 @@ struct inode *sysv_iget(struct super_block *sb, unsigned int ino)
 	inode->i_mode = fs16_to_cpu(sbi, raw_inode->i_mode);
 	inode->i_uid = (uid_t)fs16_to_cpu(sbi, raw_inode->i_uid);
 	inode->i_gid = (gid_t)fs16_to_cpu(sbi, raw_inode->i_gid);
-	inode->i_nlink = fs16_to_cpu(sbi, raw_inode->i_nlink);
+	set_nlink(inode, fs16_to_cpu(sbi, raw_inode->i_nlink));
 	inode->i_size = fs32_to_cpu(sbi, raw_inode->i_size);
 	inode->i_atime.tv_sec = fs32_to_cpu(sbi, raw_inode->i_atime);
 	inode->i_mtime.tv_sec = fs32_to_cpu(sbi, raw_inode->i_mtime);
@@ -333,9 +333,15 @@ static struct inode *sysv_alloc_inode(struct super_block *sb)
 	return &si->vfs_inode;
 }
 
+static void sysv_i_callback(struct rcu_head *head)
+{
+	struct inode *inode = container_of(head, struct inode, i_rcu);
+	kmem_cache_free(sysv_inode_cachep, SYSV_I(inode));
+}
+
 static void sysv_destroy_inode(struct inode *inode)
 {
-	kmem_cache_free(sysv_inode_cachep, SYSV_I(inode));
+	call_rcu(&inode->i_rcu, sysv_i_callback);
 }
 
 static void init_once(void *p)

@@ -10,9 +10,6 @@
  *
  * Au1xxx-PSC AC97 glue.
  *
- * NOTE: all of these drivers can only work with a SINGLE instance
- *	 of a PSC. Multiple independent audio devices are impossible
- *	 with ASoC v1.
  */
 
 #include <linux/init.h>
@@ -44,24 +41,41 @@
 	(SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3BE)
 
 #define AC97PCR_START(stype)	\
-	((stype) == PCM_TX ? PSC_AC97PCR_TS : PSC_AC97PCR_RS)
+	((stype) == SNDRV_PCM_STREAM_PLAYBACK ? PSC_AC97PCR_TS : PSC_AC97PCR_RS)
 #define AC97PCR_STOP(stype)	\
-	((stype) == PCM_TX ? PSC_AC97PCR_TP : PSC_AC97PCR_RP)
+	((stype) == SNDRV_PCM_STREAM_PLAYBACK ? PSC_AC97PCR_TP : PSC_AC97PCR_RP)
 #define AC97PCR_CLRFIFO(stype)	\
-	((stype) == PCM_TX ? PSC_AC97PCR_TC : PSC_AC97PCR_RC)
+	((stype) == SNDRV_PCM_STREAM_PLAYBACK ? PSC_AC97PCR_TC : PSC_AC97PCR_RC)
 
 #define AC97STAT_BUSY(stype)	\
-	((stype) == PCM_TX ? PSC_AC97STAT_TB : PSC_AC97STAT_RB)
+	((stype) == SNDRV_PCM_STREAM_PLAYBACK ? PSC_AC97STAT_TB : PSC_AC97STAT_RB)
 
 /* instance data. There can be only one, MacLeod!!!! */
 static struct au1xpsc_audio_data *au1xpsc_ac97_workdata;
+
+#if 0
+
+/* this could theoretically work, but ac97->bus->card->private_data can be NULL
+ * when snd_ac97_mixer() is called; I don't know if the rest further down the
+ * chain are always valid either.
+ */
+static inline struct au1xpsc_audio_data *ac97_to_pscdata(struct snd_ac97 *x)
+{
+	struct snd_soc_card *c = x->bus->card->private_data;
+	return snd_soc_dai_get_drvdata(c->rtd->cpu_dai);
+}
+
+#else
+
+#define ac97_to_pscdata(x)	au1xpsc_ac97_workdata
+
+#endif
 
 /* AC97 controller reads codec register */
 static unsigned short au1xpsc_ac97_read(struct snd_ac97 *ac97,
 					unsigned short reg)
 {
-	/* FIXME */
-	struct au1xpsc_audio_data *pscdata = au1xpsc_ac97_workdata;
+	struct au1xpsc_audio_data *pscdata = ac97_to_pscdata(ac97);
 	unsigned short retry, tmo;
 	unsigned long data;
 
@@ -102,8 +116,7 @@ static unsigned short au1xpsc_ac97_read(struct snd_ac97 *ac97,
 static void au1xpsc_ac97_write(struct snd_ac97 *ac97, unsigned short reg,
 				unsigned short val)
 {
-	/* FIXME */
-	struct au1xpsc_audio_data *pscdata = au1xpsc_ac97_workdata;
+	struct au1xpsc_audio_data *pscdata = ac97_to_pscdata(ac97);
 	unsigned int tmo, retry;
 
 	au_writel(PSC_AC97EVNT_CD, AC97_EVNT(pscdata));
@@ -134,8 +147,7 @@ static void au1xpsc_ac97_write(struct snd_ac97 *ac97, unsigned short reg,
 /* AC97 controller asserts a warm reset */
 static void au1xpsc_ac97_warm_reset(struct snd_ac97 *ac97)
 {
-	/* FIXME */
-	struct au1xpsc_audio_data *pscdata = au1xpsc_ac97_workdata;
+	struct au1xpsc_audio_data *pscdata = ac97_to_pscdata(ac97);
 
 	au_writel(PSC_AC97RST_SNC, AC97_RST(pscdata));
 	au_sync();
@@ -146,8 +158,7 @@ static void au1xpsc_ac97_warm_reset(struct snd_ac97 *ac97)
 
 static void au1xpsc_ac97_cold_reset(struct snd_ac97 *ac97)
 {
-	/* FIXME */
-	struct au1xpsc_audio_data *pscdata = au1xpsc_ac97_workdata;
+	struct au1xpsc_audio_data *pscdata = ac97_to_pscdata(ac97);
 	int i;
 
 	/* disable PSC during cold reset */
@@ -202,10 +213,9 @@ static int au1xpsc_ac97_hw_params(struct snd_pcm_substream *substream,
 				  struct snd_pcm_hw_params *params,
 				  struct snd_soc_dai *dai)
 {
-	/* FIXME */
-	struct au1xpsc_audio_data *pscdata = au1xpsc_ac97_workdata;
+	struct au1xpsc_audio_data *pscdata = snd_soc_dai_get_drvdata(dai);
 	unsigned long r, ro, stat;
-	int chans, t, stype = SUBSTREAM_TYPE(substream);
+	int chans, t, stype = substream->stream;
 
 	chans = params_channels(params);
 
@@ -225,7 +235,7 @@ static int au1xpsc_ac97_hw_params(struct snd_pcm_substream *substream,
 		r |= PSC_AC97CFG_SET_LEN(params->msbits);
 
 		/* channels: enable slots for front L/R channel */
-		if (stype == PCM_TX) {
+		if (stype == SNDRV_PCM_STREAM_PLAYBACK) {
 			r &= ~PSC_AC97CFG_TXSLOT_MASK;
 			r |= PSC_AC97CFG_TXSLOT_ENA(3);
 			r |= PSC_AC97CFG_TXSLOT_ENA(4);
@@ -283,9 +293,8 @@ out:
 static int au1xpsc_ac97_trigger(struct snd_pcm_substream *substream,
 				int cmd, struct snd_soc_dai *dai)
 {
-	/* FIXME */
-	struct au1xpsc_audio_data *pscdata = au1xpsc_ac97_workdata;
-	int ret, stype = SUBSTREAM_TYPE(substream);
+	struct au1xpsc_audio_data *pscdata = snd_soc_dai_get_drvdata(dai);
+	int ret, stype = substream->stream;
 
 	ret = 0;
 
@@ -315,27 +324,28 @@ static int au1xpsc_ac97_trigger(struct snd_pcm_substream *substream,
 	return ret;
 }
 
-static int au1xpsc_ac97_probe(struct platform_device *pdev,
-			      struct snd_soc_dai *dai)
+static int au1xpsc_ac97_startup(struct snd_pcm_substream *substream,
+				struct snd_soc_dai *dai)
+{
+	struct au1xpsc_audio_data *pscdata = snd_soc_dai_get_drvdata(dai);
+	snd_soc_dai_set_dma_data(dai, substream, &pscdata->dmaids[0]);
+	return 0;
+}
+
+static int au1xpsc_ac97_probe(struct snd_soc_dai *dai)
 {
 	return au1xpsc_ac97_workdata ? 0 : -ENODEV;
 }
 
-static void au1xpsc_ac97_remove(struct platform_device *pdev,
-				struct snd_soc_dai *dai)
-{
-}
-
-static struct snd_soc_dai_ops au1xpsc_ac97_dai_ops = {
+static const struct snd_soc_dai_ops au1xpsc_ac97_dai_ops = {
+	.startup	= au1xpsc_ac97_startup,
 	.trigger	= au1xpsc_ac97_trigger,
 	.hw_params	= au1xpsc_ac97_hw_params,
 };
 
-struct snd_soc_dai au1xpsc_ac97_dai = {
-	.name			= "au1xpsc_ac97",
+static const struct snd_soc_dai_driver au1xpsc_ac97_dai_template = {
 	.ac97_control		= 1,
 	.probe			= au1xpsc_ac97_probe,
-	.remove			= au1xpsc_ac97_remove,
 	.playback = {
 		.rates		= AC97_RATES,
 		.formats	= AC97_FMTS,
@@ -350,37 +360,44 @@ struct snd_soc_dai au1xpsc_ac97_dai = {
 	},
 	.ops = &au1xpsc_ac97_dai_ops,
 };
-EXPORT_SYMBOL_GPL(au1xpsc_ac97_dai);
 
 static int __devinit au1xpsc_ac97_drvprobe(struct platform_device *pdev)
 {
 	int ret;
-	struct resource *r;
+	struct resource *iores, *dmares;
 	unsigned long sel;
 	struct au1xpsc_audio_data *wd;
 
-	if (au1xpsc_ac97_workdata)
-		return -EBUSY;
-
-	wd = kzalloc(sizeof(struct au1xpsc_audio_data), GFP_KERNEL);
+	wd = devm_kzalloc(&pdev->dev, sizeof(struct au1xpsc_audio_data),
+			  GFP_KERNEL);
 	if (!wd)
 		return -ENOMEM;
 
 	mutex_init(&wd->lock);
 
-	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!r) {
-		ret = -ENODEV;
-		goto out0;
-	}
+	iores = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!iores)
+		return -ENODEV;
 
-	ret = -EBUSY;
-	if (!request_mem_region(r->start, resource_size(r), pdev->name))
-		goto out0;
+	if (!devm_request_mem_region(&pdev->dev, iores->start,
+				     resource_size(iores),
+				     pdev->name))
+		return -EBUSY;
 
-	wd->mmio = ioremap(r->start, resource_size(r));
+	wd->mmio = devm_ioremap(&pdev->dev, iores->start,
+				resource_size(iores));
 	if (!wd->mmio)
-		goto out1;
+		return -EBUSY;
+
+	dmares = platform_get_resource(pdev, IORESOURCE_DMA, 0);
+	if (!dmares)
+		return -EBUSY;
+	wd->dmaids[SNDRV_PCM_STREAM_PLAYBACK] = dmares->start;
+
+	dmares = platform_get_resource(pdev, IORESOURCE_DMA, 1);
+	if (!dmares)
+		return -EBUSY;
+	wd->dmaids[SNDRV_PCM_STREAM_CAPTURE] = dmares->start;
 
 	/* configuration: max dma trigger threshold, enable ac97 */
 	wd->cfg = PSC_AC97CFG_RT_FIFO8 | PSC_AC97CFG_TT_FIFO8 |
@@ -395,44 +412,32 @@ static int __devinit au1xpsc_ac97_drvprobe(struct platform_device *pdev)
 	au_writel(PSC_SEL_PS_AC97MODE | sel, PSC_SEL(wd));
 	au_sync();
 
-	ret = snd_soc_register_dai(&au1xpsc_ac97_dai);
+	/* name the DAI like this device instance ("au1xpsc-ac97.PSCINDEX") */
+	memcpy(&wd->dai_drv, &au1xpsc_ac97_dai_template,
+	       sizeof(struct snd_soc_dai_driver));
+	wd->dai_drv.name = dev_name(&pdev->dev);
+
+	platform_set_drvdata(pdev, wd);
+
+	ret = snd_soc_register_dai(&pdev->dev, &wd->dai_drv);
 	if (ret)
-		goto out1;
+		return ret;
 
-	wd->dmapd = au1xpsc_pcm_add(pdev);
-	if (wd->dmapd) {
-		platform_set_drvdata(pdev, wd);
-		au1xpsc_ac97_workdata = wd;	/* MDEV */
-		return 0;
-	}
-
-	snd_soc_unregister_dai(&au1xpsc_ac97_dai);
-out1:
-	release_mem_region(r->start, resource_size(r));
-out0:
-	kfree(wd);
-	return ret;
+	au1xpsc_ac97_workdata = wd;
+	return 0;
 }
 
 static int __devexit au1xpsc_ac97_drvremove(struct platform_device *pdev)
 {
 	struct au1xpsc_audio_data *wd = platform_get_drvdata(pdev);
-	struct resource *r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 
-	if (wd->dmapd)
-		au1xpsc_pcm_destroy(wd->dmapd);
-
-	snd_soc_unregister_dai(&au1xpsc_ac97_dai);
+	snd_soc_unregister_dai(&pdev->dev);
 
 	/* disable PSC completely */
 	au_writel(0, AC97_CFG(wd));
 	au_sync();
 	au_writel(PSC_CTRL_DISABLE, PSC_CTRL(wd));
 	au_sync();
-
-	iounmap(wd->mmio);
-	release_mem_region(r->start, resource_size(r));
-	kfree(wd);
 
 	au1xpsc_ac97_workdata = NULL;	/* MDEV */
 

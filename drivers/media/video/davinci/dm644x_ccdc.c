@@ -40,6 +40,7 @@
 #include <linux/gfp.h>
 #include <linux/clk.h>
 #include <linux/err.h>
+#include <linux/module.h>
 
 #include <media/davinci/dm644x_ccdc.h>
 #include <media/davinci/vpss.h>
@@ -258,7 +259,7 @@ static int ccdc_update_raw_params(struct ccdc_config_params_raw *raw_params)
 	/*
 	 * Allocate memory for FPC table if current
 	 * FPC table buffer is not big enough to
-	 * accomodate FPC Number requested
+	 * accommodate FPC Number requested
 	 */
 	if (raw_params->fault_pxl.fp_num != config_params->fault_pxl.fp_num) {
 		if (fpc_physaddr != NULL) {
@@ -436,7 +437,7 @@ void ccdc_config_ycbcr(void)
 
 	/*
 	 * configure the horizontal line offset. This should be a
-	 * on 32 byte bondary. So clear LSB 5 bits
+	 * on 32 byte boundary. So clear LSB 5 bits
 	 */
 	regw(((params->win.width * 2  + 31) & ~0x1f), CCDC_HSIZE_OFF);
 
@@ -1077,15 +1078,4 @@ static struct platform_driver dm644x_ccdc_driver = {
 	.probe = dm644x_ccdc_probe,
 };
 
-static int __init dm644x_ccdc_init(void)
-{
-	return platform_driver_register(&dm644x_ccdc_driver);
-}
-
-static void __exit dm644x_ccdc_exit(void)
-{
-	platform_driver_unregister(&dm644x_ccdc_driver);
-}
-
-module_init(dm644x_ccdc_init);
-module_exit(dm644x_ccdc_exit);
+module_platform_driver(dm644x_ccdc_driver);

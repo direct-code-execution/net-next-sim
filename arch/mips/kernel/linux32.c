@@ -251,14 +251,15 @@ SYSCALL_DEFINE5(n32_msgrcv, int, msqid, u32, msgp, size_t, msgsz,
 
 SYSCALL_DEFINE1(32_personality, unsigned long, personality)
 {
+	unsigned int p = personality & 0xffffffff;
 	int ret;
-	personality &= 0xffffffff;
+
 	if (personality(current->personality) == PER_LINUX32 &&
-	    personality == PER_LINUX)
-		personality = PER_LINUX32;
-	ret = sys_personality(personality);
-	if (ret == PER_LINUX32)
-		ret = PER_LINUX;
+	    personality(p) == PER_LINUX)
+		p = (p & ~PER_MASK) | PER_LINUX32;
+	ret = sys_personality(p);
+	if (ret != -1 && personality(ret) == PER_LINUX32)
+		ret = (ret & ~PER_MASK) | PER_LINUX;
 	return ret;
 }
 
@@ -347,4 +348,11 @@ SYSCALL_DEFINE6(32_fanotify_mark, int, fanotify_fd, unsigned int, flags,
 {
 	return sys_fanotify_mark(fanotify_fd, flags, merge_64(a3, a4),
 				 dfd, pathname);
+}
+
+SYSCALL_DEFINE6(32_futex, u32 __user *, uaddr, int, op, u32, val,
+		struct compat_timespec __user *, utime, u32 __user *, uaddr2,
+		u32, val3)
+{
+	return compat_sys_futex(uaddr, op, val, utime, uaddr2, val3);
 }

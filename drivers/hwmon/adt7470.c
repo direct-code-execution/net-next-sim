@@ -19,6 +19,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/module.h>
 #include <linux/jiffies.h>
 #include <linux/i2c.h>
@@ -274,7 +276,7 @@ static int adt7470_read_temperatures(struct i2c_client *client,
 	i2c_smbus_write_byte_data(client, ADT7470_REG_PWM_CFG(2), pwm_cfg[1]);
 
 	if (res) {
-		printk(KERN_ERR "ha ha, interrupted");
+		pr_err("ha ha, interrupted\n");
 		return -EAGAIN;
 	}
 
@@ -447,7 +449,7 @@ static ssize_t set_auto_update_interval(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = SENSORS_LIMIT(temp, 0, 60000);
@@ -476,7 +478,7 @@ static ssize_t set_num_temp_sensors(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = SENSORS_LIMIT(temp, -1, 10);
@@ -509,7 +511,7 @@ static ssize_t set_temp_min(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = DIV_ROUND_CLOSEST(temp, 1000);
@@ -543,7 +545,7 @@ static ssize_t set_temp_max(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = DIV_ROUND_CLOSEST(temp, 1000);
@@ -598,7 +600,7 @@ static ssize_t set_fan_max(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp) || !temp)
+	if (kstrtol(buf, 10, &temp) || !temp)
 		return -EINVAL;
 
 	temp = FAN_RPM_TO_PERIOD(temp);
@@ -635,7 +637,7 @@ static ssize_t set_fan_min(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp) || !temp)
+	if (kstrtol(buf, 10, &temp) || !temp)
 		return -EINVAL;
 
 	temp = FAN_RPM_TO_PERIOD(temp);
@@ -680,7 +682,7 @@ static ssize_t set_force_pwm_max(struct device *dev,
 	long temp;
 	u8 reg;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	mutex_lock(&data->lock);
@@ -712,7 +714,7 @@ static ssize_t set_pwm(struct device *dev, struct device_attribute *devattr,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = SENSORS_LIMIT(temp, 0, 255);
@@ -744,7 +746,7 @@ static ssize_t set_pwm_max(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = SENSORS_LIMIT(temp, 0, 255);
@@ -777,7 +779,7 @@ static ssize_t set_pwm_min(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = SENSORS_LIMIT(temp, 0, 255);
@@ -820,7 +822,7 @@ static ssize_t set_pwm_tmin(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = DIV_ROUND_CLOSEST(temp, 1000);
@@ -857,7 +859,7 @@ static ssize_t set_pwm_auto(struct device *dev,
 	long temp;
 	u8 reg;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	if (attr->index % 2)
@@ -917,7 +919,7 @@ static ssize_t set_pwm_auto_temp(struct device *dev,
 	long temp;
 	u8 reg;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = cvt_auto_temp(temp);
@@ -1129,8 +1131,7 @@ static SENSOR_DEVICE_ATTR(pwm3_auto_channels_temp, S_IWUSR | S_IRUGO,
 static SENSOR_DEVICE_ATTR(pwm4_auto_channels_temp, S_IWUSR | S_IRUGO,
 		    show_pwm_auto_temp, set_pwm_auto_temp, 3);
 
-static struct attribute *adt7470_attr[] =
-{
+static struct attribute *adt7470_attr[] = {
 	&dev_attr_alarm_mask.attr,
 	&dev_attr_num_temp_sensors.attr,
 	&dev_attr_auto_update_interval.attr,
@@ -1274,7 +1275,8 @@ static int adt7470_probe(struct i2c_client *client,
 
 	/* Register sysfs hooks */
 	data->attrs.attrs = adt7470_attr;
-	if ((err = sysfs_create_group(&client->dev.kobj, &data->attrs)))
+	err = sysfs_create_group(&client->dev.kobj, &data->attrs);
+	if (err)
 		goto exit_free;
 
 	data->hwmon_dev = hwmon_device_register(&client->dev);
@@ -1286,8 +1288,10 @@ static int adt7470_probe(struct i2c_client *client,
 	init_completion(&data->auto_update_stop);
 	data->auto_update = kthread_run(adt7470_update_thread, client,
 					dev_name(data->hwmon_dev));
-	if (IS_ERR(data->auto_update))
+	if (IS_ERR(data->auto_update)) {
+		err = PTR_ERR(data->auto_update);
 		goto exit_unregister;
+	}
 
 	return 0;
 
@@ -1313,19 +1317,8 @@ static int adt7470_remove(struct i2c_client *client)
 	return 0;
 }
 
-static int __init adt7470_init(void)
-{
-	return i2c_add_driver(&adt7470_driver);
-}
-
-static void __exit adt7470_exit(void)
-{
-	i2c_del_driver(&adt7470_driver);
-}
+module_i2c_driver(adt7470_driver);
 
 MODULE_AUTHOR("Darrick J. Wong <djwong@us.ibm.com>");
 MODULE_DESCRIPTION("ADT7470 driver");
 MODULE_LICENSE("GPL");
-
-module_init(adt7470_init);
-module_exit(adt7470_exit);

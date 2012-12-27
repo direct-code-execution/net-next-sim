@@ -15,16 +15,22 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/clk.h>
 #include <linux/io.h>
+#include <linux/clk.h>
+#include <linux/cpufreq.h>
+#include <linux/delay.h>
 
 #include <asm/mach-types.h>  /* for machine_is_* */
 
 #include <plat/clock.h>
 #include <plat/cpu.h>
 #include <plat/clkdev_omap.h>
+#include <plat/sram.h>	/* for omap_sram_reprogram_clock() */
 #include <plat/usb.h>   /* for OTG_BASE */
 
+#include <mach/hardware.h>
+
+#include "iomap.h"
 #include "clock.h"
 
 /* Some ARM_IDLECT1 bit shifts - used in struct arm_idlect1_clk */
@@ -143,7 +149,7 @@ static struct arm_idlect1_clk armper_ck = {
  * activation.  [ GPIO code for 1510 ]
  */
 static struct clk arm_gpio_ck = {
-	.name		= "arm_gpio_ck",
+	.name		= "ick",
 	.ops		= &clkops_generic,
 	.parent		= &ck_dpll1,
 	.flags		= ENABLE_ON_INIT,
@@ -684,7 +690,7 @@ static struct omap_clk omap_clks[] = {
 	CLK(NULL,	"ck_sossi",	&sossi_ck,	CK_16XX),
 	CLK(NULL,	"arm_ck",	&arm_ck,	CK_16XX | CK_1510 | CK_310),
 	CLK(NULL,	"armper_ck",	&armper_ck.clk,	CK_16XX | CK_1510 | CK_310),
-	CLK(NULL,	"arm_gpio_ck",	&arm_gpio_ck,	CK_1510 | CK_310),
+	CLK("omap_gpio.0", "ick",	&arm_gpio_ck,	CK_1510 | CK_310),
 	CLK(NULL,	"armxor_ck",	&armxor_ck.clk,	CK_16XX | CK_1510 | CK_310 | CK_7XX),
 	CLK(NULL,	"armtim_ck",	&armtim_ck.clk,	CK_16XX | CK_1510 | CK_310),
 	CLK("omap_wdt",	"fck",		&armwdt_ck.clk,	CK_16XX | CK_1510 | CK_310),
@@ -736,9 +742,9 @@ static struct omap_clk omap_clks[] = {
 	CLK("mmci-omap.1", "ick",	&armper_ck.clk,	CK_16XX),
 	/* Virtual clocks */
 	CLK(NULL,	"mpu",		&virtual_ck_mpu, CK_16XX | CK_1510 | CK_310),
-	CLK("i2c_omap.1", "fck",	&i2c_fck,	CK_16XX | CK_1510 | CK_310 | CK_7XX),
-	CLK("i2c_omap.1", "ick",	&i2c_ick,	CK_16XX),
-	CLK("i2c_omap.1", "ick",	&dummy_ck,	CK_1510 | CK_310 | CK_7XX),
+	CLK("omap_i2c.1", "fck",	&i2c_fck,	CK_16XX | CK_1510 | CK_310 | CK_7XX),
+	CLK("omap_i2c.1", "ick",	&i2c_ick,	CK_16XX),
+	CLK("omap_i2c.1", "ick",	&dummy_ck,	CK_1510 | CK_310 | CK_7XX),
 	CLK("omap1_spi100k.1", "fck",	&dummy_ck,	CK_7XX),
 	CLK("omap1_spi100k.1", "ick",	&dummy_ck,	CK_7XX),
 	CLK("omap1_spi100k.2", "fck",	&dummy_ck,	CK_7XX),
@@ -767,12 +773,23 @@ static struct clk_functions omap1_clk_functions = {
 	.clk_disable_unused	= omap1_clk_disable_unused,
 };
 
+static void __init omap1_show_rates(void)
+{
+	pr_notice("Clocking rate (xtal/DPLL1/MPU): "
+			"%ld.%01ld/%ld.%01ld/%ld.%01ld MHz\n",
+		ck_ref.rate / 1000000, (ck_ref.rate / 100000) % 10,
+		ck_dpll1.rate / 1000000, (ck_dpll1.rate / 100000) % 10,
+		arm_ck.rate / 1000000, (arm_ck.rate / 100000) % 10);
+}
+
+u32 cpu_mask;
+
 int __init omap1_clk_init(void)
 {
 	struct omap_clk *c;
 	const struct omap_clock_config *info;
 	int crystal_type = 0; /* Default 12 MHz */
-	u32 reg, cpu_mask;
+	u32 reg;
 
 #ifdef CONFIG_DEBUG_LL
 	/*
@@ -797,6 +814,8 @@ int __init omap1_clk_init(void)
 		clk_preinit(c->lk.clk);
 
 	cpu_mask = 0;
+	if (cpu_is_omap1710())
+		cpu_mask |= CK_1710;
 	if (cpu_is_omap16xx())
 		cpu_mask |= CK_16XX;
 	if (cpu_is_omap1510())
@@ -823,12 +842,10 @@ int __init omap1_clk_init(void)
 			crystal_type = info->system_clock_type;
 	}
 
-#if defined(CONFIG_ARCH_OMAP730) || defined(CONFIG_ARCH_OMAP850)
-	ck_ref.rate = 13000000;
-#elif defined(CONFIG_ARCH_OMAP16XX)
-	if (crystal_type == 2)
+	if (cpu_is_omap7xx())
+		ck_ref.rate = 13000000;
+	if (cpu_is_omap16xx() && crystal_type == 2)
 		ck_ref.rate = 19200000;
-#endif
 
 	pr_info("Clocks: ARM_SYSST: 0x%04x DPLL_CTL: 0x%04x ARM_CKCTL: "
 		"0x%04x\n", omap_readw(ARM_SYSST), omap_readw(DPLL_CTL),
@@ -837,9 +854,12 @@ int __init omap1_clk_init(void)
 	/* We want to be in syncronous scalable mode */
 	omap_writew(0x1000, ARM_SYSST);
 
-#ifdef CONFIG_OMAP_CLOCKS_SET_BY_BOOTLOADER
-	/* Use values set by bootloader. Determine PLL rate and recalculate
-	 * dependent clocks as if kernel had changed PLL or divisors.
+
+	/*
+	 * Initially use the values set by bootloader. Determine PLL rate and
+	 * recalculate dependent clocks as if kernel had changed PLL or
+	 * divisors. See also omap1_clk_late_init() that can reprogram dpll1
+	 * after the SRAM is initialized.
 	 */
 	{
 		unsigned pll_ctl_val = omap_readw(DPLL_CTL);
@@ -864,29 +884,15 @@ int __init omap1_clk_init(void)
 			}
 		}
 	}
-#else
-	/* Find the highest supported frequency and enable it */
-	if (omap1_select_table_rate(&virtual_ck_mpu, ~0)) {
-		printk(KERN_ERR "System frequencies not set. Check your config.\n");
-		/* Guess sane values (60MHz) */
-		omap_writew(0x2290, DPLL_CTL);
-		omap_writew(cpu_is_omap7xx() ? 0x3005 : 0x1005, ARM_CKCTL);
-		ck_dpll1.rate = 60000000;
-	}
-#endif
 	propagate_rate(&ck_dpll1);
 	/* Cache rates for clocks connected to ck_ref (not dpll1) */
 	propagate_rate(&ck_ref);
-	printk(KERN_INFO "Clocking rate (xtal/DPLL1/MPU): "
-		"%ld.%01ld/%ld.%01ld/%ld.%01ld MHz\n",
-	       ck_ref.rate / 1000000, (ck_ref.rate / 100000) % 10,
-	       ck_dpll1.rate / 1000000, (ck_dpll1.rate / 100000) % 10,
-	       arm_ck.rate / 1000000, (arm_ck.rate / 100000) % 10);
-
-#if defined(CONFIG_MACH_OMAP_PERSEUS2) || defined(CONFIG_MACH_OMAP_FSAMPLE)
-	/* Select slicer output as OMAP input clock */
-	omap_writew(omap_readw(OMAP7XX_PCC_UPLD_CTRL) & ~0x1, OMAP7XX_PCC_UPLD_CTRL);
-#endif
+	omap1_show_rates();
+	if (machine_is_omap_perseus2() || machine_is_omap_fsample()) {
+		/* Select slicer output as OMAP input clock */
+		omap_writew(omap_readw(OMAP7XX_PCC_UPLD_CTRL) & ~0x1,
+				OMAP7XX_PCC_UPLD_CTRL);
+	}
 
 	/* Amstrad Delta wants BCLK high when inactive */
 	if (machine_is_ams_delta())
@@ -925,4 +931,24 @@ int __init omap1_clk_init(void)
 		clk_enable(&arm_gpio_ck);
 
 	return 0;
+}
+
+#define OMAP1_DPLL1_SANE_VALUE	60000000
+
+void __init omap1_clk_late_init(void)
+{
+	unsigned long rate = ck_dpll1.rate;
+
+	/* Find the highest supported frequency and enable it */
+	if (omap1_select_table_rate(&virtual_ck_mpu, ~0)) {
+		pr_err("System frequencies not set, using default. Check your config.\n");
+		/*
+		 * Reprogramming the DPLL is tricky, it must be done from SRAM.
+		 */
+		omap_sram_reprogram_clock(0x2290, 0x0005);
+		ck_dpll1.rate = OMAP1_DPLL1_SANE_VALUE;
+	}
+	propagate_rate(&ck_dpll1);
+	omap1_show_rates();
+	loops_per_jiffy = cpufreq_scale(loops_per_jiffy, rate, ck_dpll1.rate);
 }

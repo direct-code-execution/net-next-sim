@@ -13,18 +13,26 @@
 typedef int (*toupper_t)(int);
 
 static int	 affs_toupper(int ch);
-static int	 affs_hash_dentry(struct dentry *, struct qstr *);
-static int       affs_compare_dentry(struct dentry *, struct qstr *, struct qstr *);
+static int	 affs_hash_dentry(const struct dentry *,
+		const struct inode *, struct qstr *);
+static int       affs_compare_dentry(const struct dentry *parent,
+		const struct inode *pinode,
+		const struct dentry *dentry, const struct inode *inode,
+		unsigned int len, const char *str, const struct qstr *name);
 static int	 affs_intl_toupper(int ch);
-static int	 affs_intl_hash_dentry(struct dentry *, struct qstr *);
-static int       affs_intl_compare_dentry(struct dentry *, struct qstr *, struct qstr *);
+static int	 affs_intl_hash_dentry(const struct dentry *,
+		const struct inode *, struct qstr *);
+static int       affs_intl_compare_dentry(const struct dentry *parent,
+		const struct inode *pinode,
+		const struct dentry *dentry, const struct inode *inode,
+		unsigned int len, const char *str, const struct qstr *name);
 
 const struct dentry_operations affs_dentry_operations = {
 	.d_hash		= affs_hash_dentry,
 	.d_compare	= affs_compare_dentry,
 };
 
-static const struct dentry_operations affs_intl_dentry_operations = {
+const struct dentry_operations affs_intl_dentry_operations = {
 	.d_hash		= affs_intl_hash_dentry,
 	.d_compare	= affs_intl_compare_dentry,
 };
@@ -58,13 +66,13 @@ affs_get_toupper(struct super_block *sb)
  * Note: the dentry argument is the parent dentry.
  */
 static inline int
-__affs_hash_dentry(struct dentry *dentry, struct qstr *qstr, toupper_t toupper)
+__affs_hash_dentry(struct qstr *qstr, toupper_t toupper)
 {
 	const u8 *name = qstr->name;
 	unsigned long hash;
 	int i;
 
-	i = affs_check_name(qstr->name,qstr->len);
+	i = affs_check_name(qstr->name, qstr->len);
 	if (i)
 		return i;
 
@@ -78,39 +86,41 @@ __affs_hash_dentry(struct dentry *dentry, struct qstr *qstr, toupper_t toupper)
 }
 
 static int
-affs_hash_dentry(struct dentry *dentry, struct qstr *qstr)
+affs_hash_dentry(const struct dentry *dentry, const struct inode *inode,
+		struct qstr *qstr)
 {
-	return __affs_hash_dentry(dentry, qstr, affs_toupper);
+	return __affs_hash_dentry(qstr, affs_toupper);
 }
 static int
-affs_intl_hash_dentry(struct dentry *dentry, struct qstr *qstr)
+affs_intl_hash_dentry(const struct dentry *dentry, const struct inode *inode,
+		struct qstr *qstr)
 {
-	return __affs_hash_dentry(dentry, qstr, affs_intl_toupper);
+	return __affs_hash_dentry(qstr, affs_intl_toupper);
 }
 
-static inline int
-__affs_compare_dentry(struct dentry *dentry, struct qstr *a, struct qstr *b, toupper_t toupper)
+static inline int __affs_compare_dentry(unsigned int len,
+		const char *str, const struct qstr *name, toupper_t toupper)
 {
-	const u8 *aname = a->name;
-	const u8 *bname = b->name;
-	int len;
+	const u8 *aname = str;
+	const u8 *bname = name->name;
 
-	/* 'a' is the qstr of an already existing dentry, so the name
-	 * must be valid. 'b' must be validated first.
+	/*
+	 * 'str' is the name of an already existing dentry, so the name
+	 * must be valid. 'name' must be validated first.
 	 */
 
-	if (affs_check_name(b->name,b->len))
+	if (affs_check_name(name->name, name->len))
 		return 1;
 
-	/* If the names are longer than the allowed 30 chars,
+	/*
+	 * If the names are longer than the allowed 30 chars,
 	 * the excess is ignored, so their length may differ.
 	 */
-	len = a->len;
 	if (len >= 30) {
-		if (b->len < 30)
+		if (name->len < 30)
 			return 1;
 		len = 30;
-	} else if (len != b->len)
+	} else if (len != name->len)
 		return 1;
 
 	for (; len > 0; len--)
@@ -121,14 +131,18 @@ __affs_compare_dentry(struct dentry *dentry, struct qstr *a, struct qstr *b, tou
 }
 
 static int
-affs_compare_dentry(struct dentry *dentry, struct qstr *a, struct qstr *b)
+affs_compare_dentry(const struct dentry *parent, const struct inode *pinode,
+		const struct dentry *dentry, const struct inode *inode,
+		unsigned int len, const char *str, const struct qstr *name)
 {
-	return __affs_compare_dentry(dentry, a, b, affs_toupper);
+	return __affs_compare_dentry(len, str, name, affs_toupper);
 }
 static int
-affs_intl_compare_dentry(struct dentry *dentry, struct qstr *a, struct qstr *b)
+affs_intl_compare_dentry(const struct dentry *parent,const struct inode *pinode,
+		const struct dentry *dentry, const struct inode *inode,
+		unsigned int len, const char *str, const struct qstr *name)
 {
-	return __affs_compare_dentry(dentry, a, b, affs_intl_toupper);
+	return __affs_compare_dentry(len, str, name, affs_intl_toupper);
 }
 
 /*
@@ -226,7 +240,6 @@ affs_lookup(struct inode *dir, struct dentry *dentry, struct nameidata *nd)
 		if (IS_ERR(inode))
 			return ERR_CAST(inode);
 	}
-	dentry->d_op = AFFS_SB(sb)->s_flags & SF_INTL ? &affs_intl_dentry_operations : &affs_dentry_operations;
 	d_add(dentry, inode);
 	return NULL;
 }
@@ -242,13 +255,13 @@ affs_unlink(struct inode *dir, struct dentry *dentry)
 }
 
 int
-affs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidata *nd)
+affs_create(struct inode *dir, struct dentry *dentry, umode_t mode, struct nameidata *nd)
 {
 	struct super_block *sb = dir->i_sb;
 	struct inode	*inode;
 	int		 error;
 
-	pr_debug("AFFS: create(%lu,\"%.*s\",0%o)\n",dir->i_ino,(int)dentry->d_name.len,
+	pr_debug("AFFS: create(%lu,\"%.*s\",0%ho)\n",dir->i_ino,(int)dentry->d_name.len,
 		 dentry->d_name.name,mode);
 
 	inode = affs_new_inode(dir);
@@ -264,7 +277,7 @@ affs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidata
 	inode->i_mapping->a_ops = (AFFS_SB(sb)->s_flags & SF_OFS) ? &affs_aops_ofs : &affs_aops;
 	error = affs_add_entry(dir, inode, dentry, ST_FILE);
 	if (error) {
-		inode->i_nlink = 0;
+		clear_nlink(inode);
 		iput(inode);
 		return error;
 	}
@@ -272,12 +285,12 @@ affs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidata
 }
 
 int
-affs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
+affs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	struct inode		*inode;
 	int			 error;
 
-	pr_debug("AFFS: mkdir(%lu,\"%.*s\",0%o)\n",dir->i_ino,
+	pr_debug("AFFS: mkdir(%lu,\"%.*s\",0%ho)\n",dir->i_ino,
 		 (int)dentry->d_name.len,dentry->d_name.name,mode);
 
 	inode = affs_new_inode(dir);
@@ -292,7 +305,7 @@ affs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 
 	error = affs_add_entry(dir, inode, dentry, ST_USERDIR);
 	if (error) {
-		inode->i_nlink = 0;
+		clear_nlink(inode);
 		mark_inode_dirty(inode);
 		iput(inode);
 		return error;
@@ -379,7 +392,7 @@ affs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	return 0;
 
 err:
-	inode->i_nlink = 0;
+	clear_nlink(inode);
 	mark_inode_dirty(inode);
 	iput(inode);
 	return error;

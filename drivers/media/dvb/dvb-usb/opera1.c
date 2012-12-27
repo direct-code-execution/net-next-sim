@@ -35,7 +35,7 @@
 struct opera1_state {
 	u32 last_key_pressed;
 };
-struct ir_codes_opera_table {
+struct rc_map_opera_table {
 	u32 keycode;
 	u32 event;
 };
@@ -53,27 +53,36 @@ static int opera1_xilinx_rw(struct usb_device *dev, u8 request, u16 value,
 			    u8 * data, u16 len, int flags)
 {
 	int ret;
-	u8 r;
-	u8 u8buf[len];
-
+	u8 tmp;
+	u8 *buf;
 	unsigned int pipe = (flags == OPERA_READ_MSG) ?
 		usb_rcvctrlpipe(dev,0) : usb_sndctrlpipe(dev, 0);
 	u8 request_type = (flags == OPERA_READ_MSG) ? USB_DIR_IN : USB_DIR_OUT;
 
+	buf = kmalloc(len, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
 	if (flags == OPERA_WRITE_MSG)
-		memcpy(u8buf, data, len);
-	ret =
-		usb_control_msg(dev, pipe, request, request_type | USB_TYPE_VENDOR,
-			value, 0x0, u8buf, len, 2000);
+		memcpy(buf, data, len);
+	ret = usb_control_msg(dev, pipe, request,
+			request_type | USB_TYPE_VENDOR, value, 0x0,
+			buf, len, 2000);
 
 	if (request == OPERA_TUNER_REQ) {
+		tmp = buf[0];
 		if (usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
-				OPERA_TUNER_REQ, USB_DIR_IN | USB_TYPE_VENDOR,
-				0x01, 0x0, &r, 1, 2000)<1 || r!=0x08)
-					return 0;
+			    OPERA_TUNER_REQ, USB_DIR_IN | USB_TYPE_VENDOR,
+			    0x01, 0x0, buf, 1, 2000) < 1 || buf[0] != 0x08) {
+			ret = 0;
+			goto out;
+		}
+		buf[0] = tmp;
 	}
 	if (flags == OPERA_READ_MSG)
-		memcpy(data, u8buf, len);
+		memcpy(data, buf, len);
+out:
+	kfree(buf);
 	return ret;
 }
 
@@ -189,7 +198,7 @@ static int opera1_stv0299_set_symbol_rate(struct dvb_frontend *fe, u32 srate,
 static u8 opera1_inittab[] = {
 	0x00, 0xa1,
 	0x01, 0x15,
-	0x02, 0x00,
+	0x02, 0x30,
 	0x03, 0x00,
 	0x04, 0x7d,
 	0x05, 0x05,
@@ -254,10 +263,10 @@ static struct stv0299_config opera1_stv0299_config = {
 
 static int opera1_frontend_attach(struct dvb_usb_adapter *d)
 {
-	if ((d->fe =
-	     dvb_attach(stv0299_attach, &opera1_stv0299_config,
-			&d->dev->i2c_adap)) != NULL) {
-		d->fe->ops.set_voltage = opera1_set_voltage;
+	d->fe_adap[0].fe = dvb_attach(stv0299_attach, &opera1_stv0299_config,
+				      &d->dev->i2c_adap);
+	if ((d->fe_adap[0].fe) != NULL) {
+		d->fe_adap[0].fe->ops.set_voltage = opera1_set_voltage;
 		return 0;
 	}
 	info("not attached stv0299");
@@ -267,7 +276,7 @@ static int opera1_frontend_attach(struct dvb_usb_adapter *d)
 static int opera1_tuner_attach(struct dvb_usb_adapter *adap)
 {
 	dvb_attach(
-		dvb_pll_attach, adap->fe, 0xc0>>1,
+		dvb_pll_attach, adap->fe_adap[0].fe, 0xc0>>1,
 		&adap->dev->i2c_adap, DVB_PLL_OPERA1
 	);
 	return 0;
@@ -331,7 +340,7 @@ static int opera1_pid_filter_control(struct dvb_usb_adapter *adap, int onoff)
 	return 0;
 }
 
-static struct ir_scancode ir_codes_opera1_table[] = {
+static struct rc_map_table rc_map_opera1_table[] = {
 	{0x5fa0, KEY_1},
 	{0x51af, KEY_2},
 	{0x5da2, KEY_3},
@@ -342,23 +351,22 @@ static struct ir_scancode ir_codes_opera1_table[] = {
 	{0x49b6, KEY_8},
 	{0x05fa, KEY_9},
 	{0x45ba, KEY_0},
-	{0x09f6, KEY_UP},	/*chanup */
-	{0x1be5, KEY_DOWN},	/*chandown */
-	{0x5da3, KEY_LEFT},	/*voldown */
-	{0x5fa1, KEY_RIGHT},	/*volup */
-	{0x07f8, KEY_SPACE},	/*tab */
-	{0x1fe1, KEY_ENTER},	/*play ok */
-	{0x1be4, KEY_Z},	/*zoom */
-	{0x59a6, KEY_M},	/*mute */
-	{0x5ba5, KEY_F},	/*tv/f */
-	{0x19e7, KEY_R},	/*rec */
-	{0x01fe, KEY_S},	/*Stop */
-	{0x03fd, KEY_P},	/*pause */
-	{0x03fc, KEY_W},	/*<- -> */
-	{0x07f9, KEY_C},	/*capture */
-	{0x47b9, KEY_Q},	/*exit */
-	{0x43bc, KEY_O},	/*power */
-
+	{0x09f6, KEY_CHANNELUP},	/*chanup */
+	{0x1be5, KEY_CHANNELDOWN},	/*chandown */
+	{0x5da3, KEY_VOLUMEDOWN},	/*voldown */
+	{0x5fa1, KEY_VOLUMEUP},		/*volup */
+	{0x07f8, KEY_SPACE},		/*tab */
+	{0x1fe1, KEY_OK},		/*play ok */
+	{0x1be4, KEY_ZOOM},		/*zoom */
+	{0x59a6, KEY_MUTE},		/*mute */
+	{0x5ba5, KEY_RADIO},		/*tv/f */
+	{0x19e7, KEY_RECORD},		/*rec */
+	{0x01fe, KEY_STOP},		/*Stop */
+	{0x03fd, KEY_PAUSE},		/*pause */
+	{0x03fc, KEY_SCREEN},		/*<- -> */
+	{0x07f9, KEY_CAMERA},		/*capture */
+	{0x47b9, KEY_ESC},		/*exit */
+	{0x43bc, KEY_POWER2},		/*power */
 };
 
 static int opera1_rc_query(struct dvb_usb_device *dev, u32 * event, int *state)
@@ -404,12 +412,12 @@ static int opera1_rc_query(struct dvb_usb_device *dev, u32 * event, int *state)
 
 		send_key = (send_key & 0xffff) | 0x0100;
 
-		for (i = 0; i < ARRAY_SIZE(ir_codes_opera1_table); i++) {
-			if (rc5_scan(&ir_codes_opera1_table[i]) == (send_key & 0xffff)) {
+		for (i = 0; i < ARRAY_SIZE(rc_map_opera1_table); i++) {
+			if (rc5_scan(&rc_map_opera1_table[i]) == (send_key & 0xffff)) {
 				*state = REMOTE_KEY_PRESSED;
-				*event = ir_codes_opera1_table[i].keycode;
+				*event = rc_map_opera1_table[i].keycode;
 				opst->last_key_pressed =
-					ir_codes_opera1_table[i].keycode;
+					rc_map_opera1_table[i].keycode;
 				break;
 			}
 			opst->last_key_pressed = 0;
@@ -497,8 +505,8 @@ static struct dvb_usb_device_properties opera1_properties = {
 	.i2c_algo = &opera1_i2c_algo,
 
 	.rc.legacy = {
-		.rc_key_map = ir_codes_opera1_table,
-		.rc_key_map_size = ARRAY_SIZE(ir_codes_opera1_table),
+		.rc_map_table = rc_map_opera1_table,
+		.rc_map_size = ARRAY_SIZE(rc_map_opera1_table),
 		.rc_interval = 200,
 		.rc_query = opera1_rc_query,
 	},
@@ -508,6 +516,8 @@ static struct dvb_usb_device_properties opera1_properties = {
 	.num_adapters = 1,
 	.adapter = {
 		{
+		.num_frontends = 1,
+		.fe = {{
 			.frontend_attach = opera1_frontend_attach,
 			.streaming_ctrl = opera1_streaming_ctrl,
 			.tuner_attach = opera1_tuner_attach,
@@ -527,6 +537,7 @@ static struct dvb_usb_device_properties opera1_properties = {
 					}
 				}
 			},
+		}},
 		}
 	},
 	.num_device_descs = 1,
@@ -563,22 +574,7 @@ static struct usb_driver opera1_driver = {
 	.id_table = opera1_table,
 };
 
-static int __init opera1_module_init(void)
-{
-	int result = 0;
-	if ((result = usb_register(&opera1_driver))) {
-		err("usb_register failed. Error number %d", result);
-	}
-	return result;
-}
-
-static void __exit opera1_module_exit(void)
-{
-	usb_deregister(&opera1_driver);
-}
-
-module_init(opera1_module_init);
-module_exit(opera1_module_exit);
+module_usb_driver(opera1_driver);
 
 MODULE_AUTHOR("Mario Hlawitschka (c) dh1pa@amsat.org");
 MODULE_AUTHOR("Marco Gittler (c) g.marco@freenet.de");

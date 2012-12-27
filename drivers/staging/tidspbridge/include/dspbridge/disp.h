@@ -22,7 +22,20 @@
 #include <dspbridge/dbdefs.h>
 #include <dspbridge/nodedefs.h>
 #include <dspbridge/nodepriv.h>
-#include <dspbridge/dispdefs.h>
+
+struct disp_object;
+
+/* Node Dispatcher attributes */
+struct disp_attr {
+	u32 chnl_offset;	/* Offset of channel ids reserved for RMS */
+	/* Size of buffer for sending data to RMS */
+	u32 chnl_buf_size;
+	int proc_family;	/* eg, 5000 */
+	int proc_type;		/* eg, 5510 */
+	void *reserved1;	/* Reserved for future use. */
+	u32 reserved2;		/* Reserved for future use. */
+};
+
 
 /*
  *  ======== disp_create ========
@@ -40,7 +53,6 @@
  *      -ENOMEM:            Insufficient memory for requested resources.
  *      -EPERM:              Unable to create dispatcher.
  *  Requires:
- *      disp_init(void) called.
  *      disp_attrs != NULL.
  *      hdev_obj != NULL.
  *      dispatch_obj != NULL.
@@ -60,37 +72,11 @@ extern int disp_create(struct disp_object **dispatch_obj,
  *      disp_obj:  Node Dispatcher object.
  *  Returns:
  *  Requires:
- *      disp_init(void) called.
  *      Valid disp_obj.
  *  Ensures:
  *      disp_obj is invalid.
  */
 extern void disp_delete(struct disp_object *disp_obj);
-
-/*
- *  ======== disp_exit ========
- *  Discontinue usage of DISP module.
- *
- *  Parameters:
- *  Returns:
- *  Requires:
- *      disp_init(void) previously called.
- *  Ensures:
- *      Any resources acquired in disp_init(void) will be freed when last DISP
- *      client calls disp_exit(void).
- */
-extern void disp_exit(void);
-
-/*
- *  ======== disp_init ========
- *  Initialize the DISP module.
- *
- *  Parameters:
- *  Returns:
- *      TRUE if initialization succeeded, FALSE otherwise.
- *  Ensures:
- */
-extern bool disp_init(void);
 
 /*
  *  ======== disp_node_change_priority ========
@@ -107,7 +93,6 @@ extern bool disp_init(void);
  *      0:                Success.
  *      -ETIME:           A timeout occurred before the DSP responded.
  *  Requires:
- *      disp_init(void) called.
  *      Valid disp_obj.
  *      hnode != NULL.
  *  Ensures:
@@ -135,7 +120,6 @@ extern int disp_node_change_priority(struct disp_object
  *      -ETIME:   A timeout occurred before the DSP responded.
  *      -EPERM:      A failure occurred, unable to create node.
  *  Requires:
- *      disp_init(void) called.
  *      Valid disp_obj.
  *      pargs != NULL.
  *      hnode != NULL.
@@ -165,7 +149,6 @@ extern int disp_node_create(struct disp_object *disp_obj,
  *      0:        Success.
  *      -ETIME:   A timeout occurred before the DSP responded.
  *  Requires:
- *      disp_init(void) called.
  *      Valid disp_obj.
  *      hnode != NULL.
  *  Ensures:
@@ -191,7 +174,6 @@ extern int disp_node_delete(struct disp_object *disp_obj,
  *      0:        Success.
  *      -ETIME:   A timeout occurred before the DSP responded.
  *  Requires:
- *      disp_init(void) called.
  *      Valid disp_obj.
  *      hnode != NULL.
  *  Ensures:

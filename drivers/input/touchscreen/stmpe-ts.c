@@ -268,7 +268,7 @@ static int __devinit stmpe_input_probe(struct platform_device *pdev)
 	struct stmpe_touch *ts;
 	struct input_dev *idev;
 	struct stmpe_ts_platform_data *ts_pdata = NULL;
-	int ret = 0;
+	int ret;
 	int ts_irq;
 
 	ts_irq = platform_get_irq_byname(pdev, "FIFO_TH");
@@ -276,12 +276,16 @@ static int __devinit stmpe_input_probe(struct platform_device *pdev)
 		return ts_irq;
 
 	ts = kzalloc(sizeof(*ts), GFP_KERNEL);
-	if (!ts)
+	if (!ts) {
+		ret = -ENOMEM;
 		goto err_out;
+	}
 
 	idev = input_allocate_device();
-	if (!idev)
+	if (!idev) {
+		ret = -ENOMEM;
 		goto err_free_ts;
+	}
 
 	platform_set_drvdata(pdev, ts);
 	ts->stmpe = stmpe;
@@ -361,7 +365,6 @@ static int __devexit stmpe_ts_remove(struct platform_device *pdev)
 	platform_set_drvdata(pdev, NULL);
 
 	input_unregister_device(ts->idev);
-	input_free_device(ts->idev);
 
 	kfree(ts);
 
@@ -376,20 +379,7 @@ static struct platform_driver stmpe_ts_driver = {
 	.probe = stmpe_input_probe,
 	.remove = __devexit_p(stmpe_ts_remove),
 };
-
-static int __init stmpe_ts_init(void)
-{
-	return platform_driver_register(&stmpe_ts_driver);
-}
-
-module_init(stmpe_ts_init);
-
-static void __exit stmpe_ts_exit(void)
-{
-	platform_driver_unregister(&stmpe_ts_driver);
-}
-
-module_exit(stmpe_ts_exit);
+module_platform_driver(stmpe_ts_driver);
 
 MODULE_AUTHOR("Luotao Fu <l.fu@pengutronix.de>");
 MODULE_DESCRIPTION("STMPEXXX touchscreen driver");

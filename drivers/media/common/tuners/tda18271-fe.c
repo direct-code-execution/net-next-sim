@@ -579,8 +579,8 @@ static int tda18271_rf_tracking_filters_init(struct dvb_frontend *fe, u32 freq)
 #define RF3 2
 	u32 rf_default[3];
 	u32 rf_freq[3];
-	u8 prog_cal[3];
-	u8 prog_tab[3];
+	s32 prog_cal[3];
+	s32 prog_tab[3];
 
 	i = tda18271_lookup_rf_band(fe, &freq, NULL);
 
@@ -602,32 +602,33 @@ static int tda18271_rf_tracking_filters_init(struct dvb_frontend *fe, u32 freq)
 			return bcal;
 
 		tda18271_calc_rf_cal(fe, &rf_freq[rf]);
-		prog_tab[rf] = regs[R_EB14];
+		prog_tab[rf] = (s32)regs[R_EB14];
 
 		if (1 == bcal)
-			prog_cal[rf] = tda18271_calibrate_rf(fe, rf_freq[rf]);
+			prog_cal[rf] =
+				(s32)tda18271_calibrate_rf(fe, rf_freq[rf]);
 		else
 			prog_cal[rf] = prog_tab[rf];
 
 		switch (rf) {
 		case RF1:
 			map[i].rf_a1 = 0;
-			map[i].rf_b1 = (s32)(prog_cal[RF1] - prog_tab[RF1]);
+			map[i].rf_b1 = (prog_cal[RF1] - prog_tab[RF1]);
 			map[i].rf1   = rf_freq[RF1] / 1000;
 			break;
 		case RF2:
-			dividend = (s32)(prog_cal[RF2] - prog_tab[RF2]) -
-				   (s32)(prog_cal[RF1] + prog_tab[RF1]);
+			dividend = (prog_cal[RF2] - prog_tab[RF2] -
+				    prog_cal[RF1] + prog_tab[RF1]);
 			divisor = (s32)(rf_freq[RF2] - rf_freq[RF1]) / 1000;
 			map[i].rf_a1 = (dividend / divisor);
 			map[i].rf2   = rf_freq[RF2] / 1000;
 			break;
 		case RF3:
-			dividend = (s32)(prog_cal[RF3] - prog_tab[RF3]) -
-				   (s32)(prog_cal[RF2] + prog_tab[RF2]);
+			dividend = (prog_cal[RF3] - prog_tab[RF3] -
+				    prog_cal[RF2] + prog_tab[RF2]);
 			divisor = (s32)(rf_freq[RF3] - rf_freq[RF2]) / 1000;
 			map[i].rf_a2 = (dividend / divisor);
-			map[i].rf_b2 = (s32)(prog_cal[RF2] - prog_tab[RF2]);
+			map[i].rf_b2 = (prog_cal[RF2] - prog_tab[RF2]);
 			map[i].rf3   = rf_freq[RF3] / 1000;
 			break;
 		default:
@@ -927,55 +928,49 @@ fail:
 
 /* ------------------------------------------------------------------ */
 
-static int tda18271_set_params(struct dvb_frontend *fe,
-			       struct dvb_frontend_parameters *params)
+static int tda18271_set_params(struct dvb_frontend *fe)
 {
+	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
+	u32 delsys = c->delivery_system;
+	u32 bw = c->bandwidth_hz;
+	u32 freq = c->frequency;
 	struct tda18271_priv *priv = fe->tuner_priv;
 	struct tda18271_std_map *std_map = &priv->std;
 	struct tda18271_std_map_item *map;
 	int ret;
-	u32 bw, freq = params->frequency;
 
 	priv->mode = TDA18271_DIGITAL;
 
-	if (fe->ops.info.type == FE_ATSC) {
-		switch (params->u.vsb.modulation) {
-		case VSB_8:
-		case VSB_16:
-			map = &std_map->atsc_6;
-			break;
-		case QAM_64:
-		case QAM_256:
-			map = &std_map->qam_6;
-			break;
-		default:
-			tda_warn("modulation not set!\n");
-			return -EINVAL;
-		}
-#if 0
-		/* userspace request is already center adjusted */
-		freq += 1750000; /* Adjust to center (+1.75MHZ) */
-#endif
+	switch (delsys) {
+	case SYS_ATSC:
+		map = &std_map->atsc_6;
 		bw = 6000000;
-	} else if (fe->ops.info.type == FE_OFDM) {
-		switch (params->u.ofdm.bandwidth) {
-		case BANDWIDTH_6_MHZ:
-			bw = 6000000;
+		break;
+	case SYS_ISDBT:
+	case SYS_DVBT:
+	case SYS_DVBT2:
+		if (bw <= 6000000) {
 			map = &std_map->dvbt_6;
-			break;
-		case BANDWIDTH_7_MHZ:
-			bw = 7000000;
+		} else if (bw <= 7000000) {
 			map = &std_map->dvbt_7;
-			break;
-		case BANDWIDTH_8_MHZ:
-			bw = 8000000;
+		} else {
 			map = &std_map->dvbt_8;
-			break;
-		default:
-			tda_warn("bandwidth not set!\n");
-			return -EINVAL;
 		}
-	} else {
+		break;
+	case SYS_DVBC_ANNEX_B:
+		bw = 6000000;
+		/* falltrough */
+	case SYS_DVBC_ANNEX_A:
+	case SYS_DVBC_ANNEX_C:
+		if (bw <= 6000000) {
+			map = &std_map->qam_6;
+		} else if (bw <= 7000000) {
+			map = &std_map->qam_7;
+		} else {
+			map = &std_map->qam_8;
+		}
+		break;
+	default:
 		tda_warn("modulation type not supported!\n");
 		return -EINVAL;
 	}
@@ -989,9 +984,9 @@ static int tda18271_set_params(struct dvb_frontend *fe,
 	if (tda_fail(ret))
 		goto fail;
 
+	priv->if_freq   = map->if_freq;
 	priv->frequency = freq;
-	priv->bandwidth = (fe->ops.info.type == FE_OFDM) ?
-		params->u.ofdm.bandwidth : 0;
+	priv->bandwidth = bw;
 fail:
 	return ret;
 }
@@ -1045,6 +1040,7 @@ static int tda18271_set_analog_params(struct dvb_frontend *fe,
 	if (tda_fail(ret))
 		goto fail;
 
+	priv->if_freq   = map->if_freq;
 	priv->frequency = freq;
 	priv->bandwidth = 0;
 fail:
@@ -1078,6 +1074,13 @@ static int tda18271_get_bandwidth(struct dvb_frontend *fe, u32 *bandwidth)
 {
 	struct tda18271_priv *priv = fe->tuner_priv;
 	*bandwidth = priv->bandwidth;
+	return 0;
+}
+
+static int tda18271_get_if_frequency(struct dvb_frontend *fe, u32 *frequency)
+{
+	struct tda18271_priv *priv = fe->tuner_priv;
+	*frequency = (u32)priv->if_freq * 1000;
 	return 0;
 }
 
@@ -1156,7 +1159,6 @@ static int tda18271_get_id(struct dvb_frontend *fe)
 	struct tda18271_priv *priv = fe->tuner_priv;
 	unsigned char *regs = priv->tda18271_regs;
 	char *name;
-	int ret = 0;
 
 	mutex_lock(&priv->lock);
 	tda18271_read_regs(fe);
@@ -1172,17 +1174,16 @@ static int tda18271_get_id(struct dvb_frontend *fe)
 		priv->id = TDA18271HDC2;
 		break;
 	default:
-		name = "Unknown device";
-		ret = -EINVAL;
-		break;
+		tda_info("Unknown device (%i) detected @ %d-%04x, device not supported.\n",
+			 regs[R_ID], i2c_adapter_id(priv->i2c_props.adap),
+			 priv->i2c_props.addr);
+		return -EINVAL;
 	}
 
-	tda_info("%s detected @ %d-%04x%s\n", name,
-		 i2c_adapter_id(priv->i2c_props.adap),
-		 priv->i2c_props.addr,
-		 (0 == ret) ? "" : ", device not supported.");
+	tda_info("%s detected @ %d-%04x\n", name,
+		 i2c_adapter_id(priv->i2c_props.adap), priv->i2c_props.addr);
 
-	return ret;
+	return 0;
 }
 
 static int tda18271_setup_configuration(struct dvb_frontend *fe,
@@ -1227,7 +1228,7 @@ static int tda18271_set_config(struct dvb_frontend *fe, void *priv_cfg)
 	return 0;
 }
 
-static struct dvb_tuner_ops tda18271_tuner_ops = {
+static const struct dvb_tuner_ops tda18271_tuner_ops = {
 	.info = {
 		.name = "NXP TDA18271HD",
 		.frequency_min  =  45000000,
@@ -1242,6 +1243,7 @@ static struct dvb_tuner_ops tda18271_tuner_ops = {
 	.set_config        = tda18271_set_config,
 	.get_frequency     = tda18271_get_frequency,
 	.get_bandwidth     = tda18271_get_bandwidth,
+	.get_if_frequency  = tda18271_get_if_frequency,
 };
 
 struct dvb_frontend *tda18271_attach(struct dvb_frontend *fe, u8 addr,

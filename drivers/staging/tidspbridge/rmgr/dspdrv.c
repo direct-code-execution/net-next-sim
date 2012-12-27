@@ -23,12 +23,6 @@
 /*  ----------------------------------- DSP/BIOS Bridge */
 #include <dspbridge/dbdefs.h>
 
-/*  ----------------------------------- Trace & Debug */
-#include <dspbridge/dbc.h>
-
-/*  ----------------------------------- OS Adaptation Layer */
-#include <dspbridge/cfg.h>
-
 /*  ----------------------------------- Platform Manager */
 #include <dspbridge/drv.h>
 #include <dspbridge/dev.h>
@@ -105,8 +99,6 @@ func_cont:
 	} else {
 		dev_dbg(bridge, "%s: Failed\n", __func__);
 	}			/* End api_init_complete2 */
-	DBC_ENSURE((!status && drv_obj != NULL) ||
-		   (status && drv_obj == NULL));
 	*init_status = status;
 	/* Return the Driver Object */
 	return (u32) drv_obj;
@@ -121,6 +113,7 @@ bool dsp_deinit(u32 device_context)
 	bool ret = true;
 	u32 device_node;
 	struct mgr_object *mgr_obj = NULL;
+	struct drv_data *drv_datap = dev_get_drvdata(bridge);
 
 	while ((device_node = drv_get_first_dev_extension()) != 0) {
 		(void)dev_remove_device((struct cfg_devnode *)device_node);
@@ -131,10 +124,14 @@ bool dsp_deinit(u32 device_context)
 
 	(void)drv_destroy((struct drv_object *)device_context);
 
-	/* Get the Manager Object from Registry
+	/* Get the Manager Object from driver data
 	 * MGR Destroy will unload the DCD dll */
-	if (!cfg_get_object((u32 *) &mgr_obj, REG_MGR_OBJECT))
+	if (drv_datap && drv_datap->mgr_object) {
+		mgr_obj = drv_datap->mgr_object;
 		(void)mgr_destroy(mgr_obj);
+	} else {
+		pr_err("%s: Failed to retrieve the object handle\n", __func__);
+	}
 
 	api_exit();
 

@@ -86,6 +86,7 @@ extern unsigned long mips_machtype;
 #define BOOT_MEM_RAM		1
 #define BOOT_MEM_ROM_DATA	2
 #define BOOT_MEM_RESERVED	3
+#define BOOT_MEM_INIT_RAM	4
 
 /*
  * A memory map that's built upon what was determined
@@ -124,5 +125,17 @@ extern unsigned long fw_arg0, fw_arg1, fw_arg2, fw_arg3;
  * Platform memory detection hook called by setup_arch
  */
 extern void plat_mem_setup(void);
+
+#ifdef CONFIG_SWIOTLB
+/*
+ * Optional platform hook to call swiotlb_setup().
+ */
+extern void plat_swiotlb_setup(void);
+
+#else
+
+static inline void plat_swiotlb_setup(void) {}
+
+#endif /* CONFIG_SWIOTLB */
 
 #endif /* _ASM_BOOTINFO_H */

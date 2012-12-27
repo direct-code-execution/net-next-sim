@@ -182,13 +182,13 @@ static void kexec_find_and_set_command_line(struct kimage *image)
 
 		if ((entry & IND_SOURCE)) {
 			void *va =
-				kmap_atomic_pfn(entry >> PAGE_SHIFT, KM_USER0);
+				kmap_atomic_pfn(entry >> PAGE_SHIFT);
 			r = kexec_bn2cl(va);
 			if (r) {
 				command_line = r;
 				break;
 			}
-			kunmap_atomic(va, KM_USER0);
+			kunmap_atomic(va);
 		}
 	}
 
@@ -198,7 +198,7 @@ static void kexec_find_and_set_command_line(struct kimage *image)
 
 		hverr = hv_set_command_line(
 			(HV_VirtAddr) command_line, strlen(command_line));
-		kunmap_atomic(command_line, KM_USER0);
+		kunmap_atomic(command_line);
 	} else {
 		pr_info("%s: no command line found; making empty\n",
 		       __func__);
@@ -240,16 +240,19 @@ static void setup_quasi_va_is_pa(void)
 	pte = hv_pte(_PAGE_KERNEL | _PAGE_HUGE_PAGE);
 	pte = hv_pte_set_mode(pte, HV_PTE_MODE_CACHE_NO_L3);
 
-	for (i = 0; i < pgd_index(PAGE_OFFSET); i++)
-		pgtable[i] = pfn_pte(i << (HPAGE_SHIFT - PAGE_SHIFT), pte);
+	for (i = 0; i < pgd_index(PAGE_OFFSET); i++) {
+		unsigned long pfn = i << (HPAGE_SHIFT - PAGE_SHIFT);
+		if (pfn_valid(pfn))
+			__set_pte(&pgtable[i], pfn_pte(pfn, pte));
+	}
 }
 
 
-NORET_TYPE void machine_kexec(struct kimage *image)
+void machine_kexec(struct kimage *image)
 {
 	void *reboot_code_buffer;
-	NORET_TYPE void (*rnk)(unsigned long, void *, unsigned long)
-		ATTRIB_NORET;
+	void (*rnk)(unsigned long, void *, unsigned long)
+		__noreturn;
 
 	/* Mask all interrupts before starting to reboot. */
 	interrupt_mask_set_mask(~0ULL);

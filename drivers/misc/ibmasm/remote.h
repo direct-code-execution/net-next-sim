@@ -18,9 +18,9 @@
  *
  * Copyright (C) IBM Corporation, 2004
  *
- * Author: Max Asböck <amax@us.ibm.com>
+ * Author: Max AsbÃ¶ck <amax@us.ibm.com>
  *
- * Orignally written by Pete Reynolds
+ * Originally written by Pete Reynolds
  */
 
 #ifndef _IBMASM_REMOTE_H_

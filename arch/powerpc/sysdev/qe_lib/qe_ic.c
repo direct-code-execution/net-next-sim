@@ -22,7 +22,6 @@
 #include <linux/stddef.h>
 #include <linux/sched.h>
 #include <linux/signal.h>
-#include <linux/sysdev.h>
 #include <linux/device.h>
 #include <linux/bootmem.h>
 #include <linux/spinlock.h>
@@ -189,15 +188,18 @@ static inline void qe_ic_write(volatile __be32  __iomem * base, unsigned int reg
 
 static inline struct qe_ic *qe_ic_from_irq(unsigned int virq)
 {
-	return irq_to_desc(virq)->chip_data;
+	return irq_get_chip_data(virq);
 }
 
-#define virq_to_hw(virq)	((unsigned int)irq_map[virq].hwirq)
-
-static void qe_ic_unmask_irq(unsigned int virq)
+static inline struct qe_ic *qe_ic_from_irq_data(struct irq_data *d)
 {
-	struct qe_ic *qe_ic = qe_ic_from_irq(virq);
-	unsigned int src = virq_to_hw(virq);
+	return irq_data_get_irq_chip_data(d);
+}
+
+static void qe_ic_unmask_irq(struct irq_data *d)
+{
+	struct qe_ic *qe_ic = qe_ic_from_irq_data(d);
+	unsigned int src = irqd_to_hwirq(d);
 	unsigned long flags;
 	u32 temp;
 
@@ -210,10 +212,10 @@ static void qe_ic_unmask_irq(unsigned int virq)
 	raw_spin_unlock_irqrestore(&qe_ic_lock, flags);
 }
 
-static void qe_ic_mask_irq(unsigned int virq)
+static void qe_ic_mask_irq(struct irq_data *d)
 {
-	struct qe_ic *qe_ic = qe_ic_from_irq(virq);
-	unsigned int src = virq_to_hw(virq);
+	struct qe_ic *qe_ic = qe_ic_from_irq_data(d);
+	unsigned int src = irqd_to_hwirq(d);
 	unsigned long flags;
 	u32 temp;
 
@@ -238,18 +240,18 @@ static void qe_ic_mask_irq(unsigned int virq)
 
 static struct irq_chip qe_ic_irq_chip = {
 	.name = "QEIC",
-	.unmask = qe_ic_unmask_irq,
-	.mask = qe_ic_mask_irq,
-	.mask_ack = qe_ic_mask_irq,
+	.irq_unmask = qe_ic_unmask_irq,
+	.irq_mask = qe_ic_mask_irq,
+	.irq_mask_ack = qe_ic_mask_irq,
 };
 
-static int qe_ic_host_match(struct irq_host *h, struct device_node *node)
+static int qe_ic_host_match(struct irq_domain *h, struct device_node *node)
 {
 	/* Exact match, unless qe_ic node is NULL */
 	return h->of_node == NULL || h->of_node == node;
 }
 
-static int qe_ic_host_map(struct irq_host *h, unsigned int virq,
+static int qe_ic_host_map(struct irq_domain *h, unsigned int virq,
 			  irq_hw_number_t hw)
 {
 	struct qe_ic *qe_ic = h->host_data;
@@ -262,31 +264,18 @@ static int qe_ic_host_map(struct irq_host *h, unsigned int virq,
 	/* Default chip */
 	chip = &qe_ic->hc_irq;
 
-	set_irq_chip_data(virq, qe_ic);
-	irq_to_desc(virq)->status |= IRQ_LEVEL;
+	irq_set_chip_data(virq, qe_ic);
+	irq_set_status_flags(virq, IRQ_LEVEL);
 
-	set_irq_chip_and_handler(virq, chip, handle_level_irq);
+	irq_set_chip_and_handler(virq, chip, handle_level_irq);
 
 	return 0;
 }
 
-static int qe_ic_host_xlate(struct irq_host *h, struct device_node *ct,
-			    const u32 * intspec, unsigned int intsize,
-			    irq_hw_number_t * out_hwirq,
-			    unsigned int *out_flags)
-{
-	*out_hwirq = intspec[0];
-	if (intsize > 1)
-		*out_flags = intspec[1];
-	else
-		*out_flags = IRQ_TYPE_NONE;
-	return 0;
-}
-
-static struct irq_host_ops qe_ic_host_ops = {
+static struct irq_domain_ops qe_ic_host_ops = {
 	.match = qe_ic_host_match,
 	.map = qe_ic_host_map,
-	.xlate = qe_ic_host_xlate,
+	.xlate = irq_domain_xlate_onetwocell,
 };
 
 /* Return an interrupt vector or NO_IRQ if no interrupt is pending. */
@@ -337,16 +326,15 @@ void __init qe_ic_init(struct device_node *node, unsigned int flags,
 	if (qe_ic == NULL)
 		return;
 
-	qe_ic->irqhost = irq_alloc_host(node, IRQ_HOST_MAP_LINEAR,
-					NR_QE_IC_INTS, &qe_ic_host_ops, 0);
+	qe_ic->irqhost = irq_domain_add_linear(node, NR_QE_IC_INTS,
+					       &qe_ic_host_ops, qe_ic);
 	if (qe_ic->irqhost == NULL) {
 		kfree(qe_ic);
 		return;
 	}
 
-	qe_ic->regs = ioremap(res.start, res.end - res.start + 1);
+	qe_ic->regs = ioremap(res.start, resource_size(&res));
 
-	qe_ic->irqhost->host_data = qe_ic;
 	qe_ic->hc_irq = qe_ic_irq_chip;
 
 	qe_ic->virq_high = irq_of_parse_and_map(node, 0);
@@ -381,13 +369,13 @@ void __init qe_ic_init(struct device_node *node, unsigned int flags,
 
 	qe_ic_write(qe_ic->regs, QEIC_CICR, temp);
 
-	set_irq_data(qe_ic->virq_low, qe_ic);
-	set_irq_chained_handler(qe_ic->virq_low, low_handler);
+	irq_set_handler_data(qe_ic->virq_low, qe_ic);
+	irq_set_chained_handler(qe_ic->virq_low, low_handler);
 
 	if (qe_ic->virq_high != NO_IRQ &&
 			qe_ic->virq_high != qe_ic->virq_low) {
-		set_irq_data(qe_ic->virq_high, qe_ic);
-		set_irq_chained_handler(qe_ic->virq_high, high_handler);
+		irq_set_handler_data(qe_ic->virq_high, qe_ic);
+		irq_set_chained_handler(qe_ic->virq_high, high_handler);
 	}
 }
 
@@ -481,13 +469,14 @@ int qe_ic_set_high_priority(unsigned int virq, unsigned int priority, int high)
 	return 0;
 }
 
-static struct sysdev_class qe_ic_sysclass = {
+static struct bus_type qe_ic_subsys = {
 	.name = "qe_ic",
+	.dev_name = "qe_ic",
 };
 
-static struct sys_device device_qe_ic = {
+static struct device device_qe_ic = {
 	.id = 0,
-	.cls = &qe_ic_sysclass,
+	.bus = &qe_ic_subsys,
 };
 
 static int __init init_qe_ic_sysfs(void)
@@ -496,12 +485,12 @@ static int __init init_qe_ic_sysfs(void)
 
 	printk(KERN_DEBUG "Registering qe_ic with sysfs...\n");
 
-	rc = sysdev_class_register(&qe_ic_sysclass);
+	rc = subsys_system_register(&qe_ic_subsys, NULL);
 	if (rc) {
 		printk(KERN_ERR "Failed registering qe_ic sys class\n");
 		return -ENODEV;
 	}
-	rc = sysdev_register(&device_qe_ic);
+	rc = device_register(&device_qe_ic);
 	if (rc) {
 		printk(KERN_ERR "Failed registering qe_ic sys device\n");
 		return -ENODEV;

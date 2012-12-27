@@ -52,14 +52,14 @@ void __init plat_mem_setup(void)
 	/* this is faster than wasting cycles trying to approximate it */
 	preset_lpj = (est_freq >> 1) / HZ;
 
-	board_setup();  /* board specific setup */
-
 	if (au1xxx_cpu_needs_config_od())
 		/* Various early Au1xx0 errata corrected by this */
 		set_c0_config(1 << 19); /* Set Config[OD] */
 	else
 		/* Clear to obtain best system bus performance */
 		clear_c0_config(1 << 19); /* Clear Config[OD] */
+
+	board_setup();  /* board specific setup */
 
 	/* IO/MEM resources. */
 	set_io_port_base(0);
@@ -73,8 +73,8 @@ void __init plat_mem_setup(void)
 /* This routine should be valid for all Au1x based boards */
 phys_t __fixup_bigphys_addr(phys_t phys_addr, phys_t size)
 {
-	u32 start = (u32)Au1500_PCI_MEM_START;
-	u32 end   = (u32)Au1500_PCI_MEM_END;
+	unsigned long start = ALCHEMY_PCI_MEMWIN_START;
+	unsigned long end = ALCHEMY_PCI_MEMWIN_END;
 
 	/* Don't fixup 36-bit addresses */
 	if ((phys_addr >> 32) != 0)
@@ -82,7 +82,7 @@ phys_t __fixup_bigphys_addr(phys_t phys_addr, phys_t size)
 
 	/* Check for PCI memory window */
 	if (phys_addr >= start && (phys_addr + size - 1) <= end)
-		return (phys_t)((phys_addr - start) + Au1500_PCI_MEM_START);
+		return (phys_t)(AU1500_PCI_MEM_PHYS_ADDR + phys_addr);
 
 	/* default nop */
 	return phys_addr;

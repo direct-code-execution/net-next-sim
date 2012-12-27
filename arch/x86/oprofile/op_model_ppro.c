@@ -28,7 +28,7 @@ static int counter_width = 32;
 
 #define MSR_PPRO_EVENTSEL_RESERVED	((0xFFFFFFFFULL<<32)|(1ULL<<21))
 
-static u64 *reset_value;
+static u64 reset_value[OP_MAX_COUNTER];
 
 static void ppro_shutdown(struct op_msrs const * const msrs)
 {
@@ -39,10 +39,6 @@ static void ppro_shutdown(struct op_msrs const * const msrs)
 			continue;
 		release_perfctr_nmi(MSR_P6_PERFCTR0 + i);
 		release_evntsel_nmi(MSR_P6_EVNTSEL0 + i);
-	}
-	if (reset_value) {
-		kfree(reset_value);
-		reset_value = NULL;
 	}
 }
 
@@ -79,13 +75,6 @@ static void ppro_setup_ctrs(struct op_x86_model_spec const *model,
 	u64 val;
 	int i;
 
-	if (!reset_value) {
-		reset_value = kzalloc(sizeof(reset_value[0]) * num_counters,
-					GFP_ATOMIC);
-		if (!reset_value)
-			return;
-	}
-
 	if (cpu_has_arch_perfmon) {
 		union cpuid10_eax eax;
 		eax.full = cpuid_eax(0xa);
@@ -95,8 +84,8 @@ static void ppro_setup_ctrs(struct op_x86_model_spec const *model,
 		 * counter width:
 		 */
 		if (!(eax.split.version_id == 0 &&
-			current_cpu_data.x86 == 6 &&
-				current_cpu_data.x86_model == 15)) {
+			__this_cpu_read(cpu_info.x86) == 6 &&
+				__this_cpu_read(cpu_info.x86_model) == 15)) {
 
 			if (counter_width < eax.split.bit_width)
 				counter_width = eax.split.bit_width;
@@ -141,13 +130,6 @@ static int ppro_check_ctrs(struct pt_regs * const regs,
 	u64 val;
 	int i;
 
-	/*
-	 * This can happen if perf counters are in use when
-	 * we steal the die notifier NMI.
-	 */
-	if (unlikely(!reset_value))
-		goto out;
-
 	for (i = 0; i < num_counters; ++i) {
 		if (!reset_value[i])
 			continue;
@@ -158,7 +140,6 @@ static int ppro_check_ctrs(struct pt_regs * const regs,
 		wrmsrl(msrs->counters[i].addr, -reset_value[i]);
 	}
 
-out:
 	/* Only P6 based Pentium M need to re-unmask the apic vector but it
 	 * doesn't hurt other P6 variant */
 	apic_write(APIC_LVTPC, apic_read(APIC_LVTPC) & ~APIC_LVT_MASKED);
@@ -179,8 +160,6 @@ static void ppro_start(struct op_msrs const * const msrs)
 	u64 val;
 	int i;
 
-	if (!reset_value)
-		return;
 	for (i = 0; i < num_counters; ++i) {
 		if (reset_value[i]) {
 			rdmsrl(msrs->controls[i].addr, val);
@@ -196,8 +175,6 @@ static void ppro_stop(struct op_msrs const * const msrs)
 	u64 val;
 	int i;
 
-	if (!reset_value)
-		return;
 	for (i = 0; i < num_counters; ++i) {
 		if (!reset_value[i])
 			continue;
@@ -235,14 +212,14 @@ static void arch_perfmon_setup_counters(void)
 	eax.full = cpuid_eax(0xa);
 
 	/* Workaround for BIOS bugs in 6/15. Taken from perfmon2 */
-	if (eax.split.version_id == 0 && current_cpu_data.x86 == 6 &&
-		current_cpu_data.x86_model == 15) {
+	if (eax.split.version_id == 0 && __this_cpu_read(cpu_info.x86) == 6 &&
+		__this_cpu_read(cpu_info.x86_model) == 15) {
 		eax.split.version_id = 2;
 		eax.split.num_counters = 2;
 		eax.split.bit_width = 40;
 	}
 
-	num_counters = eax.split.num_counters;
+	num_counters = min((int)eax.split.num_counters, OP_MAX_COUNTER);
 
 	op_arch_perfmon_spec.num_counters = num_counters;
 	op_arch_perfmon_spec.num_controls = num_counters;

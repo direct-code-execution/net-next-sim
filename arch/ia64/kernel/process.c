@@ -38,6 +38,7 @@
 #include <asm/pgalloc.h>
 #include <asm/processor.h>
 #include <asm/sal.h>
+#include <asm/switch_to.h>
 #include <asm/tlbflush.h>
 #include <asm/uaccess.h>
 #include <asm/unwind.h>
@@ -53,12 +54,8 @@
 
 void (*ia64_mark_idle)(int);
 
-unsigned long boot_option_idle_override = 0;
+unsigned long boot_option_idle_override = IDLE_NO_OVERRIDE;
 EXPORT_SYMBOL(boot_option_idle_override);
-unsigned long idle_halt;
-EXPORT_SYMBOL(idle_halt);
-unsigned long idle_nomwait;
-EXPORT_SYMBOL(idle_nomwait);
 void (*pm_idle) (void);
 EXPORT_SYMBOL(pm_idle);
 void (*pm_power_off) (void);
@@ -334,9 +331,7 @@ cpu_idle (void)
 			normal_xtp();
 #endif
 		}
-		preempt_enable_no_resched();
-		schedule();
-		preempt_disable();
+		schedule_preempt_disabled();
 		check_pgt_cache();
 		if (cpu_is_offline(cpu))
 			play_dead();

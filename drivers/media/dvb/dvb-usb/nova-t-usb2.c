@@ -21,7 +21,7 @@ DVB_DEFINE_MOD_OPT_ADAPTER_NR(adapter_nr);
 #define deb_ee(args...) dprintk(debug,0x02,args)
 
 /* Hauppauge NOVA-T USB2 keys */
-static struct ir_scancode ir_codes_haupp_table[] = {
+static struct rc_map_table rc_map_haupp_table[] = {
 	{ 0x1e00, KEY_0 },
 	{ 0x1e01, KEY_1 },
 	{ 0x1e02, KEY_2 },
@@ -47,7 +47,7 @@ static struct ir_scancode ir_codes_haupp_table[] = {
 	{ 0x1e17, KEY_RIGHT },
 	{ 0x1e18, KEY_VIDEO },
 	{ 0x1e19, KEY_AUDIO },
-	{ 0x1e1a, KEY_MEDIA },
+	{ 0x1e1a, KEY_IMAGES },
 	{ 0x1e1b, KEY_EPG },
 	{ 0x1e1c, KEY_TV },
 	{ 0x1e1e, KEY_NEXT },
@@ -91,14 +91,14 @@ static int nova_t_rc_query(struct dvb_usb_device *d, u32 *event, int *state)
 
 			deb_rc("raw key code 0x%02x, 0x%02x, 0x%02x to c: %02x d: %02x toggle: %d\n",key[1],key[2],key[3],custom,data,toggle);
 
-			for (i = 0; i < ARRAY_SIZE(ir_codes_haupp_table); i++) {
-				if (rc5_data(&ir_codes_haupp_table[i]) == data &&
-					rc5_custom(&ir_codes_haupp_table[i]) == custom) {
+			for (i = 0; i < ARRAY_SIZE(rc_map_haupp_table); i++) {
+				if (rc5_data(&rc_map_haupp_table[i]) == data &&
+					rc5_custom(&rc_map_haupp_table[i]) == custom) {
 
-					deb_rc("c: %x, d: %x\n", rc5_data(&ir_codes_haupp_table[i]),
-								 rc5_custom(&ir_codes_haupp_table[i]));
+					deb_rc("c: %x, d: %x\n", rc5_data(&rc_map_haupp_table[i]),
+								 rc5_custom(&rc_map_haupp_table[i]));
 
-					*event = ir_codes_haupp_table[i].keycode;
+					*event = rc_map_haupp_table[i].keycode;
 					*state = REMOTE_KEY_PRESSED;
 					if (st->old_toggle == toggle) {
 						if (st->last_repeat_count++ < 2)
@@ -166,6 +166,8 @@ static struct dvb_usb_device_properties nova_t_properties = {
 	.num_adapters     = 1,
 	.adapter          = {
 		{
+		.num_frontends = 1,
+		.fe = {{
 			.caps = DVB_USB_ADAP_HAS_PID_FILTER | DVB_USB_ADAP_PID_FILTER_CAN_BE_TURNED_OFF,
 			.pid_filter_count = 32,
 
@@ -186,7 +188,7 @@ static struct dvb_usb_device_properties nova_t_properties = {
 					}
 				}
 			},
-
+		}},
 			.size_of_priv     = sizeof(struct dibusb_state),
 		}
 	},
@@ -197,8 +199,8 @@ static struct dvb_usb_device_properties nova_t_properties = {
 
 	.rc.legacy = {
 		.rc_interval      = 100,
-		.rc_key_map       = ir_codes_haupp_table,
-		.rc_key_map_size  = ARRAY_SIZE(ir_codes_haupp_table),
+		.rc_map_table     = rc_map_haupp_table,
+		.rc_map_size      = ARRAY_SIZE(rc_map_haupp_table),
 		.rc_query         = nova_t_rc_query,
 	},
 
@@ -223,26 +225,7 @@ static struct usb_driver nova_t_driver = {
 	.id_table	= nova_t_table,
 };
 
-/* module stuff */
-static int __init nova_t_module_init(void)
-{
-	int result;
-	if ((result = usb_register(&nova_t_driver))) {
-		err("usb_register failed. Error number %d",result);
-		return result;
-	}
-
-	return 0;
-}
-
-static void __exit nova_t_module_exit(void)
-{
-	/* deregister this driver from the USB subsystem */
-	usb_deregister(&nova_t_driver);
-}
-
-module_init (nova_t_module_init);
-module_exit (nova_t_module_exit);
+module_usb_driver(nova_t_driver);
 
 MODULE_AUTHOR("Patrick Boettcher <patrick.boettcher@desy.de>");
 MODULE_DESCRIPTION("Hauppauge WinTV-NOVA-T usb2");

@@ -16,9 +16,7 @@
 #include <linux/device.h>
 
 #include <pcmcia/ss.h>
-#include <pcmcia/cs.h>
 
-#include <asm/system.h>
 #include <asm/io.h>
 
 #include "i82092aa.h"
@@ -27,14 +25,9 @@
 MODULE_LICENSE("GPL");
 
 /* PCI core routines */
-static struct pci_device_id i82092aa_pci_ids[] = {
-	{
-	      .vendor = PCI_VENDOR_ID_INTEL,
-	      .device = PCI_DEVICE_ID_INTEL_82092AA_0,
-	      .subvendor = PCI_ANY_ID,
-	      .subdevice = PCI_ANY_ID,
-	 },
-	 {} 
+static DEFINE_PCI_DEVICE_TABLE(i82092aa_pci_ids) = {
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82092AA_0) },
+	{ }
 };
 MODULE_DEVICE_TABLE(pci, i82092aa_pci_ids);
 
@@ -55,7 +48,7 @@ static struct pccard_operations i82092aa_operations = {
 	.set_mem_map		= i82092aa_set_mem_map,
 };
 
-/* The card can do upto 4 sockets, allocate a structure for each of them */
+/* The card can do up to 4 sockets, allocate a structure for each of them */
 
 struct socket_info {
 	int	number;

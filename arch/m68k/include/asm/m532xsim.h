@@ -9,6 +9,12 @@
 #define	m532xsim_h
 /****************************************************************************/
 
+#define	CPU_NAME		"COLDFIRE(m532x)"
+#define	CPU_INSTR_PER_JIFFY	3
+#define	MCF_BUSCLK		(MCF_CLK / 3)
+
+#include <asm/m53xxacr.h>
+
 #define MCF_REG32(x) (*(volatile unsigned long  *)(x))
 #define MCF_REG16(x) (*(volatile unsigned short *)(x))
 #define MCF_REG08(x) (*(volatile unsigned char  *)(x))
@@ -18,6 +24,19 @@
 #define MCFINT_UART1        27          /* Interrupt number for UART1 */
 #define MCFINT_UART2        28          /* Interrupt number for UART2 */
 #define MCFINT_QSPI         31          /* Interrupt number for QSPI */
+#define MCFINT_FECRX0	    36		/* Interrupt number for FEC */
+#define MCFINT_FECTX0	    40		/* Interrupt number for FEC */
+#define MCFINT_FECENTC0	    42		/* Interrupt number for FEC */
+
+#define MCF_IRQ_UART0       (MCFINT_VECBASE + MCFINT_UART0)
+#define MCF_IRQ_UART1       (MCFINT_VECBASE + MCFINT_UART1)
+#define MCF_IRQ_UART2       (MCFINT_VECBASE + MCFINT_UART2)
+
+#define MCF_IRQ_FECRX0	    (MCFINT_VECBASE + MCFINT_FECRX0)
+#define MCF_IRQ_FECTX0	    (MCFINT_VECBASE + MCFINT_FECTX0)
+#define MCF_IRQ_FECENTC0    (MCFINT_VECBASE + MCFINT_FECENTC0)
+
+#define	MCF_IRQ_QSPI	    (MCFINT_VECBASE + MCFINT_QSPI)
 
 #define MCF_WTM_WCR	MCF_REG16(0xFC098000)
 
@@ -74,31 +93,35 @@
 #define	MCF_IRQ_PROFILER	(64 + 33)	/* Timer1 */
 
 /*
- *	Define the Cache register flags.
+ *  UART module.
  */
-#define	CACR_EC			(1<<31)
-#define	CACR_ESB		(1<<29)
-#define	CACR_DPI		(1<<28)
-#define	CACR_HLCK		(1<<27)
-#define	CACR_CINVA		(1<<24)
-#define	CACR_DNFB		(1<<10)
-#define	CACR_DCM_WTHRU		(0<<8)
-#define	CACR_DCM_WBACK		(1<<8)
-#define	CACR_DCM_OFF_PRE	(2<<8)
-#define	CACR_DCM_OFF_IMP	(3<<8)
-#define	CACR_DW			(1<<5)
+#define MCFUART_BASE0		0xFC060000	/* Base address of UART1 */
+#define MCFUART_BASE1		0xFC064000	/* Base address of UART2 */
+#define MCFUART_BASE2		0xFC068000	/* Base address of UART3 */
 
-#define	ACR_BASE_POS		24
-#define	ACR_MASK_POS		16
-#define	ACR_ENABLE		(1<<15)
-#define	ACR_USER		(0<<13)
-#define	ACR_SUPER		(1<<13)
-#define	ACR_ANY			(2<<13)
-#define	ACR_CM_WTHRU		(0<<5)
-#define	ACR_CM_WBACK		(1<<5)
-#define	ACR_CM_OFF_PRE		(2<<5)
-#define	ACR_CM_OFF_IMP		(3<<5)
-#define	ACR_WPROTECT		(1<<2)
+/*
+ *  FEC module.
+ */
+#define	MCFFEC_BASE0		0xFC030000	/* Base address of FEC0 */
+#define	MCFFEC_SIZE0		0x800		/* Size of FEC0 region */
+
+/*
+ *  QSPI module.
+ */
+#define	MCFQSPI_BASE		0xFC058000	/* Base address of QSPI */
+#define	MCFQSPI_SIZE		0x40		/* Size of QSPI region */
+
+#define	MCFQSPI_CS0		84
+#define	MCFQSPI_CS1		85
+#define	MCFQSPI_CS2		86
+
+/*
+ *  Timer module.
+ */
+#define MCFTIMER_BASE1		0xFC070000	/* Base address of TIMER1 */
+#define MCFTIMER_BASE2		0xFC074000	/* Base address of TIMER2 */
+#define MCFTIMER_BASE3		0xFC078000	/* Base address of TIMER3 */
+#define MCFTIMER_BASE4		0xFC07C000	/* Base address of TIMER4 */
 
 /*********************************************************************
  *

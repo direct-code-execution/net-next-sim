@@ -51,8 +51,8 @@ static void __qib_release_user_pages(struct page **p, size_t num_pages,
 /*
  * Call with current->mm->mmap_sem held.
  */
-static int __get_user_pages(unsigned long start_page, size_t num_pages,
-			    struct page **p, struct vm_area_struct **vma)
+static int __qib_get_user_pages(unsigned long start_page, size_t num_pages,
+				struct page **p, struct vm_area_struct **vma)
 {
 	unsigned long lock_limit;
 	size_t got;
@@ -74,7 +74,7 @@ static int __get_user_pages(unsigned long start_page, size_t num_pages,
 			goto bail_release;
 	}
 
-	current->mm->locked_vm += num_pages;
+	current->mm->pinned_vm += num_pages;
 
 	ret = 0;
 	goto bail;
@@ -136,7 +136,7 @@ int qib_get_user_pages(unsigned long start_page, size_t num_pages,
 
 	down_write(&current->mm->mmap_sem);
 
-	ret = __get_user_pages(start_page, num_pages, p, NULL);
+	ret = __qib_get_user_pages(start_page, num_pages, p, NULL);
 
 	up_write(&current->mm->mmap_sem);
 
@@ -151,7 +151,7 @@ void qib_release_user_pages(struct page **p, size_t num_pages)
 	__qib_release_user_pages(p, num_pages, 1);
 
 	if (current->mm) {
-		current->mm->locked_vm -= num_pages;
+		current->mm->pinned_vm -= num_pages;
 		up_write(&current->mm->mmap_sem);
 	}
 }

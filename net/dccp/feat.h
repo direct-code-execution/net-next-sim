@@ -111,7 +111,6 @@ extern int  dccp_feat_init(struct sock *sk);
 extern void dccp_feat_initialise_sysctls(void);
 extern int  dccp_feat_register_sp(struct sock *sk, u8 feat, u8 is_local,
 				  u8 const *list, u8 len);
-extern int  dccp_feat_register_nn(struct sock *sk, u8 feat, u64 val);
 extern int  dccp_feat_parse_options(struct sock *, struct dccp_request_sock *,
 				    u8 mand, u8 opt, u8 feat, u8 *val, u8 len);
 extern int  dccp_feat_clone_list(struct list_head const *, struct list_head *);
@@ -130,6 +129,7 @@ extern int  dccp_feat_clone_list(struct list_head const *, struct list_head *);
 
 extern void dccp_encode_value_var(const u64 value, u8 *to, const u8 len);
 extern u64  dccp_decode_value_var(const u8 *bf, const u8 len);
+extern u64  dccp_feat_nn_get(struct sock *sk, u8 feat);
 
 extern int  dccp_insert_option_mandatory(struct sk_buff *skb);
 extern int  dccp_insert_fn_opt(struct sk_buff *skb, u8 type, u8 feat,

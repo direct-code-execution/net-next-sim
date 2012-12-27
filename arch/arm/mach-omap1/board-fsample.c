@@ -10,7 +10,7 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-
+#include <linux/gpio.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
@@ -21,20 +21,23 @@
 #include <linux/mtd/physmap.h>
 #include <linux/input.h>
 #include <linux/smc91x.h>
+#include <linux/omapfb.h>
 
-#include <mach/hardware.h>
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 
 #include <plat/tc.h>
-#include <mach/gpio.h>
 #include <plat/mux.h>
 #include <plat/flash.h>
 #include <plat/fpga.h>
 #include <plat/keypad.h>
-#include <plat/common.h>
 #include <plat/board.h>
+
+#include <mach/hardware.h>
+
+#include "iomap.h"
+#include "common.h"
 
 /* fsample is pretty close to p2-sample */
 
@@ -69,36 +72,35 @@
 #define fsample_cpld_clear(bit) \
     fsample_cpld_write(0xf0 | ((bit) & 15), FSAMPLE_CPLD_SET_CLR)
 
-static int fsample_keymap[] = {
-	KEY(0,0,KEY_UP),
-	KEY(0,1,KEY_RIGHT),
-	KEY(0,2,KEY_LEFT),
-	KEY(0,3,KEY_DOWN),
-	KEY(0,4,KEY_ENTER),
-	KEY(1,0,KEY_F10),
-	KEY(1,1,KEY_SEND),
-	KEY(1,2,KEY_END),
-	KEY(1,3,KEY_VOLUMEDOWN),
-	KEY(1,4,KEY_VOLUMEUP),
-	KEY(1,5,KEY_RECORD),
-	KEY(2,0,KEY_F9),
-	KEY(2,1,KEY_3),
-	KEY(2,2,KEY_6),
-	KEY(2,3,KEY_9),
-	KEY(2,4,KEY_KPDOT),
-	KEY(3,0,KEY_BACK),
-	KEY(3,1,KEY_2),
-	KEY(3,2,KEY_5),
-	KEY(3,3,KEY_8),
-	KEY(3,4,KEY_0),
-	KEY(3,5,KEY_KPSLASH),
-	KEY(4,0,KEY_HOME),
-	KEY(4,1,KEY_1),
-	KEY(4,2,KEY_4),
-	KEY(4,3,KEY_7),
-	KEY(4,4,KEY_KPASTERISK),
-	KEY(4,5,KEY_POWER),
-	0
+static const unsigned int fsample_keymap[] = {
+	KEY(0, 0, KEY_UP),
+	KEY(1, 0, KEY_RIGHT),
+	KEY(2, 0, KEY_LEFT),
+	KEY(3, 0, KEY_DOWN),
+	KEY(4, 0, KEY_ENTER),
+	KEY(0, 1, KEY_F10),
+	KEY(1, 1, KEY_SEND),
+	KEY(2, 1, KEY_END),
+	KEY(3, 1, KEY_VOLUMEDOWN),
+	KEY(4, 1, KEY_VOLUMEUP),
+	KEY(5, 1, KEY_RECORD),
+	KEY(0, 2, KEY_F9),
+	KEY(1, 2, KEY_3),
+	KEY(2, 2, KEY_6),
+	KEY(3, 2, KEY_9),
+	KEY(4, 2, KEY_KPDOT),
+	KEY(0, 3, KEY_BACK),
+	KEY(1, 3, KEY_2),
+	KEY(2, 3, KEY_5),
+	KEY(3, 3, KEY_8),
+	KEY(4, 3, KEY_0),
+	KEY(5, 3, KEY_KPSLASH),
+	KEY(0, 4, KEY_HOME),
+	KEY(1, 4, KEY_1),
+	KEY(2, 4, KEY_4),
+	KEY(3, 4, KEY_7),
+	KEY(4, 4, KEY_KPASTERISK),
+	KEY(5, 4, KEY_POWER),
 };
 
 static struct smc91x_platdata smc91x_info = {
@@ -119,6 +121,15 @@ static struct resource smc91x_resources[] = {
 		.flags	= IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHEDGE,
 	},
 };
+
+static void __init fsample_init_smc91x(void)
+{
+	fpga_write(1, H2P2_DBG_FPGA_LAN_RESET);
+	mdelay(50);
+	fpga_write(fpga_read(H2P2_DBG_FPGA_LAN_RESET) & ~1,
+		   H2P2_DBG_FPGA_LAN_RESET);
+	mdelay(50);
+}
 
 static struct mtd_partition nor_partitions[] = {
 	/* bootloader (U-Boot, etc) in first sector */
@@ -244,11 +255,15 @@ static struct resource kp_resources[] = {
 	},
 };
 
+static const struct matrix_keymap_data fsample_keymap_data = {
+	.keymap		= fsample_keymap,
+	.keymap_size	= ARRAY_SIZE(fsample_keymap),
+};
+
 static struct omap_kp_platform_data kp_data = {
 	.rows		= 8,
 	.cols		= 8,
-	.keymap		= fsample_keymap,
-	.keymapsize	= ARRAY_SIZE(fsample_keymap),
+	.keymap_data	= &fsample_keymap_data,
 	.delay		= 4,
 };
 
@@ -262,95 +277,19 @@ static struct platform_device kp_device = {
 	.resource	= kp_resources,
 };
 
-static struct platform_device lcd_device = {
-	.name		= "lcd_p2",
-	.id		= -1,
-};
-
 static struct platform_device *devices[] __initdata = {
 	&nor_device,
 	&nand_device,
 	&smc91x_device,
 	&kp_device,
-	&lcd_device,
 };
 
-static struct omap_lcd_config fsample_lcd_config __initdata = {
+static struct omap_lcd_config fsample_lcd_config = {
 	.ctrl_name	= "internal",
-};
-
-static struct omap_board_config_kernel fsample_config[] = {
-	{ OMAP_TAG_LCD,		&fsample_lcd_config },
 };
 
 static void __init omap_fsample_init(void)
 {
-	if (gpio_request(FSAMPLE_NAND_RB_GPIO_PIN, "NAND ready") < 0)
-		BUG();
-	gpio_direction_input(FSAMPLE_NAND_RB_GPIO_PIN);
-
-	omap_cfg_reg(L3_1610_FLASH_CS2B_OE);
-	omap_cfg_reg(M8_1610_FLASH_CS2B_WE);
-
-	/* Mux pins for keypad */
-	omap_cfg_reg(E2_7XX_KBR0);
-	omap_cfg_reg(J7_7XX_KBR1);
-	omap_cfg_reg(E1_7XX_KBR2);
-	omap_cfg_reg(F3_7XX_KBR3);
-	omap_cfg_reg(D2_7XX_KBR4);
-	omap_cfg_reg(C2_7XX_KBC0);
-	omap_cfg_reg(D3_7XX_KBC1);
-	omap_cfg_reg(E4_7XX_KBC2);
-	omap_cfg_reg(F4_7XX_KBC3);
-	omap_cfg_reg(E3_7XX_KBC4);
-
-	platform_add_devices(devices, ARRAY_SIZE(devices));
-
-	omap_board_config = fsample_config;
-	omap_board_config_size = ARRAY_SIZE(fsample_config);
-	omap_serial_init();
-	omap_register_i2c_bus(1, 100, NULL, 0);
-}
-
-static void __init fsample_init_smc91x(void)
-{
-	fpga_write(1, H2P2_DBG_FPGA_LAN_RESET);
-	mdelay(50);
-	fpga_write(fpga_read(H2P2_DBG_FPGA_LAN_RESET) & ~1,
-		   H2P2_DBG_FPGA_LAN_RESET);
-	mdelay(50);
-}
-
-static void __init omap_fsample_init_irq(void)
-{
-	omap1_init_common_hw();
-	omap_init_irq();
-	omap_gpio_init();
-	fsample_init_smc91x();
-}
-
-/* Only FPGA needs to be mapped here. All others are done with ioremap */
-static struct map_desc omap_fsample_io_desc[] __initdata = {
-	{
-		.virtual	= H2P2_DBG_FPGA_BASE,
-		.pfn		= __phys_to_pfn(H2P2_DBG_FPGA_START),
-		.length		= H2P2_DBG_FPGA_SIZE,
-		.type		= MT_DEVICE
-	},
-	{
-		.virtual	= FSAMPLE_CPLD_BASE,
-		.pfn		= __phys_to_pfn(FSAMPLE_CPLD_START),
-		.length		= FSAMPLE_CPLD_SIZE,
-		.type		= MT_DEVICE
-	}
-};
-
-static void __init omap_fsample_map_io(void)
-{
-	omap1_map_common_io();
-	iotable_init(omap_fsample_io_desc,
-		     ARRAY_SIZE(omap_fsample_io_desc));
-
 	/* Early, board-dependent init */
 
 	/*
@@ -381,17 +320,69 @@ static void __init omap_fsample_map_io(void)
 	 * Configure MPU_EXT_NIRQ IO in IO_CONF9 register,
 	 * It is used as the Ethernet controller interrupt
 	 */
-	omap_writel(omap_readl(OMAP7XX_IO_CONF_9) & 0x1FFFFFFF, OMAP7XX_IO_CONF_9);
+	omap_writel(omap_readl(OMAP7XX_IO_CONF_9) & 0x1FFFFFFF,
+			OMAP7XX_IO_CONF_9);
+
+	fsample_init_smc91x();
+
+	if (gpio_request(FSAMPLE_NAND_RB_GPIO_PIN, "NAND ready") < 0)
+		BUG();
+	gpio_direction_input(FSAMPLE_NAND_RB_GPIO_PIN);
+
+	omap_cfg_reg(L3_1610_FLASH_CS2B_OE);
+	omap_cfg_reg(M8_1610_FLASH_CS2B_WE);
+
+	/* Mux pins for keypad */
+	omap_cfg_reg(E2_7XX_KBR0);
+	omap_cfg_reg(J7_7XX_KBR1);
+	omap_cfg_reg(E1_7XX_KBR2);
+	omap_cfg_reg(F3_7XX_KBR3);
+	omap_cfg_reg(D2_7XX_KBR4);
+	omap_cfg_reg(C2_7XX_KBC0);
+	omap_cfg_reg(D3_7XX_KBC1);
+	omap_cfg_reg(E4_7XX_KBC2);
+	omap_cfg_reg(F4_7XX_KBC3);
+	omap_cfg_reg(E3_7XX_KBC4);
+
+	platform_add_devices(devices, ARRAY_SIZE(devices));
+
+	omap_serial_init();
+	omap_register_i2c_bus(1, 100, NULL, 0);
+
+	omapfb_set_lcd_config(&fsample_lcd_config);
+}
+
+/* Only FPGA needs to be mapped here. All others are done with ioremap */
+static struct map_desc omap_fsample_io_desc[] __initdata = {
+	{
+		.virtual	= H2P2_DBG_FPGA_BASE,
+		.pfn		= __phys_to_pfn(H2P2_DBG_FPGA_START),
+		.length		= H2P2_DBG_FPGA_SIZE,
+		.type		= MT_DEVICE
+	},
+	{
+		.virtual	= FSAMPLE_CPLD_BASE,
+		.pfn		= __phys_to_pfn(FSAMPLE_CPLD_START),
+		.length		= FSAMPLE_CPLD_SIZE,
+		.type		= MT_DEVICE
+	}
+};
+
+static void __init omap_fsample_map_io(void)
+{
+	omap15xx_map_io();
+	iotable_init(omap_fsample_io_desc,
+		     ARRAY_SIZE(omap_fsample_io_desc));
 }
 
 MACHINE_START(OMAP_FSAMPLE, "OMAP730 F-Sample")
 /* Maintainer: Brian Swetland <swetland@google.com> */
-	.phys_io	= 0xfff00000,
-	.io_pg_offst	= ((0xfef00000) >> 18) & 0xfffc,
-	.boot_params	= 0x10000100,
+	.atag_offset	= 0x100,
 	.map_io		= omap_fsample_map_io,
+	.init_early	= omap1_init_early,
 	.reserve	= omap_reserve,
-	.init_irq	= omap_fsample_init_irq,
+	.init_irq	= omap1_init_irq,
 	.init_machine	= omap_fsample_init,
-	.timer		= &omap_timer,
+	.timer		= &omap1_timer,
+	.restart	= omap1_restart,
 MACHINE_END

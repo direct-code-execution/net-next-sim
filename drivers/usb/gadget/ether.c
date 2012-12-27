@@ -9,15 +9,6 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 /* #define VERBOSE_DEBUG */
@@ -237,7 +228,7 @@ static u8 hostaddr[ETH_ALEN];
  * the first one present.  That's to make Microsoft's drivers happy,
  * and to follow DOCSIS 1.0 (cable modem standard).
  */
-static int __ref rndis_do_config(struct usb_configuration *c)
+static int __init rndis_do_config(struct usb_configuration *c)
 {
 	/* FIXME alloc iConfiguration string, set it in c->strings */
 
@@ -251,7 +242,6 @@ static int __ref rndis_do_config(struct usb_configuration *c)
 
 static struct usb_configuration rndis_config_driver = {
 	.label			= "RNDIS",
-	.bind			= rndis_do_config,
 	.bConfigurationValue	= 2,
 	/* .iConfiguration = DYNAMIC */
 	.bmAttributes		= USB_CONFIG_ATT_SELFPOWER,
@@ -260,9 +250,9 @@ static struct usb_configuration rndis_config_driver = {
 /*-------------------------------------------------------------------------*/
 
 #ifdef CONFIG_USB_ETH_EEM
-static int use_eem = 1;
+static bool use_eem = 1;
 #else
-static int use_eem;
+static bool use_eem;
 #endif
 module_param(use_eem, bool, 0);
 MODULE_PARM_DESC(use_eem, "use CDC EEM mode");
@@ -270,7 +260,7 @@ MODULE_PARM_DESC(use_eem, "use CDC EEM mode");
 /*
  * We _always_ have an ECM, CDC Subset, or EEM configuration.
  */
-static int __ref eth_do_config(struct usb_configuration *c)
+static int __init eth_do_config(struct usb_configuration *c)
 {
 	/* FIXME alloc iConfiguration string, set it in c->strings */
 
@@ -289,7 +279,6 @@ static int __ref eth_do_config(struct usb_configuration *c)
 
 static struct usb_configuration eth_config_driver = {
 	/* .label = f(hardware) */
-	.bind			= eth_do_config,
 	.bConfigurationValue	= 1,
 	/* .iConfiguration = DYNAMIC */
 	.bmAttributes		= USB_CONFIG_ATT_SELFPOWER,
@@ -297,7 +286,7 @@ static struct usb_configuration eth_config_driver = {
 
 /*-------------------------------------------------------------------------*/
 
-static int __ref eth_bind(struct usb_composite_dev *cdev)
+static int __init eth_bind(struct usb_composite_dev *cdev)
 {
 	int			gcnum;
 	struct usb_gadget	*gadget = cdev->gadget;
@@ -373,12 +362,13 @@ static int __ref eth_bind(struct usb_composite_dev *cdev)
 
 	/* register our configuration(s); RNDIS first, if it's used */
 	if (has_rndis()) {
-		status = usb_add_config(cdev, &rndis_config_driver);
+		status = usb_add_config(cdev, &rndis_config_driver,
+				rndis_do_config);
 		if (status < 0)
 			goto fail;
 	}
 
-	status = usb_add_config(cdev, &eth_config_driver);
+	status = usb_add_config(cdev, &eth_config_driver, eth_do_config);
 	if (status < 0)
 		goto fail;
 
@@ -402,7 +392,7 @@ static struct usb_composite_driver eth_driver = {
 	.name		= "g_ether",
 	.dev		= &device_desc,
 	.strings	= dev_strings,
-	.bind		= eth_bind,
+	.max_speed	= USB_SPEED_SUPER,
 	.unbind		= __exit_p(eth_unbind),
 };
 
@@ -412,7 +402,7 @@ MODULE_LICENSE("GPL");
 
 static int __init init(void)
 {
-	return usb_composite_register(&eth_driver);
+	return usb_composite_probe(&eth_driver, eth_bind);
 }
 module_init(init);
 

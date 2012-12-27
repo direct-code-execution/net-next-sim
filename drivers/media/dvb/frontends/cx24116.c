@@ -137,7 +137,7 @@ MODULE_PARM_DESC(toneburst, "DiSEqC toneburst 0=OFF, 1=TONE CACHE, "\
 /* SNR measurements */
 static int esno_snr;
 module_param(esno_snr, int, 0644);
-MODULE_PARM_DESC(debug, "SNR return units, 0=PERCENTAGE 0-100, "\
+MODULE_PARM_DESC(esno_snr, "SNR return units, 0=PERCENTAGE 0-100, "\
 	"1=ESNO(db * 10) (default:0)");
 
 enum cmds {
@@ -566,7 +566,7 @@ static int cx24116_load_firmware(struct dvb_frontend *fe,
 {
 	struct cx24116_state *state = fe->demodulator_priv;
 	struct cx24116_cmd cmd;
-	int i, ret;
+	int i, ret, len, max, remaining;
 	unsigned char vers[4];
 
 	dprintk("%s\n", __func__);
@@ -603,8 +603,21 @@ static int cx24116_load_firmware(struct dvb_frontend *fe,
 	cx24116_writereg(state, 0xF5, 0x00);
 	cx24116_writereg(state, 0xF6, 0x00);
 
-	/* write the entire firmware as one transaction */
-	cx24116_writeregN(state, 0xF7, fw->data, fw->size);
+	/* Split firmware to the max I2C write len and write.
+	 * Writes whole firmware as one write when i2c_wr_max is set to 0. */
+	if (state->config->i2c_wr_max)
+		max = state->config->i2c_wr_max;
+	else
+		max = INT_MAX; /* enough for 32k firmware */
+
+	for (remaining = fw->size; remaining > 0; remaining -= max - 1) {
+		len = remaining;
+		if (len > max - 1)
+			len = max - 1;
+
+		cx24116_writeregN(state, 0xF7, &fw->data[fw->size - remaining],
+			len);
+	}
 
 	cx24116_writereg(state, 0xF4, 0x10);
 	cx24116_writereg(state, 0xF0, 0x00);
@@ -1199,25 +1212,10 @@ static int cx24116_sleep(struct dvb_frontend *fe)
 	return 0;
 }
 
-static int cx24116_set_property(struct dvb_frontend *fe,
-	struct dtv_property *tvp)
-{
-	dprintk("%s(..)\n", __func__);
-	return 0;
-}
-
-static int cx24116_get_property(struct dvb_frontend *fe,
-	struct dtv_property *tvp)
-{
-	dprintk("%s(..)\n", __func__);
-	return 0;
-}
-
 /* dvb-core told us to tune, the tv property cache will be complete,
  * it's safe for is to pull values and use them for tuning purposes.
  */
-static int cx24116_set_frontend(struct dvb_frontend *fe,
-	struct dvb_frontend_parameters *p)
+static int cx24116_set_frontend(struct dvb_frontend *fe)
 {
 	struct cx24116_state *state = fe->demodulator_priv;
 	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
@@ -1439,19 +1437,23 @@ tuned:  /* Set/Reset B/W */
 	cmd.args[0x00] = CMD_BANDWIDTH;
 	cmd.args[0x01] = 0x00;
 	cmd.len = 0x02;
-	ret = cx24116_cmd_execute(fe, &cmd);
-	if (ret != 0)
-		return ret;
-
-	return ret;
+	return cx24116_cmd_execute(fe, &cmd);
 }
 
-static int cx24116_tune(struct dvb_frontend *fe, struct dvb_frontend_parameters *params,
+static int cx24116_tune(struct dvb_frontend *fe, bool re_tune,
 	unsigned int mode_flags, unsigned int *delay, fe_status_t *status)
 {
+	/*
+	 * It is safe to discard "params" here, as the DVB core will sync
+	 * fe->dtv_property_cache with fepriv->parameters_in, where the
+	 * DVBv3 params are stored. The only practical usage for it indicate
+	 * that re-tuning is needed, e. g. (fepriv->state & FESTATE_RETUNE) is
+	 * true.
+	 */
+
 	*delay = HZ / 5;
-	if (params) {
-		int ret = cx24116_set_frontend(fe, params);
+	if (re_tune) {
+		int ret = cx24116_set_frontend(fe);
 		if (ret)
 			return ret;
 	}
@@ -1464,10 +1466,9 @@ static int cx24116_get_algo(struct dvb_frontend *fe)
 }
 
 static struct dvb_frontend_ops cx24116_ops = {
-
+	.delsys = { SYS_DVBS, SYS_DVBS2 },
 	.info = {
 		.name = "Conexant CX24116/CX24118",
-		.type = FE_QPSK,
 		.frequency_min = 950000,
 		.frequency_max = 2150000,
 		.frequency_stepsize = 1011, /* kHz for QPSK frontends */
@@ -1498,8 +1499,6 @@ static struct dvb_frontend_ops cx24116_ops = {
 	.get_frontend_algo = cx24116_get_algo,
 	.tune = cx24116_tune,
 
-	.set_property = cx24116_set_property,
-	.get_property = cx24116_get_property,
 	.set_frontend = cx24116_set_frontend,
 };
 

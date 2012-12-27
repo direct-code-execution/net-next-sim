@@ -239,7 +239,7 @@ static int debug_status_show(struct seq_file *s, void *v)
 		"ETDs allocated: %d/%d (max=%d)\n"
 		"ETDs in use sw: %d\n"
 		"ETDs in use hw: %d\n"
-		"DMEM alocated: %d/%d (max=%d)\n"
+		"DMEM allocated: %d/%d (max=%d)\n"
 		"DMEM blocks: %d\n"
 		"Queued waiting for ETD: %d\n"
 		"Queued waiting for DMEM: %d\n",
@@ -384,7 +384,7 @@ static void debug_isoc_show_one(struct seq_file *s,
 	seq_printf(s, "%s %d:\n"
 		"cc=0X%02X\n"
 		"scheduled frame %d (%d)\n"
-		"submittted frame %d (%d)\n"
+		"submitted frame %d (%d)\n"
 		"completed frame %d (%d)\n"
 		"requested length=%d\n"
 		"completed length=%d\n\n",

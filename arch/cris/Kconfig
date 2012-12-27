@@ -1,10 +1,3 @@
-#
-# For a description of the syntax of this configuration file,
-# see the Configure script.
-#
-
-mainmenu "Linux/CRIS Kernel Configuration"
-
 config MMU
 	bool
 	default y
@@ -26,10 +19,6 @@ config GENERIC_CMOS_UPDATE
 config ARCH_USES_GETTIMEOFFSET
 	def_bool n
 
-config GENERIC_IOMAP
-       bool
-       default y
-
 config ARCH_HAS_ILOG2_U32
 	bool
 	default n
@@ -37,10 +26,6 @@ config ARCH_HAS_ILOG2_U32
 config ARCH_HAS_ILOG2_U64
 	bool
 	default n
-
-config GENERIC_FIND_NEXT_BIT
-	bool
-	default y
 
 config GENERIC_HWEIGHT
 	bool
@@ -61,6 +46,9 @@ config CRIS
 	bool
 	default y
 	select HAVE_IDE
+	select HAVE_GENERIC_HARDIRQS
+	select GENERIC_IRQ_SHOW
+	select GENERIC_IOMAP
 
 config HZ
 	int
@@ -73,10 +61,6 @@ source "kernel/Kconfig.freezer"
 menu "General setup"
 
 source "fs/Kconfig.binfmt"
-
-config GENERIC_HARDIRQS
-	bool
-	default y
 
 config ETRAX_CMDLINE
 	string "Kernel command line"
@@ -283,8 +267,6 @@ config ETRAX_AXISFLASHMAP
 	select MTD_JEDECPROBE if ETRAX_ARCH_V32
 	select MTD_CHAR
 	select MTD_BLOCK
-	select MTD_PARTITIONS
-	select MTD_CONCAT
 	select MTD_COMPLEX_MAPPINGS
 	help
 	  This option enables MTD mapping of flash devices.  Needed to use
@@ -297,16 +279,15 @@ config ETRAX_RTC
 	  Enables drivers for the Real-Time Clock battery-backed chips on
 	  some products. The kernel reads the time when booting, and
 	  the date can be set using ioctl(fd, RTC_SET_TIME, &rt) with rt a
-	  rtc_time struct (see <file:include/asm-cris/rtc.h>) on the /dev/rtc
-	  device.  You can check the time with cat /proc/rtc, but
+	  rtc_time struct (see <file:arch/cris/include/asm/rtc.h>) on the
+	  /dev/rtc device.  You can check the time with cat /proc/rtc, but
 	  normal time reading should be done using libc function time and
 	  friends.
 
 choice
 	prompt "RTC chip"
 	depends on ETRAX_RTC
-	default ETRAX_PCF8563 if ETRAX_ARCH_V32
-	default ETRAX_DS1302 if ETRAX_ARCH_V10
+	default ETRAX_DS1302
 
 config ETRAX_DS1302
 	depends on ETRAX_ARCH_V10

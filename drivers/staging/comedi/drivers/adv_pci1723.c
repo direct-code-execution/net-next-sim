@@ -155,9 +155,8 @@ static const struct pci1723_board boardtypes[] = {
  * Should only be used for PCI and ISA-PnP devices
  */
 static DEFINE_PCI_DEVICE_TABLE(pci1723_pci_table) = {
-	{
-	PCI_VENDOR_ID_ADVANTECH, 0x1723, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0}, {
-	0}
+	{ PCI_DEVICE(PCI_VENDOR_ID_ADVANTECH, 0x1723) },
+	{ 0 }
 };
 
 MODULE_DEVICE_TABLE(pci, pci1723_pci_table);
@@ -235,7 +234,7 @@ static int pci1723_insn_read_ao(struct comedi_device *dev,
 	int n, chan;
 
 	chan = CR_CHAN(insn->chanspec);
-	DPRINTK(" adv_PCI1723 DEBUG: pci1723_insn_read_ao() ----- \n");
+	DPRINTK(" adv_PCI1723 DEBUG: pci1723_insn_read_ao() -----\n");
 	for (n = 0; n < insn->n; n++)
 		data[n] = devpriv->ao_data[chan];
 

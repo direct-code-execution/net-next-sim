@@ -87,8 +87,7 @@ typedef struct xfs_dqblk {
 #define XFS_DQ_PROJ		0x0002		/* project quota */
 #define XFS_DQ_GROUP		0x0004		/* a group quota */
 #define XFS_DQ_DIRTY		0x0008		/* dquot is dirty */
-#define XFS_DQ_WANT		0x0010		/* for lookup/reclaim race */
-#define XFS_DQ_INACTIVE		0x0020		/* dq off mplist & hashlist */
+#define XFS_DQ_FREEING		0x0010		/* dquot is beeing torn down */
 
 #define XFS_DQ_ALLTYPES		(XFS_DQ_USER|XFS_DQ_PROJ|XFS_DQ_GROUP)
 
@@ -97,8 +96,7 @@ typedef struct xfs_dqblk {
 	{ XFS_DQ_PROJ,		"PROJ" }, \
 	{ XFS_DQ_GROUP,		"GROUP" }, \
 	{ XFS_DQ_DIRTY,		"DIRTY" }, \
-	{ XFS_DQ_WANT,		"WANT" }, \
-	{ XFS_DQ_INACTIVE,	"INACTIVE" }
+	{ XFS_DQ_FREEING,	"FREEING" }
 
 /*
  * In the worst case, when both user and group quotas are on,
@@ -176,6 +174,8 @@ typedef struct xfs_qoff_logformat {
 #define XFS_UQUOTA_ACTIVE	0x0100  /* uquotas are being turned off */
 #define XFS_PQUOTA_ACTIVE	0x0200  /* pquotas are being turned off */
 #define XFS_GQUOTA_ACTIVE	0x0400  /* gquotas are being turned off */
+#define XFS_ALL_QUOTA_ACTIVE	\
+	(XFS_UQUOTA_ACTIVE | XFS_PQUOTA_ACTIVE | XFS_GQUOTA_ACTIVE)
 
 /*
  * Checking XFS_IS_*QUOTA_ON() while holding any inode lock guarantees
@@ -199,7 +199,6 @@ typedef struct xfs_qoff_logformat {
 #define XFS_QMOPT_UQUOTA	0x0000004 /* user dquot requested */
 #define XFS_QMOPT_PQUOTA	0x0000008 /* project dquot requested */
 #define XFS_QMOPT_FORCE_RES	0x0000010 /* ignore quota limits */
-#define XFS_QMOPT_DQSUSER	0x0000020 /* don't cache super users dquot */
 #define XFS_QMOPT_SBVERSION	0x0000040 /* change superblock version num */
 #define XFS_QMOPT_DOWARN        0x0000400 /* increase warning cnt if needed */
 #define XFS_QMOPT_DQREPAIR	0x0001000 /* repair dquot if damaged */
@@ -326,7 +325,6 @@ extern int xfs_qm_dqattach_locked(struct xfs_inode *, uint);
 extern void xfs_qm_dqdetach(struct xfs_inode *);
 extern void xfs_qm_dqrele(struct xfs_dquot *);
 extern void xfs_qm_statvfs(struct xfs_inode *, struct kstatfs *);
-extern int xfs_qm_sync(struct xfs_mount *, int);
 extern int xfs_qm_newmount(struct xfs_mount *, uint *, uint *);
 extern void xfs_qm_mount_quotas(struct xfs_mount *);
 extern void xfs_qm_unmount(struct xfs_mount *);
@@ -346,8 +344,17 @@ xfs_qm_vop_dqalloc(struct xfs_inode *ip, uid_t uid, gid_t gid, prid_t prid,
 #define xfs_trans_mod_dquot_byino(tp, ip, fields, delta)
 #define xfs_trans_apply_dquot_deltas(tp)
 #define xfs_trans_unreserve_and_mod_dquots(tp)
-#define xfs_trans_reserve_quota_nblks(tp, ip, nblks, ninos, flags)	(0)
-#define xfs_trans_reserve_quota_bydquots(tp, mp, u, g, nb, ni, fl)	(0)
+static inline int xfs_trans_reserve_quota_nblks(struct xfs_trans *tp,
+		struct xfs_inode *ip, long nblks, long ninos, uint flags)
+{
+	return 0;
+}
+static inline int xfs_trans_reserve_quota_bydquots(struct xfs_trans *tp,
+		struct xfs_mount *mp, struct xfs_dquot *udqp,
+		struct xfs_dquot *gdqp, long nblks, long nions, uint flags)
+{
+	return 0;
+}
 #define xfs_qm_vop_create_dqattach(tp, ip, u, g)
 #define xfs_qm_vop_rename_dqattach(it)					(0)
 #define xfs_qm_vop_chown(tp, ip, old, new)				(NULL)
@@ -357,11 +364,10 @@ xfs_qm_vop_dqalloc(struct xfs_inode *ip, uid_t uid, gid_t gid, prid_t prid,
 #define xfs_qm_dqdetach(ip)
 #define xfs_qm_dqrele(d)
 #define xfs_qm_statvfs(ip, s)
-#define xfs_qm_sync(mp, fl)						(0)
 #define xfs_qm_newmount(mp, a, b)					(0)
 #define xfs_qm_mount_quotas(mp)
 #define xfs_qm_unmount(mp)
-#define xfs_qm_unmount_quotas(mp)					(0)
+#define xfs_qm_unmount_quotas(mp)
 #endif /* CONFIG_XFS_QUOTA */
 
 #define xfs_trans_unreserve_quota_nblks(tp, ip, nblks, ninos, flags) \
@@ -370,7 +376,8 @@ xfs_qm_vop_dqalloc(struct xfs_inode *ip, uid_t uid, gid_t gid, prid_t prid,
 	xfs_trans_reserve_quota_bydquots(tp, mp, ud, gd, nb, ni, \
 				f | XFS_QMOPT_RES_REGBLKS)
 
-extern int xfs_qm_dqcheck(xfs_disk_dquot_t *, xfs_dqid_t, uint, uint, char *);
+extern int xfs_qm_dqcheck(struct xfs_mount *, xfs_disk_dquot_t *,
+				xfs_dqid_t, uint, uint, char *);
 extern int xfs_mount_reset_sbqflags(struct xfs_mount *);
 
 #endif	/* __KERNEL__ */

@@ -9,15 +9,19 @@
  */
 
 #include <linux/linkage.h>
+
 #include <asm/assembler.h>
-#include <mach/io.h>
+
 #include <mach/hardware.h>
+
+#include "iomap.h"
 
 	.text
 
 /*
  * Reprograms ULPD and CKCTL.
  */
+	.align	3
 ENTRY(omap1_sram_reprogram_clock)
 	stmfd	sp!, {r0 - r12, lr}		@ save registers on stack
 

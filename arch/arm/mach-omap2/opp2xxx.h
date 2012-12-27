@@ -51,7 +51,7 @@ struct prcm_config {
 	unsigned long cm_clksel2_pll;	/* dpllx1 or x2 out */
 	unsigned long cm_clksel_mdm;	/* modem dividers 2430 only */
 	unsigned long base_sdrc_rfr;	/* base refresh timing for a set */
-	unsigned char flags;
+	unsigned short flags;
 };
 
 
@@ -418,7 +418,7 @@ struct prcm_config {
 
 extern const struct prcm_config omap2420_rate_table[];
 
-#ifdef CONFIG_ARCH_OMAP2430
+#ifdef CONFIG_SOC_OMAP2430
 extern const struct prcm_config omap2430_rate_table[];
 #else
 #define omap2430_rate_table	NULL

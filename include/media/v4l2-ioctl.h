@@ -11,15 +11,9 @@
 
 #include <linux/poll.h>
 #include <linux/fs.h>
-#include <linux/device.h>
 #include <linux/mutex.h>
 #include <linux/compiler.h> /* need __user */
-#ifdef CONFIG_VIDEO_V4L1_COMPAT
-#define __MIN_V4L1
-#include <linux/videodev.h>
-#else
 #include <linux/videodev2.h>
-#endif
 
 struct v4l2_fh;
 
@@ -42,6 +36,10 @@ struct v4l2_ioctl_ops {
 					    struct v4l2_fmtdesc *f);
 	int (*vidioc_enum_fmt_vid_out)     (struct file *file, void *fh,
 					    struct v4l2_fmtdesc *f);
+	int (*vidioc_enum_fmt_vid_cap_mplane)(struct file *file, void *fh,
+					      struct v4l2_fmtdesc *f);
+	int (*vidioc_enum_fmt_vid_out_mplane)(struct file *file, void *fh,
+					      struct v4l2_fmtdesc *f);
 	int (*vidioc_enum_fmt_type_private)(struct file *file, void *fh,
 					    struct v4l2_fmtdesc *f);
 
@@ -62,6 +60,10 @@ struct v4l2_ioctl_ops {
 					struct v4l2_format *f);
 	int (*vidioc_g_fmt_sliced_vbi_out)(struct file *file, void *fh,
 					struct v4l2_format *f);
+	int (*vidioc_g_fmt_vid_cap_mplane)(struct file *file, void *fh,
+					   struct v4l2_format *f);
+	int (*vidioc_g_fmt_vid_out_mplane)(struct file *file, void *fh,
+					   struct v4l2_format *f);
 	int (*vidioc_g_fmt_type_private)(struct file *file, void *fh,
 					struct v4l2_format *f);
 
@@ -82,6 +84,10 @@ struct v4l2_ioctl_ops {
 					struct v4l2_format *f);
 	int (*vidioc_s_fmt_sliced_vbi_out)(struct file *file, void *fh,
 					struct v4l2_format *f);
+	int (*vidioc_s_fmt_vid_cap_mplane)(struct file *file, void *fh,
+					   struct v4l2_format *f);
+	int (*vidioc_s_fmt_vid_out_mplane)(struct file *file, void *fh,
+					   struct v4l2_format *f);
 	int (*vidioc_s_fmt_type_private)(struct file *file, void *fh,
 					struct v4l2_format *f);
 
@@ -102,6 +108,10 @@ struct v4l2_ioctl_ops {
 					  struct v4l2_format *f);
 	int (*vidioc_try_fmt_sliced_vbi_out)(struct file *file, void *fh,
 					  struct v4l2_format *f);
+	int (*vidioc_try_fmt_vid_cap_mplane)(struct file *file, void *fh,
+					     struct v4l2_format *f);
+	int (*vidioc_try_fmt_vid_out_mplane)(struct file *file, void *fh,
+					     struct v4l2_format *f);
 	int (*vidioc_try_fmt_type_private)(struct file *file, void *fh,
 					  struct v4l2_format *f);
 
@@ -111,12 +121,10 @@ struct v4l2_ioctl_ops {
 	int (*vidioc_qbuf)    (struct file *file, void *fh, struct v4l2_buffer *b);
 	int (*vidioc_dqbuf)   (struct file *file, void *fh, struct v4l2_buffer *b);
 
+	int (*vidioc_create_bufs)(struct file *file, void *fh, struct v4l2_create_buffers *b);
+	int (*vidioc_prepare_buf)(struct file *file, void *fh, struct v4l2_buffer *b);
 
 	int (*vidioc_overlay) (struct file *file, void *fh, unsigned int i);
-#ifdef CONFIG_VIDEO_V4L1_COMPAT
-			/* buffer type is struct vidio_mbuf * */
-	int (*vidiocgmbuf)  (struct file *file, void *fh, struct video_mbuf *p);
-#endif
 	int (*vidioc_g_fbuf)   (struct file *file, void *fh,
 				struct v4l2_framebuffer *a);
 	int (*vidioc_s_fbuf)   (struct file *file, void *fh,
@@ -187,6 +195,10 @@ struct v4l2_ioctl_ops {
 					struct v4l2_crop *a);
 	int (*vidioc_s_crop)           (struct file *file, void *fh,
 					struct v4l2_crop *a);
+	int (*vidioc_g_selection)      (struct file *file, void *fh,
+					struct v4l2_selection *s);
+	int (*vidioc_s_selection)      (struct file *file, void *fh,
+					struct v4l2_selection *s);
 	/* Compression ioctls */
 	int (*vidioc_g_jpegcomp)       (struct file *file, void *fh,
 					struct v4l2_jpegcompression *a);
@@ -198,6 +210,10 @@ struct v4l2_ioctl_ops {
 					struct v4l2_encoder_cmd *a);
 	int (*vidioc_try_encoder_cmd)  (struct file *file, void *fh,
 					struct v4l2_encoder_cmd *a);
+	int (*vidioc_decoder_cmd)      (struct file *file, void *fh,
+					struct v4l2_decoder_cmd *a);
+	int (*vidioc_try_decoder_cmd)  (struct file *file, void *fh,
+					struct v4l2_decoder_cmd *a);
 
 	/* Stream type-dependent parameter ioctls */
 	int (*vidioc_g_parm)           (struct file *file, void *fh,
@@ -263,7 +279,7 @@ struct v4l2_ioctl_ops {
 
 	/* For other private ioctls */
 	long (*vidioc_default)	       (struct file *file, void *fh,
-					int cmd, void *arg);
+					bool valid_prio, int cmd, void *arg);
 };
 
 
@@ -300,21 +316,14 @@ extern void v4l_printk_ioctl(unsigned int cmd);
 extern const char *v4l2_field_names[];
 extern const char *v4l2_type_names[];
 
-/*  Compatibility layer interface  --  v4l1-compat module */
-typedef long (*v4l2_kioctl)(struct file *file,
-			   unsigned int cmd, void *arg);
-#ifdef CONFIG_VIDEO_V4L1_COMPAT
-long v4l_compat_translate_ioctl(struct file *file,
-			       int cmd, void *arg, v4l2_kioctl driver_ioctl);
-#else
-#define v4l_compat_translate_ioctl(file, cmd, arg, ioctl) (-EINVAL)
-#endif
-
 #ifdef CONFIG_COMPAT
 /* 32 Bits compatibility layer for 64 bits processors */
 extern long v4l2_compat_ioctl32(struct file *file, unsigned int cmd,
 				unsigned long arg);
 #endif
+
+typedef long (*v4l2_kioctl)(struct file *file,
+		unsigned int cmd, void *arg);
 
 /* Include support for obsoleted stuff */
 extern long video_usercopy(struct file *file, unsigned int cmd,

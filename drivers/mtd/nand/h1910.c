@@ -38,7 +38,6 @@ static struct mtd_info *h1910_nand_mtd = NULL;
  * Module stuff
  */
 
-#ifdef CONFIG_MTD_PARTITIONS
 /*
  * Define static partitions for flash device
  */
@@ -49,8 +48,6 @@ static struct mtd_partition partition_info[] = {
 };
 
 #define NUM_PARTITIONS 1
-
-#endif
 
 /*
  *	hardware specific access to control-lines
@@ -84,9 +81,6 @@ static int h1910_device_ready(struct mtd_info *mtd)
 static int __init h1910_init(void)
 {
 	struct nand_chip *this;
-	const char *part_type = 0;
-	int mtd_parts_nb = 0;
-	struct mtd_partition *mtd_parts = 0;
 	void __iomem *nandaddr;
 
 	if (!machine_is_h1900())
@@ -139,22 +133,10 @@ static int __init h1910_init(void)
 		iounmap((void *)nandaddr);
 		return -ENXIO;
 	}
-#ifdef CONFIG_MTD_CMDLINE_PARTS
-	mtd_parts_nb = parse_cmdline_partitions(h1910_nand_mtd, &mtd_parts, "h1910-nand");
-	if (mtd_parts_nb > 0)
-		part_type = "command line";
-	else
-		mtd_parts_nb = 0;
-#endif
-	if (mtd_parts_nb == 0) {
-		mtd_parts = partition_info;
-		mtd_parts_nb = NUM_PARTITIONS;
-		part_type = "static";
-	}
 
 	/* Register the partitions */
-	printk(KERN_NOTICE "Using %s partition definition\n", part_type);
-	add_mtd_partitions(h1910_nand_mtd, mtd_parts, mtd_parts_nb);
+	mtd_device_parse_register(h1910_nand_mtd, NULL, NULL, partition_info,
+				  NUM_PARTITIONS);
 
 	/* Return happy */
 	return 0;

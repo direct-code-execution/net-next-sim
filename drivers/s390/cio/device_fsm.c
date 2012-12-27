@@ -174,7 +174,10 @@ ccw_device_cancel_halt_clear(struct ccw_device *cdev)
 		ret = cio_clear (sch);
 		return (ret == 0) ? -EBUSY : ret;
 	}
-	panic("Can't stop i/o on subchannel.\n");
+	/* Function was unsuccessful */
+	CIO_MSG_EVENT(0, "0.%x.%04x: could not stop I/O\n",
+		      cdev->private->dev_id.ssid, cdev->private->dev_id.devno);
+	return -EIO;
 }
 
 void ccw_device_update_sense_data(struct ccw_device *cdev)
@@ -315,7 +318,7 @@ ccw_device_sense_id_done(struct ccw_device *cdev, int err)
 
 /**
   * ccw_device_notify() - inform the device's driver about an event
-  * @cdev: device for which an event occured
+  * @cdev: device for which an event occurred
   * @event: event that occurred
   *
   * Returns:
@@ -349,9 +352,13 @@ out:
 
 static void ccw_device_oper_notify(struct ccw_device *cdev)
 {
+	struct subchannel *sch = to_subchannel(cdev->dev.parent);
+
 	if (ccw_device_notify(cdev, CIO_OPER) == NOTIFY_OK) {
 		/* Reenable channel measurements, if needed. */
 		ccw_device_sched_todo(cdev, CDEV_TODO_ENABLE_CMF);
+		/* Save indication for new paths. */
+		cdev->private->path_new_mask = sch->vpm;
 		return;
 	}
 	/* Driver doesn't want device back. */
@@ -401,9 +408,10 @@ ccw_device_done(struct ccw_device *cdev, int state)
 		CIO_MSG_EVENT(0, "Disconnected device %04x on subchannel "
 			      "%04x\n", cdev->private->dev_id.devno,
 			      sch->schid.sch_no);
-		if (ccw_device_notify(cdev, CIO_NO_PATH) != NOTIFY_OK)
+		if (ccw_device_notify(cdev, CIO_NO_PATH) != NOTIFY_OK) {
+			cdev->private->state = DEV_STATE_NOT_OPER;
 			ccw_device_sched_todo(cdev, CDEV_TODO_UNREG);
-		else
+		} else
 			ccw_device_set_disconnected(cdev);
 		cdev->private->flags.donotify = 0;
 		break;
@@ -462,8 +470,52 @@ static void ccw_device_request_event(struct ccw_device *cdev, enum dev_event e)
 	}
 }
 
-void
-ccw_device_verify_done(struct ccw_device *cdev, int err)
+static void ccw_device_report_path_events(struct ccw_device *cdev)
+{
+	struct subchannel *sch = to_subchannel(cdev->dev.parent);
+	int path_event[8];
+	int chp, mask;
+
+	for (chp = 0, mask = 0x80; chp < 8; chp++, mask >>= 1) {
+		path_event[chp] = PE_NONE;
+		if (mask & cdev->private->path_gone_mask & ~(sch->vpm))
+			path_event[chp] |= PE_PATH_GONE;
+		if (mask & cdev->private->path_new_mask & sch->vpm)
+			path_event[chp] |= PE_PATH_AVAILABLE;
+		if (mask & cdev->private->pgid_reset_mask & sch->vpm)
+			path_event[chp] |= PE_PATHGROUP_ESTABLISHED;
+	}
+	if (cdev->online && cdev->drv->path_event)
+		cdev->drv->path_event(cdev, path_event);
+}
+
+static void ccw_device_reset_path_events(struct ccw_device *cdev)
+{
+	cdev->private->path_gone_mask = 0;
+	cdev->private->path_new_mask = 0;
+	cdev->private->pgid_reset_mask = 0;
+}
+
+static void create_fake_irb(struct irb *irb, int type)
+{
+	memset(irb, 0, sizeof(*irb));
+	if (type == FAKE_CMD_IRB) {
+		struct cmd_scsw *scsw = &irb->scsw.cmd;
+		scsw->cc = 1;
+		scsw->fctl = SCSW_FCTL_START_FUNC;
+		scsw->actl = SCSW_ACTL_START_PEND;
+		scsw->stctl = SCSW_STCTL_STATUS_PEND;
+	} else if (type == FAKE_TM_IRB) {
+		struct tm_scsw *scsw = &irb->scsw.tm;
+		scsw->x = 1;
+		scsw->cc = 1;
+		scsw->fctl = SCSW_FCTL_START_FUNC;
+		scsw->actl = SCSW_ACTL_START_PEND;
+		scsw->stctl = SCSW_STCTL_STATUS_PEND;
+	}
+}
+
+void ccw_device_verify_done(struct ccw_device *cdev, int err)
 {
 	struct subchannel *sch;
 
@@ -486,18 +538,15 @@ callback:
 		ccw_device_done(cdev, DEV_STATE_ONLINE);
 		/* Deliver fake irb to device driver, if needed. */
 		if (cdev->private->flags.fake_irb) {
-			memset(&cdev->private->irb, 0, sizeof(struct irb));
-			cdev->private->irb.scsw.cmd.cc = 1;
-			cdev->private->irb.scsw.cmd.fctl = SCSW_FCTL_START_FUNC;
-			cdev->private->irb.scsw.cmd.actl = SCSW_ACTL_START_PEND;
-			cdev->private->irb.scsw.cmd.stctl =
-				SCSW_STCTL_STATUS_PEND;
+			create_fake_irb(&cdev->private->irb,
+					cdev->private->flags.fake_irb);
 			cdev->private->flags.fake_irb = 0;
 			if (cdev->handler)
 				cdev->handler(cdev, cdev->private->intparm,
 					      &cdev->private->irb);
 			memset(&cdev->private->irb, 0, sizeof(struct irb));
 		}
+		ccw_device_report_path_events(cdev);
 		break;
 	case -ETIME:
 	case -EUSERS:
@@ -516,6 +565,7 @@ callback:
 		ccw_device_done(cdev, DEV_STATE_NOT_OPER);
 		break;
 	}
+	ccw_device_reset_path_events(cdev);
 }
 
 /*
@@ -653,7 +703,7 @@ ccw_device_online_verify(struct ccw_device *cdev, enum dev_event dev_event)
 	    (scsw_stctl(&cdev->private->irb.scsw) & SCSW_STCTL_STATUS_PEND)) {
 		/*
 		 * No final status yet or final status not yet delivered
-		 * to the device driver. Can't do path verfication now,
+		 * to the device driver. Can't do path verification now,
 		 * delay until final status was delivered.
 		 */
 		cdev->private->flags.doverify = 1;
@@ -734,13 +784,14 @@ ccw_device_online_timeout(struct ccw_device *cdev, enum dev_event dev_event)
 	int ret;
 
 	ccw_device_set_timeout(cdev, 0);
+	cdev->private->iretry = 255;
 	ret = ccw_device_cancel_halt_clear(cdev);
 	if (ret == -EBUSY) {
 		ccw_device_set_timeout(cdev, 3*HZ);
 		cdev->private->state = DEV_STATE_TIMEOUT_KILL;
 		return;
 	}
-	if (ret == -ENODEV)
+	if (ret)
 		dev_fsm_event(cdev, DEV_EVENT_NOTOPER);
 	else if (cdev->handler)
 		cdev->handler(cdev, cdev->private->intparm,
@@ -804,9 +855,6 @@ call_handler:
 static void
 ccw_device_killing_irq(struct ccw_device *cdev, enum dev_event dev_event)
 {
-	struct subchannel *sch;
-
-	sch = to_subchannel(cdev->dev.parent);
 	ccw_device_set_timeout(cdev, 0);
 	/* Start delayed path verification. */
 	ccw_device_online_verify(cdev, 0);
@@ -837,6 +885,7 @@ void ccw_device_kill_io(struct ccw_device *cdev)
 {
 	int ret;
 
+	cdev->private->iretry = 255;
 	ret = ccw_device_cancel_halt_clear(cdev);
 	if (ret == -EBUSY) {
 		ccw_device_set_timeout(cdev, 3*HZ);

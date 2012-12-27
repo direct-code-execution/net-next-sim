@@ -28,23 +28,14 @@
 #include <linux/timex.h>
 #include <linux/profile.h>
 
-static inline int set_rtc_mmss(unsigned long nowtime)
-{
-  if (mach_set_clock_mmss)
-    return mach_set_clock_mmss (nowtime);
-  return -1;
-}
-
 /*
  * timer_interrupt() needs to keep up the real-time clock,
- * as well as call the "do_timer()" routine every clocktick
+ * as well as call the "xtime_update()" routine every clocktick
  */
 static irqreturn_t timer_interrupt(int irq, void *dummy)
 {
-	do_timer(1);
-#ifndef CONFIG_SMP
+	xtime_update(1);
 	update_process_times(user_mode(get_irq_regs()));
-#endif
 	profile_tick(CPU_PROFILING);
 
 #ifdef CONFIG_HEARTBEAT
@@ -94,6 +85,8 @@ void __init time_init(void)
 	mach_sched_init(timer_interrupt);
 }
 
+#ifdef CONFIG_M68KCLASSIC
+
 u32 arch_gettimeoffset(void)
 {
 	return mach_gettimeoffset() * 1000;
@@ -114,3 +107,5 @@ static int __init rtc_init(void)
 }
 
 module_init(rtc_init);
+
+#endif /* CONFIG_M68KCLASSIC */

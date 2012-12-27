@@ -20,250 +20,62 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
+#include <linux/dmaengine.h>
+#include <linux/types.h>
 
 #include <sound/core.h>
 #include <sound/initval.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
+#include <sound/dmaengine_pcm.h>
 
-#include <mach/dma-mx1-mx2.h>
+#include <mach/dma.h>
 
-#include "imx-ssi.h"
+#include "imx-pcm.h"
 
-struct imx_pcm_runtime_data {
-	int sg_count;
-	struct scatterlist *sg_list;
-	int period;
-	int periods;
-	unsigned long dma_addr;
-	int dma;
-	struct snd_pcm_substream *substream;
-	unsigned long offset;
-	unsigned long size;
-	unsigned long period_cnt;
-	void *buf;
-	int period_time;
-};
-
-/* Called by the DMA framework when a period has elapsed */
-static void imx_ssi_dma_progression(int channel, void *data,
-					struct scatterlist *sg)
+static bool filter(struct dma_chan *chan, void *param)
 {
-	struct snd_pcm_substream *substream = data;
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct imx_pcm_runtime_data *iprtd = runtime->private_data;
+	if (!imx_dma_is_general_purpose(chan))
+		return false;
 
-	if (!sg)
-		return;
+	chan->private = param;
 
-	runtime = iprtd->substream->runtime;
-
-	iprtd->offset = sg->dma_address - runtime->dma_addr;
-
-	snd_pcm_period_elapsed(iprtd->substream);
-}
-
-static void imx_ssi_dma_callback(int channel, void *data)
-{
-	pr_err("%s shouldn't be called\n", __func__);
-}
-
-static void snd_imx_dma_err_callback(int channel, void *data, int err)
-{
-	struct snd_pcm_substream *substream = data;
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct imx_pcm_dma_params *dma_params = 
-		snd_soc_dai_get_dma_data(rtd->dai->cpu_dai, substream);
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct imx_pcm_runtime_data *iprtd = runtime->private_data;
-	int ret;
-
-	pr_err("DMA timeout on channel %d -%s%s%s%s\n",
-		 channel,
-		 err & IMX_DMA_ERR_BURST ?    " burst" : "",
-		 err & IMX_DMA_ERR_REQUEST ?  " request" : "",
-		 err & IMX_DMA_ERR_TRANSFER ? " transfer" : "",
-		 err & IMX_DMA_ERR_BUFFER ?   " buffer" : "");
-
-	imx_dma_disable(iprtd->dma);
-	ret = imx_dma_setup_sg(iprtd->dma, iprtd->sg_list, iprtd->sg_count,
-			IMX_DMA_LENGTH_LOOP, dma_params->dma_addr,
-			substream->stream == SNDRV_PCM_STREAM_PLAYBACK ?
-			DMA_MODE_WRITE : DMA_MODE_READ);
-	if (!ret)
-		imx_dma_enable(iprtd->dma);
-}
-
-static int imx_ssi_dma_alloc(struct snd_pcm_substream *substream)
-{
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct imx_pcm_dma_params *dma_params;
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct imx_pcm_runtime_data *iprtd = runtime->private_data;
-	int ret;
-
-	dma_params = snd_soc_dai_get_dma_data(rtd->dai->cpu_dai, substream);
-
-	iprtd->dma = imx_dma_request_by_prio(DRV_NAME, DMA_PRIO_HIGH);
-	if (iprtd->dma < 0) {
-		pr_err("Failed to claim the audio DMA\n");
-		return -ENODEV;
-	}
-
-	ret = imx_dma_setup_handlers(iprtd->dma,
-				imx_ssi_dma_callback,
-				snd_imx_dma_err_callback, substream);
-	if (ret)
-		goto out;
-
-	ret = imx_dma_setup_progression_handler(iprtd->dma,
-			imx_ssi_dma_progression);
-	if (ret) {
-		pr_err("Failed to setup the DMA handler\n");
-		goto out;
-	}
-
-	ret = imx_dma_config_channel(iprtd->dma,
-			IMX_DMA_MEMSIZE_16 | IMX_DMA_TYPE_FIFO,
-			IMX_DMA_MEMSIZE_32 | IMX_DMA_TYPE_LINEAR,
-			dma_params->dma, 1);
-	if (ret < 0) {
-		pr_err("Cannot configure DMA channel: %d\n", ret);
-		goto out;
-	}
-
-	imx_dma_config_burstlen(iprtd->dma, dma_params->burstsize * 2);
-
-	return 0;
-out:
-	imx_dma_free(iprtd->dma);
-	return ret;
+	return true;
 }
 
 static int snd_imx_pcm_hw_params(struct snd_pcm_substream *substream,
 				struct snd_pcm_hw_params *params)
 {
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct imx_pcm_runtime_data *iprtd = runtime->private_data;
-	int i;
-	unsigned long dma_addr;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct dma_chan *chan = snd_dmaengine_pcm_get_chan(substream);
+	struct imx_pcm_dma_params *dma_params;
+	struct dma_slave_config slave_config;
+	int ret;
 
-	imx_ssi_dma_alloc(substream);
+	dma_params = snd_soc_dai_get_dma_data(rtd->cpu_dai, substream);
 
-	iprtd->size = params_buffer_bytes(params);
-	iprtd->periods = params_periods(params);
-	iprtd->period = params_period_bytes(params);
-	iprtd->offset = 0;
-	iprtd->period_time = HZ / (params_rate(params) /
-			params_period_size(params));
+	ret = snd_hwparams_to_dma_slave_config(substream, params, &slave_config);
+	if (ret)
+		return ret;
+
+	slave_config.device_fc = false;
+
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+		slave_config.dst_addr = dma_params->dma_addr;
+		slave_config.dst_maxburst = dma_params->burstsize;
+	} else {
+		slave_config.src_addr = dma_params->dma_addr;
+		slave_config.src_maxburst = dma_params->burstsize;
+	}
+
+	ret = dmaengine_slave_config(chan, &slave_config);
+	if (ret)
+		return ret;
 
 	snd_pcm_set_runtime_buffer(substream, &substream->dma_buffer);
 
-	if (iprtd->sg_count != iprtd->periods) {
-		kfree(iprtd->sg_list);
-
-		iprtd->sg_list = kcalloc(iprtd->periods + 1,
-				sizeof(struct scatterlist), GFP_KERNEL);
-		if (!iprtd->sg_list)
-			return -ENOMEM;
-		iprtd->sg_count = iprtd->periods + 1;
-	}
-
-	sg_init_table(iprtd->sg_list, iprtd->sg_count);
-	dma_addr = runtime->dma_addr;
-
-	for (i = 0; i < iprtd->periods; i++) {
-		iprtd->sg_list[i].page_link = 0;
-		iprtd->sg_list[i].offset = 0;
-		iprtd->sg_list[i].dma_address = dma_addr;
-		iprtd->sg_list[i].length = iprtd->period;
-		dma_addr += iprtd->period;
-	}
-
-	/* close the loop */
-	iprtd->sg_list[iprtd->sg_count - 1].offset = 0;
-	iprtd->sg_list[iprtd->sg_count - 1].length = 0;
-	iprtd->sg_list[iprtd->sg_count - 1].page_link =
-			((unsigned long) iprtd->sg_list | 0x01) & ~0x02;
 	return 0;
-}
-
-static int snd_imx_pcm_hw_free(struct snd_pcm_substream *substream)
-{
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct imx_pcm_runtime_data *iprtd = runtime->private_data;
-
-	if (iprtd->dma >= 0) {
-		imx_dma_free(iprtd->dma);
-		iprtd->dma = -EINVAL;
-	}
-
-	kfree(iprtd->sg_list);
-	iprtd->sg_list = NULL;
-
-	return 0;
-}
-
-static int snd_imx_pcm_prepare(struct snd_pcm_substream *substream)
-{
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct imx_pcm_dma_params *dma_params;
-	struct imx_pcm_runtime_data *iprtd = runtime->private_data;
-	int err;
-
-	dma_params = snd_soc_dai_get_dma_data(rtd->dai->cpu_dai, substream);
-
-	iprtd->substream = substream;
-	iprtd->buf = (unsigned int *)substream->dma_buffer.area;
-	iprtd->period_cnt = 0;
-
-	pr_debug("%s: buf: %p period: %d periods: %d\n",
-			__func__, iprtd->buf, iprtd->period, iprtd->periods);
-
-	err = imx_dma_setup_sg(iprtd->dma, iprtd->sg_list, iprtd->sg_count,
-			IMX_DMA_LENGTH_LOOP, dma_params->dma_addr,
-			substream->stream == SNDRV_PCM_STREAM_PLAYBACK ?
-			DMA_MODE_WRITE : DMA_MODE_READ);
-	if (err)
-		return err;
-
-	return 0;
-}
-
-static int snd_imx_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
-{
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct imx_pcm_runtime_data *iprtd = runtime->private_data;
-
-	switch (cmd) {
-	case SNDRV_PCM_TRIGGER_START:
-	case SNDRV_PCM_TRIGGER_RESUME:
-	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		imx_dma_enable(iprtd->dma);
-
-		break;
-
-	case SNDRV_PCM_TRIGGER_STOP:
-	case SNDRV_PCM_TRIGGER_SUSPEND:
-	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		imx_dma_disable(iprtd->dma);
-
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-static snd_pcm_uframes_t snd_imx_pcm_pointer(struct snd_pcm_substream *substream)
-{
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct imx_pcm_runtime_data *iprtd = runtime->private_data;
-
-	return bytes_to_frames(substream->runtime, iprtd->offset);
 }
 
 static struct snd_pcm_hardware snd_imx_hardware = {
@@ -279,7 +91,7 @@ static struct snd_pcm_hardware snd_imx_hardware = {
 	.channels_max = 2,
 	.buffer_bytes_max = IMX_SSI_DMABUF_SIZE,
 	.period_bytes_min = 128,
-	.period_bytes_max = 16 * 1024,
+	.period_bytes_max = 65535, /* Limited by SDMA engine */
 	.periods_min = 2,
 	.periods_max = 255,
 	.fifo_size = 0,
@@ -287,50 +99,77 @@ static struct snd_pcm_hardware snd_imx_hardware = {
 
 static int snd_imx_open(struct snd_pcm_substream *substream)
 {
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct imx_pcm_runtime_data *iprtd;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct imx_pcm_dma_params *dma_params;
+	struct imx_dma_data *dma_data;
 	int ret;
 
-	iprtd = kzalloc(sizeof(*iprtd), GFP_KERNEL);
-	if (iprtd == NULL)
-		return -ENOMEM;
-	runtime->private_data = iprtd;
+	snd_soc_set_runtime_hwparams(substream, &snd_imx_hardware);
 
-	ret = snd_pcm_hw_constraint_integer(substream->runtime,
-			SNDRV_PCM_HW_PARAM_PERIODS);
-	if (ret < 0) {
-		kfree(iprtd);
-		return ret;
+	dma_params = snd_soc_dai_get_dma_data(rtd->cpu_dai, substream);
+
+	dma_data = kzalloc(sizeof(*dma_data), GFP_KERNEL);
+	dma_data->peripheral_type = IMX_DMATYPE_SSI;
+	dma_data->priority = DMA_PRIO_HIGH;
+	dma_data->dma_request = dma_params->dma;
+
+	ret = snd_dmaengine_pcm_open(substream, filter, dma_data);
+	if (ret) {
+		kfree(dma_data);
+		return 0;
 	}
 
-	snd_soc_set_runtime_hwparams(substream, &snd_imx_hardware);
+	snd_dmaengine_pcm_set_data(substream, dma_data);
+
+	return 0;
+}
+
+static int snd_imx_close(struct snd_pcm_substream *substream)
+{
+	struct imx_dma_data *dma_data = snd_dmaengine_pcm_get_data(substream);
+
+	snd_dmaengine_pcm_close(substream);
+	kfree(dma_data);
+
 	return 0;
 }
 
 static struct snd_pcm_ops imx_pcm_ops = {
 	.open		= snd_imx_open,
+	.close		= snd_imx_close,
 	.ioctl		= snd_pcm_lib_ioctl,
 	.hw_params	= snd_imx_pcm_hw_params,
-	.hw_free	= snd_imx_pcm_hw_free,
-	.prepare	= snd_imx_pcm_prepare,
-	.trigger	= snd_imx_pcm_trigger,
-	.pointer	= snd_imx_pcm_pointer,
+	.trigger	= snd_dmaengine_pcm_trigger,
+	.pointer	= snd_dmaengine_pcm_pointer,
 	.mmap		= snd_imx_pcm_mmap,
 };
 
-static struct snd_soc_platform imx_soc_platform_dma = {
-	.name		= "imx-audio",
-	.pcm_ops 	= &imx_pcm_ops,
+static struct snd_soc_platform_driver imx_soc_platform_mx2 = {
+	.ops		= &imx_pcm_ops,
 	.pcm_new	= imx_pcm_new,
 	.pcm_free	= imx_pcm_free,
 };
 
-struct snd_soc_platform *imx_ssi_dma_mx2_init(struct platform_device *pdev,
-		struct imx_ssi *ssi)
+static int __devinit imx_soc_platform_probe(struct platform_device *pdev)
 {
-	ssi->dma_params_tx.burstsize = DMA_TXFIFO_BURST;
-	ssi->dma_params_rx.burstsize = DMA_RXFIFO_BURST;
-
-	return &imx_soc_platform_dma;
+	return snd_soc_register_platform(&pdev->dev, &imx_soc_platform_mx2);
 }
 
+static int __devexit imx_soc_platform_remove(struct platform_device *pdev)
+{
+	snd_soc_unregister_platform(&pdev->dev);
+	return 0;
+}
+
+static struct platform_driver imx_pcm_driver = {
+	.driver = {
+			.name = "imx-pcm-audio",
+			.owner = THIS_MODULE,
+	},
+	.probe = imx_soc_platform_probe,
+	.remove = __devexit_p(imx_soc_platform_remove),
+};
+
+module_platform_driver(imx_pcm_driver);
+MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:imx-pcm-audio");

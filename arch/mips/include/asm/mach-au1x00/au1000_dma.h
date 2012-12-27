@@ -33,13 +33,8 @@
 #include <linux/io.h>		/* need byte IO */
 #include <linux/spinlock.h>	/* And spinlocks */
 #include <linux/delay.h>
-#include <asm/system.h>
 
 #define NUM_AU1000_DMA_CHANNELS	8
-
-/* DMA Channel Base Addresses */
-#define DMA_CHANNEL_BASE	0xB4002000
-#define DMA_CHANNEL_LEN		0x00000100
 
 /* DMA Channel Register Offsets */
 #define DMA_MODE_SET		0x00000000

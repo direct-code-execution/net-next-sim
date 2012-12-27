@@ -34,9 +34,9 @@
 #include <linux/slab.h>
 #include <net/sock.h>
 #include <linux/in.h>
+#include <linux/export.h>
 
 #include "rds.h"
-#include "rdma.h"
 
 void rds_inc_init(struct rds_incoming *inc, struct rds_connection *conn,
 		  __be32 saddr)
@@ -49,12 +49,11 @@ void rds_inc_init(struct rds_incoming *inc, struct rds_connection *conn,
 }
 EXPORT_SYMBOL_GPL(rds_inc_init);
 
-void rds_inc_addref(struct rds_incoming *inc)
+static void rds_inc_addref(struct rds_incoming *inc)
 {
 	rdsdebug("addref inc %p ref %d\n", inc, atomic_read(&inc->i_refcount));
 	atomic_inc(&inc->i_refcount);
 }
-EXPORT_SYMBOL_GPL(rds_inc_addref);
 
 void rds_inc_put(struct rds_incoming *inc)
 {
@@ -156,7 +155,7 @@ static void rds_recv_incoming_exthdrs(struct rds_incoming *inc, struct rds_sock 
  * tell us which roles the addrs in the conn are playing for this message.
  */
 void rds_recv_incoming(struct rds_connection *conn, __be32 saddr, __be32 daddr,
-		       struct rds_incoming *inc, gfp_t gfp, enum km_type km)
+		       struct rds_incoming *inc, gfp_t gfp)
 {
 	struct rds_sock *rs = NULL;
 	struct sock *sk;
@@ -210,7 +209,7 @@ void rds_recv_incoming(struct rds_connection *conn, __be32 saddr, __be32 daddr,
 	}
 
 	rs = rds_find_bound(daddr, inc->i_hdr.h_dport);
-	if (rs == NULL) {
+	if (!rs) {
 		rds_stats_inc(s_recv_drop_no_sock);
 		goto out;
 	}
@@ -251,7 +250,7 @@ static int rds_next_incoming(struct rds_sock *rs, struct rds_incoming **inc)
 {
 	unsigned long flags;
 
-	if (*inc == NULL) {
+	if (!*inc) {
 		read_lock_irqsave(&rs->rs_recv_lock, flags);
 		if (!list_empty(&rs->rs_recv_queue)) {
 			*inc = list_entry(rs->rs_recv_queue.next,
@@ -334,10 +333,10 @@ int rds_notify_queue_get(struct rds_sock *rs, struct msghdr *msghdr)
 
 		if (msghdr) {
 			cmsg.user_token = notifier->n_user_token;
-			cmsg.status  = notifier->n_status;
+			cmsg.status = notifier->n_status;
 
 			err = put_cmsg(msghdr, SOL_RDS, RDS_CMSG_RDMA_STATUS,
-					sizeof(cmsg), &cmsg);
+				       sizeof(cmsg), &cmsg);
 			if (err)
 				break;
 		}

@@ -15,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
+#include <linux/io.h>
 
 #include <linux/delay.h>
 
@@ -22,7 +23,6 @@
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/initval.h>
-#include <sound/soc-dapm.h>
 #include <sound/soc.h>
 
 #define JZ4740_REG_CODEC_1 0x0
@@ -74,29 +74,22 @@ static const uint32_t jz4740_codec_regs[] = {
 struct jz4740_codec {
 	void __iomem *base;
 	struct resource *mem;
-
-	uint32_t reg_cache[2];
-	struct snd_soc_codec codec;
 };
-
-static inline struct jz4740_codec *codec_to_jz4740(struct snd_soc_codec *codec)
-{
-	return container_of(codec, struct jz4740_codec, codec);
-}
 
 static unsigned int jz4740_codec_read(struct snd_soc_codec *codec,
 	unsigned int reg)
 {
-	struct jz4740_codec *jz4740_codec = codec_to_jz4740(codec);
+	struct jz4740_codec *jz4740_codec = snd_soc_codec_get_drvdata(codec);
 	return readl(jz4740_codec->base + (reg << 2));
 }
 
 static int jz4740_codec_write(struct snd_soc_codec *codec, unsigned int reg,
 	unsigned int val)
 {
-	struct jz4740_codec *jz4740_codec = codec_to_jz4740(codec);
+	struct jz4740_codec *jz4740_codec = snd_soc_codec_get_drvdata(codec);
+	u32 *cache = codec->reg_cache;
 
-	jz4740_codec->reg_cache[reg] = val;
+	cache[reg] = val;
 	writel(val, jz4740_codec->base + (reg << 2));
 
 	return 0;
@@ -172,8 +165,7 @@ static int jz4740_codec_hw_params(struct snd_pcm_substream *substream,
 {
 	uint32_t val;
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_device *socdev = rtd->socdev;
-	struct snd_soc_codec *codec = socdev->card->codec;
+	struct snd_soc_codec *codec =rtd->codec;
 
 	switch (params_rate(params)) {
 	case 8000:
@@ -215,12 +207,12 @@ static int jz4740_codec_hw_params(struct snd_pcm_substream *substream,
 	return 0;
 }
 
-static struct snd_soc_dai_ops jz4740_codec_dai_ops = {
+static const struct snd_soc_dai_ops jz4740_codec_dai_ops = {
 	.hw_params = jz4740_codec_hw_params,
 };
 
-struct snd_soc_dai jz4740_codec_dai = {
-	.name = "jz4740",
+static struct snd_soc_dai_driver jz4740_codec_dai = {
+	.name = "jz4740-hifi",
 	.playback = {
 		.stream_name = "Playback",
 		.channels_min = 2,
@@ -238,7 +230,6 @@ struct snd_soc_dai jz4740_codec_dai = {
 	.ops = &jz4740_codec_dai_ops,
 	.symmetric_rates = 1,
 };
-EXPORT_SYMBOL_GPL(jz4740_codec_dai);
 
 static void jz4740_codec_wakeup(struct snd_soc_codec *codec)
 {
@@ -275,7 +266,7 @@ static int jz4740_codec_set_bias_level(struct snd_soc_codec *codec,
 		break;
 	case SND_SOC_BIAS_STANDBY:
 		/* The only way to clear the suspend flag is to reset the codec */
-		if (codec->bias_level == SND_SOC_BIAS_OFF)
+		if (codec->dapm.bias_level == SND_SOC_BIAS_OFF)
 			jz4740_codec_wakeup(codec);
 
 		mask = JZ4740_CODEC_1_VREF_DISABLE |
@@ -297,68 +288,37 @@ static int jz4740_codec_set_bias_level(struct snd_soc_codec *codec,
 		break;
 	}
 
-	codec->bias_level = level;
+	codec->dapm.bias_level = level;
 
 	return 0;
 }
 
-static struct snd_soc_codec *jz4740_codec_codec;
-
-static int jz4740_codec_dev_probe(struct platform_device *pdev)
+static int jz4740_codec_dev_probe(struct snd_soc_codec *codec)
 {
-	int ret;
-	struct snd_soc_device *socdev = platform_get_drvdata(pdev);
-	struct snd_soc_codec *codec = jz4740_codec_codec;
+	snd_soc_update_bits(codec, JZ4740_REG_CODEC_1,
+			JZ4740_CODEC_1_SW2_ENABLE, JZ4740_CODEC_1_SW2_ENABLE);
 
-	BUG_ON(!codec);
-
-	socdev->card->codec = codec;
-
-	ret = snd_soc_new_pcms(socdev, SNDRV_DEFAULT_IDX1, SNDRV_DEFAULT_STR1);
-	if (ret) {
-		dev_err(&pdev->dev, "Failed to create pcms: %d\n", ret);
-		return ret;
-	}
-
-	snd_soc_add_controls(codec, jz4740_codec_controls,
-		ARRAY_SIZE(jz4740_codec_controls));
-
-	snd_soc_dapm_new_controls(codec, jz4740_codec_dapm_widgets,
-		ARRAY_SIZE(jz4740_codec_dapm_widgets));
-
-	snd_soc_dapm_add_routes(codec, jz4740_codec_dapm_routes,
-		ARRAY_SIZE(jz4740_codec_dapm_routes));
-
-	snd_soc_dapm_new_widgets(codec);
+	jz4740_codec_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 
 	return 0;
 }
 
-static int jz4740_codec_dev_remove(struct platform_device *pdev)
+static int jz4740_codec_dev_remove(struct snd_soc_codec *codec)
 {
-	struct snd_soc_device *socdev = platform_get_drvdata(pdev);
-
-	snd_soc_free_pcms(socdev);
-	snd_soc_dapm_free(socdev);
+	jz4740_codec_set_bias_level(codec, SND_SOC_BIAS_OFF);
 
 	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
 
-static int jz4740_codec_suspend(struct platform_device *pdev, pm_message_t state)
+static int jz4740_codec_suspend(struct snd_soc_codec *codec)
 {
-	struct snd_soc_device *socdev = platform_get_drvdata(pdev);
-	struct snd_soc_codec *codec = socdev->card->codec;
-
 	return jz4740_codec_set_bias_level(codec, SND_SOC_BIAS_OFF);
 }
 
-static int jz4740_codec_resume(struct platform_device *pdev)
+static int jz4740_codec_resume(struct snd_soc_codec *codec)
 {
-	struct snd_soc_device *socdev = platform_get_drvdata(pdev);
-	struct snd_soc_codec *codec = socdev->card->codec;
-
 	return jz4740_codec_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 }
 
@@ -367,22 +327,34 @@ static int jz4740_codec_resume(struct platform_device *pdev)
 #define jz4740_codec_resume NULL
 #endif
 
-struct snd_soc_codec_device soc_codec_dev_jz4740_codec = {
+static struct snd_soc_codec_driver soc_codec_dev_jz4740_codec = {
 	.probe = jz4740_codec_dev_probe,
 	.remove = jz4740_codec_dev_remove,
 	.suspend = jz4740_codec_suspend,
 	.resume = jz4740_codec_resume,
+	.read = jz4740_codec_read,
+	.write = jz4740_codec_write,
+	.set_bias_level = jz4740_codec_set_bias_level,
+	.reg_cache_default	= jz4740_codec_regs,
+	.reg_word_size = sizeof(u32),
+	.reg_cache_size	= 2,
+
+	.controls = jz4740_codec_controls,
+	.num_controls = ARRAY_SIZE(jz4740_codec_controls),
+	.dapm_widgets = jz4740_codec_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(jz4740_codec_dapm_widgets),
+	.dapm_routes = jz4740_codec_dapm_routes,
+	.num_dapm_routes = ARRAY_SIZE(jz4740_codec_dapm_routes),
 };
-EXPORT_SYMBOL_GPL(soc_codec_dev_jz4740_codec);
 
 static int __devinit jz4740_codec_probe(struct platform_device *pdev)
 {
 	int ret;
 	struct jz4740_codec *jz4740_codec;
-	struct snd_soc_codec *codec;
 	struct resource *mem;
 
-	jz4740_codec = kzalloc(sizeof(*jz4740_codec), GFP_KERNEL);
+	jz4740_codec = devm_kzalloc(&pdev->dev, sizeof(*jz4740_codec),
+				    GFP_KERNEL);
 	if (!jz4740_codec)
 		return -ENOMEM;
 
@@ -390,14 +362,14 @@ static int __devinit jz4740_codec_probe(struct platform_device *pdev)
 	if (!mem) {
 		dev_err(&pdev->dev, "Failed to get mmio memory resource\n");
 		ret = -ENOENT;
-		goto err_free_codec;
+		goto err_out;
 	}
 
 	mem = request_mem_region(mem->start, resource_size(mem), pdev->name);
 	if (!mem) {
 		dev_err(&pdev->dev, "Failed to request mmio memory region\n");
 		ret = -EBUSY;
-		goto err_free_codec;
+		goto err_out;
 	}
 
 	jz4740_codec->base = ioremap(mem->start, resource_size(mem));
@@ -408,62 +380,22 @@ static int __devinit jz4740_codec_probe(struct platform_device *pdev)
 	}
 	jz4740_codec->mem = mem;
 
-	jz4740_codec_dai.dev = &pdev->dev;
-
-	codec = &jz4740_codec->codec;
-
-	codec->dev		= &pdev->dev;
-	codec->name		= "jz4740";
-	codec->owner		= THIS_MODULE;
-
-	codec->read		= jz4740_codec_read;
-	codec->write		= jz4740_codec_write;
-	codec->set_bias_level	= jz4740_codec_set_bias_level;
-	codec->bias_level	= SND_SOC_BIAS_OFF;
-
-	codec->dai		= &jz4740_codec_dai;
-	codec->num_dai		= 1;
-
-	codec->reg_cache	= jz4740_codec->reg_cache;
-	codec->reg_cache_size	= 2;
-	memcpy(codec->reg_cache, jz4740_codec_regs, sizeof(jz4740_codec_regs));
-
-	mutex_init(&codec->mutex);
-	INIT_LIST_HEAD(&codec->dapm_widgets);
-	INIT_LIST_HEAD(&codec->dapm_paths);
-
-	jz4740_codec_codec = codec;
-
-	snd_soc_update_bits(codec, JZ4740_REG_CODEC_1,
-			JZ4740_CODEC_1_SW2_ENABLE, JZ4740_CODEC_1_SW2_ENABLE);
-
 	platform_set_drvdata(pdev, jz4740_codec);
 
-	ret = snd_soc_register_codec(codec);
+	ret = snd_soc_register_codec(&pdev->dev,
+			&soc_codec_dev_jz4740_codec, &jz4740_codec_dai, 1);
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to register codec\n");
 		goto err_iounmap;
 	}
 
-	ret = snd_soc_register_dai(&jz4740_codec_dai);
-	if (ret) {
-		dev_err(&pdev->dev, "Failed to register codec dai\n");
-		goto err_unregister_codec;
-	}
-
-	jz4740_codec_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
-
 	return 0;
 
-err_unregister_codec:
-	snd_soc_unregister_codec(codec);
 err_iounmap:
 	iounmap(jz4740_codec->base);
 err_release_mem_region:
 	release_mem_region(mem->start, resource_size(mem));
-err_free_codec:
-	kfree(jz4740_codec);
-
+err_out:
 	return ret;
 }
 
@@ -472,14 +404,12 @@ static int __devexit jz4740_codec_remove(struct platform_device *pdev)
 	struct jz4740_codec *jz4740_codec = platform_get_drvdata(pdev);
 	struct resource *mem = jz4740_codec->mem;
 
-	snd_soc_unregister_dai(&jz4740_codec_dai);
-	snd_soc_unregister_codec(&jz4740_codec->codec);
+	snd_soc_unregister_codec(&pdev->dev);
 
 	iounmap(jz4740_codec->base);
 	release_mem_region(mem->start, resource_size(mem));
 
 	platform_set_drvdata(pdev, NULL);
-	kfree(jz4740_codec);
 
 	return 0;
 }
@@ -493,17 +423,7 @@ static struct platform_driver jz4740_codec_driver = {
 	},
 };
 
-static int __init jz4740_codec_init(void)
-{
-	return platform_driver_register(&jz4740_codec_driver);
-}
-module_init(jz4740_codec_init);
-
-static void __exit jz4740_codec_exit(void)
-{
-	platform_driver_unregister(&jz4740_codec_driver);
-}
-module_exit(jz4740_codec_exit);
+module_platform_driver(jz4740_codec_driver);
 
 MODULE_DESCRIPTION("JZ4740 SoC internal codec driver");
 MODULE_AUTHOR("Lars-Peter Clausen <lars@metafoo.de>");

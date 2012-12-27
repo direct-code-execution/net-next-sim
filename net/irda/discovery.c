@@ -35,6 +35,7 @@
 #include <linux/fs.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
+#include <linux/export.h>
 
 #include <net/irda/irda.h>
 #include <net/irda/irlmp.h>
@@ -315,7 +316,7 @@ struct irda_device_info *irlmp_copy_discoveries(hashbin_t *log, int *pn,
 
 	/* Get the actual number of device in the buffer and return */
 	*pn = i;
-	return(buffer);
+	return buffer;
 }
 
 #ifdef CONFIG_PROC_FS

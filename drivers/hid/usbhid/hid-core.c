@@ -67,7 +67,6 @@ MODULE_PARM_DESC(quirks, "Add/modify USB HID quirks by specifying "
  * Input submission and I/O error handler.
  */
 static DEFINE_MUTEX(hid_open_mut);
-static struct workqueue_struct *resumption_waker;
 
 static void hid_io_error(struct hid_device *hid);
 static int hid_submit_out(struct hid_device *hid);
@@ -136,10 +135,10 @@ static void hid_reset(struct work_struct *work)
 			hid_io_error(hid);
 		break;
 	default:
-		err_hid("can't reset device, %s-%s/input%d, status %d",
-				hid_to_usb_dev(hid)->bus->bus_name,
-				hid_to_usb_dev(hid)->devpath,
-				usbhid->ifnum, rc);
+		hid_err(hid, "can't reset device, %s-%s/input%d, status %d\n",
+			hid_to_usb_dev(hid)->bus->bus_name,
+			hid_to_usb_dev(hid)->devpath,
+			usbhid->ifnum, rc);
 		/* FALLTHROUGH */
 	case -EHOSTUNREACH:
 	case -ENODEV:
@@ -198,16 +197,24 @@ static int usbhid_restart_out_queue(struct usbhid_device *usbhid)
 {
 	struct hid_device *hid = usb_get_intfdata(usbhid->intf);
 	int kicked;
+	int r;
 
 	if (!hid)
 		return 0;
 
 	if ((kicked = (usbhid->outhead != usbhid->outtail))) {
 		dbg("Kicking head %d tail %d", usbhid->outhead, usbhid->outtail);
+
+		r = usb_autopm_get_interface_async(usbhid->intf);
+		if (r < 0)
+			return r;
+		/* Asynchronously flush queue. */
+		set_bit(HID_OUT_RUNNING, &usbhid->iofl);
 		if (hid_submit_out(hid)) {
 			clear_bit(HID_OUT_RUNNING, &usbhid->iofl);
-			wake_up(&usbhid->wait);
+			usb_autopm_put_interface_async(usbhid->intf);
 		}
+		wake_up(&usbhid->wait);
 	}
 	return kicked;
 }
@@ -216,6 +223,7 @@ static int usbhid_restart_ctrl_queue(struct usbhid_device *usbhid)
 {
 	struct hid_device *hid = usb_get_intfdata(usbhid->intf);
 	int kicked;
+	int r;
 
 	WARN_ON(hid == NULL);
 	if (!hid)
@@ -223,10 +231,17 @@ static int usbhid_restart_ctrl_queue(struct usbhid_device *usbhid)
 
 	if ((kicked = (usbhid->ctrlhead != usbhid->ctrltail))) {
 		dbg("Kicking head %d tail %d", usbhid->ctrlhead, usbhid->ctrltail);
+
+		r = usb_autopm_get_interface_async(usbhid->intf);
+		if (r < 0)
+			return r;
+		/* Asynchronously flush queue. */
+		set_bit(HID_CTRL_RUNNING, &usbhid->iofl);
 		if (hid_submit_ctrl(hid)) {
 			clear_bit(HID_CTRL_RUNNING, &usbhid->iofl);
-			wake_up(&usbhid->wait);
+			usb_autopm_put_interface_async(usbhid->intf);
 		}
+		wake_up(&usbhid->wait);
 	}
 	return kicked;
 }
@@ -278,18 +293,18 @@ static void hid_irq_in(struct urb *urb)
 		hid_io_error(hid);
 		return;
 	default:		/* error */
-		dev_warn(&urb->dev->dev, "input irq status %d  "
-				"received\n", urb->status);
+		hid_warn(urb->dev, "input irq status %d received\n",
+			 urb->status);
 	}
 
 	status = usb_submit_urb(urb, GFP_ATOMIC);
 	if (status) {
 		clear_bit(HID_IN_RUNNING, &usbhid->iofl);
 		if (status != -EPERM) {
-			err_hid("can't resubmit intr, %s-%s/input%d, status %d",
-					hid_to_usb_dev(hid)->bus->bus_name,
-					hid_to_usb_dev(hid)->devpath,
-					usbhid->ifnum, status);
+			hid_err(hid, "can't resubmit intr, %s-%s/input%d, status %d\n",
+				hid_to_usb_dev(hid)->bus->bus_name,
+				hid_to_usb_dev(hid)->devpath,
+				usbhid->ifnum, status);
 			hid_io_error(hid);
 		}
 	}
@@ -300,32 +315,26 @@ static int hid_submit_out(struct hid_device *hid)
 	struct hid_report *report;
 	char *raw_report;
 	struct usbhid_device *usbhid = hid->driver_data;
+	int r;
 
 	report = usbhid->out[usbhid->outtail].report;
 	raw_report = usbhid->out[usbhid->outtail].raw_report;
 
-	if (!test_bit(HID_REPORTED_IDLE, &usbhid->iofl)) {
-		usbhid->urbout->transfer_buffer_length = ((report->size - 1) >> 3) + 1 + (report->id > 0);
-		usbhid->urbout->dev = hid_to_usb_dev(hid);
-		memcpy(usbhid->outbuf, raw_report, usbhid->urbout->transfer_buffer_length);
-		kfree(raw_report);
+	usbhid->urbout->transfer_buffer_length = ((report->size - 1) >> 3) +
+						 1 + (report->id > 0);
+	usbhid->urbout->dev = hid_to_usb_dev(hid);
+	memcpy(usbhid->outbuf, raw_report,
+	       usbhid->urbout->transfer_buffer_length);
+	kfree(raw_report);
 
-		dbg_hid("submitting out urb\n");
+	dbg_hid("submitting out urb\n");
 
-		if (usb_submit_urb(usbhid->urbout, GFP_ATOMIC)) {
-			err_hid("usb_submit_urb(out) failed");
-			return -1;
-		}
-		usbhid->last_out = jiffies;
-	} else {
-		/*
-		 * queue work to wake up the device.
-		 * as the work queue is freezeable, this is safe
-		 * with respect to STD and STR
-		 */
-		queue_work(resumption_waker, &usbhid->restart_work);
+	r = usb_submit_urb(usbhid->urbout, GFP_ATOMIC);
+	if (r < 0) {
+		hid_err(hid, "usb_submit_urb(out) failed: %d\n", r);
+		return r;
 	}
-
+	usbhid->last_out = jiffies;
 	return 0;
 }
 
@@ -334,60 +343,55 @@ static int hid_submit_ctrl(struct hid_device *hid)
 	struct hid_report *report;
 	unsigned char dir;
 	char *raw_report;
-	int len;
+	int len, r;
 	struct usbhid_device *usbhid = hid->driver_data;
 
 	report = usbhid->ctrl[usbhid->ctrltail].report;
 	raw_report = usbhid->ctrl[usbhid->ctrltail].raw_report;
 	dir = usbhid->ctrl[usbhid->ctrltail].dir;
 
-	if (!test_bit(HID_REPORTED_IDLE, &usbhid->iofl)) {
-		len = ((report->size - 1) >> 3) + 1 + (report->id > 0);
-		if (dir == USB_DIR_OUT) {
-			usbhid->urbctrl->pipe = usb_sndctrlpipe(hid_to_usb_dev(hid), 0);
-			usbhid->urbctrl->transfer_buffer_length = len;
-			memcpy(usbhid->ctrlbuf, raw_report, len);
-			kfree(raw_report);
-		} else {
-			int maxpacket, padlen;
-
-			usbhid->urbctrl->pipe = usb_rcvctrlpipe(hid_to_usb_dev(hid), 0);
-			maxpacket = usb_maxpacket(hid_to_usb_dev(hid), usbhid->urbctrl->pipe, 0);
-			if (maxpacket > 0) {
-				padlen = DIV_ROUND_UP(len, maxpacket);
-				padlen *= maxpacket;
-				if (padlen > usbhid->bufsize)
-					padlen = usbhid->bufsize;
-			} else
-				padlen = 0;
-			usbhid->urbctrl->transfer_buffer_length = padlen;
-		}
-		usbhid->urbctrl->dev = hid_to_usb_dev(hid);
-
-		usbhid->cr->bRequestType = USB_TYPE_CLASS | USB_RECIP_INTERFACE | dir;
-		usbhid->cr->bRequest = (dir == USB_DIR_OUT) ? HID_REQ_SET_REPORT : HID_REQ_GET_REPORT;
-		usbhid->cr->wValue = cpu_to_le16(((report->type + 1) << 8) | report->id);
-		usbhid->cr->wIndex = cpu_to_le16(usbhid->ifnum);
-		usbhid->cr->wLength = cpu_to_le16(len);
-
-		dbg_hid("submitting ctrl urb: %s wValue=0x%04x wIndex=0x%04x wLength=%u\n",
-			usbhid->cr->bRequest == HID_REQ_SET_REPORT ? "Set_Report" : "Get_Report",
-			usbhid->cr->wValue, usbhid->cr->wIndex, usbhid->cr->wLength);
-
-		if (usb_submit_urb(usbhid->urbctrl, GFP_ATOMIC)) {
-			err_hid("usb_submit_urb(ctrl) failed");
-			return -1;
-		}
-		usbhid->last_ctrl = jiffies;
+	len = ((report->size - 1) >> 3) + 1 + (report->id > 0);
+	if (dir == USB_DIR_OUT) {
+		usbhid->urbctrl->pipe = usb_sndctrlpipe(hid_to_usb_dev(hid), 0);
+		usbhid->urbctrl->transfer_buffer_length = len;
+		memcpy(usbhid->ctrlbuf, raw_report, len);
+		kfree(raw_report);
 	} else {
-		/*
-		 * queue work to wake up the device.
-		 * as the work queue is freezeable, this is safe
-		 * with respect to STD and STR
-		 */
-		queue_work(resumption_waker, &usbhid->restart_work);
-	}
+		int maxpacket, padlen;
 
+		usbhid->urbctrl->pipe = usb_rcvctrlpipe(hid_to_usb_dev(hid), 0);
+		maxpacket = usb_maxpacket(hid_to_usb_dev(hid),
+					  usbhid->urbctrl->pipe, 0);
+		if (maxpacket > 0) {
+			padlen = DIV_ROUND_UP(len, maxpacket);
+			padlen *= maxpacket;
+			if (padlen > usbhid->bufsize)
+				padlen = usbhid->bufsize;
+		} else
+			padlen = 0;
+		usbhid->urbctrl->transfer_buffer_length = padlen;
+	}
+	usbhid->urbctrl->dev = hid_to_usb_dev(hid);
+
+	usbhid->cr->bRequestType = USB_TYPE_CLASS | USB_RECIP_INTERFACE | dir;
+	usbhid->cr->bRequest = (dir == USB_DIR_OUT) ? HID_REQ_SET_REPORT :
+						      HID_REQ_GET_REPORT;
+	usbhid->cr->wValue = cpu_to_le16(((report->type + 1) << 8) |
+					 report->id);
+	usbhid->cr->wIndex = cpu_to_le16(usbhid->ifnum);
+	usbhid->cr->wLength = cpu_to_le16(len);
+
+	dbg_hid("submitting ctrl urb: %s wValue=0x%04x wIndex=0x%04x wLength=%u\n",
+		usbhid->cr->bRequest == HID_REQ_SET_REPORT ? "Set_Report" :
+							     "Get_Report",
+		usbhid->cr->wValue, usbhid->cr->wIndex, usbhid->cr->wLength);
+
+	r = usb_submit_urb(usbhid->urbctrl, GFP_ATOMIC);
+	if (r < 0) {
+		hid_err(hid, "usb_submit_urb(ctrl) failed: %d\n", r);
+		return r;
+	}
+	usbhid->last_ctrl = jiffies;
 	return 0;
 }
 
@@ -413,8 +417,8 @@ static void hid_irq_out(struct urb *urb)
 	case -ENOENT:
 		break;
 	default:		/* error */
-		dev_warn(&urb->dev->dev, "output irq status %d "
-				"received\n", urb->status);
+		hid_warn(urb->dev, "output irq status %d received\n",
+			 urb->status);
 	}
 
 	spin_lock_irqsave(&usbhid->lock, flags);
@@ -424,17 +428,15 @@ static void hid_irq_out(struct urb *urb)
 	else
 		usbhid->outtail = (usbhid->outtail + 1) & (HID_OUTPUT_FIFO_SIZE - 1);
 
-	if (usbhid->outhead != usbhid->outtail) {
-		if (hid_submit_out(hid)) {
-			clear_bit(HID_OUT_RUNNING, &usbhid->iofl);
-			wake_up(&usbhid->wait);
-		}
+	if (usbhid->outhead != usbhid->outtail && !hid_submit_out(hid)) {
+		/* Successfully submitted next urb in queue */
 		spin_unlock_irqrestore(&usbhid->lock, flags);
 		return;
 	}
 
 	clear_bit(HID_OUT_RUNNING, &usbhid->iofl);
 	spin_unlock_irqrestore(&usbhid->lock, flags);
+	usb_autopm_put_interface_async(usbhid->intf);
 	wake_up(&usbhid->wait);
 }
 
@@ -466,8 +468,7 @@ static void hid_ctrl(struct urb *urb)
 	case -EPIPE:		/* report not available */
 		break;
 	default:		/* error */
-		dev_warn(&urb->dev->dev, "ctrl urb status %d "
-				"received\n", status);
+		hid_warn(urb->dev, "ctrl urb status %d received\n", status);
 	}
 
 	if (unplug)
@@ -475,17 +476,15 @@ static void hid_ctrl(struct urb *urb)
 	else
 		usbhid->ctrltail = (usbhid->ctrltail + 1) & (HID_CONTROL_FIFO_SIZE - 1);
 
-	if (usbhid->ctrlhead != usbhid->ctrltail) {
-		if (hid_submit_ctrl(hid)) {
-			clear_bit(HID_CTRL_RUNNING, &usbhid->iofl);
-			wake_up(&usbhid->wait);
-		}
+	if (usbhid->ctrlhead != usbhid->ctrltail && !hid_submit_ctrl(hid)) {
+		/* Successfully submitted next urb in queue */
 		spin_unlock(&usbhid->lock);
 		return;
 	}
 
 	clear_bit(HID_CTRL_RUNNING, &usbhid->iofl);
 	spin_unlock(&usbhid->lock);
+	usb_autopm_put_interface_async(usbhid->intf);
 	wake_up(&usbhid->wait);
 }
 
@@ -501,22 +500,36 @@ static void __usbhid_submit_report(struct hid_device *hid, struct hid_report *re
 
 	if (usbhid->urbout && dir == USB_DIR_OUT && report->type == HID_OUTPUT_REPORT) {
 		if ((head = (usbhid->outhead + 1) & (HID_OUTPUT_FIFO_SIZE - 1)) == usbhid->outtail) {
-			dev_warn(&hid->dev, "output queue full\n");
+			hid_warn(hid, "output queue full\n");
 			return;
 		}
 
 		usbhid->out[usbhid->outhead].raw_report = kmalloc(len, GFP_ATOMIC);
 		if (!usbhid->out[usbhid->outhead].raw_report) {
-			dev_warn(&hid->dev, "output queueing failed\n");
+			hid_warn(hid, "output queueing failed\n");
 			return;
 		}
 		hid_output_report(report, usbhid->out[usbhid->outhead].raw_report);
 		usbhid->out[usbhid->outhead].report = report;
 		usbhid->outhead = head;
 
+		/* Try to awake from autosuspend... */
+		if (usb_autopm_get_interface_async(usbhid->intf) < 0)
+			return;
+
+		/*
+		 * But if still suspended, leave urb enqueued, don't submit.
+		 * Submission will occur if/when resume() drains the queue.
+		 */
+		if (test_bit(HID_REPORTED_IDLE, &usbhid->iofl))
+			return;
+
 		if (!test_and_set_bit(HID_OUT_RUNNING, &usbhid->iofl)) {
-			if (hid_submit_out(hid))
+			if (hid_submit_out(hid)) {
 				clear_bit(HID_OUT_RUNNING, &usbhid->iofl);
+				usb_autopm_put_interface_async(usbhid->intf);
+			}
+			wake_up(&usbhid->wait);
 		} else {
 			/*
 			 * the queue is known to run
@@ -532,14 +545,14 @@ static void __usbhid_submit_report(struct hid_device *hid, struct hid_report *re
 	}
 
 	if ((head = (usbhid->ctrlhead + 1) & (HID_CONTROL_FIFO_SIZE - 1)) == usbhid->ctrltail) {
-		dev_warn(&hid->dev, "control queue full\n");
+		hid_warn(hid, "control queue full\n");
 		return;
 	}
 
 	if (dir == USB_DIR_OUT) {
 		usbhid->ctrl[usbhid->ctrlhead].raw_report = kmalloc(len, GFP_ATOMIC);
 		if (!usbhid->ctrl[usbhid->ctrlhead].raw_report) {
-			dev_warn(&hid->dev, "control queueing failed\n");
+			hid_warn(hid, "control queueing failed\n");
 			return;
 		}
 		hid_output_report(report, usbhid->ctrl[usbhid->ctrlhead].raw_report);
@@ -548,9 +561,23 @@ static void __usbhid_submit_report(struct hid_device *hid, struct hid_report *re
 	usbhid->ctrl[usbhid->ctrlhead].dir = dir;
 	usbhid->ctrlhead = head;
 
+	/* Try to awake from autosuspend... */
+	if (usb_autopm_get_interface_async(usbhid->intf) < 0)
+		return;
+
+	/*
+	 * If already suspended, leave urb enqueued, but don't submit.
+	 * Submission will occur if/when resume() drains the queue.
+	 */
+	if (test_bit(HID_REPORTED_IDLE, &usbhid->iofl))
+		return;
+
 	if (!test_and_set_bit(HID_CTRL_RUNNING, &usbhid->iofl)) {
-		if (hid_submit_ctrl(hid))
+		if (hid_submit_ctrl(hid)) {
 			clear_bit(HID_CTRL_RUNNING, &usbhid->iofl);
+			usb_autopm_put_interface_async(usbhid->intf);
+		}
+		wake_up(&usbhid->wait);
 	} else {
 		/*
 		 * the queue is known to run
@@ -575,6 +602,30 @@ void usbhid_submit_report(struct hid_device *hid, struct hid_report *report, uns
 }
 EXPORT_SYMBOL_GPL(usbhid_submit_report);
 
+/* Workqueue routine to send requests to change LEDs */
+static void hid_led(struct work_struct *work)
+{
+	struct usbhid_device *usbhid =
+		container_of(work, struct usbhid_device, led_work);
+	struct hid_device *hid = usbhid->hid;
+	struct hid_field *field;
+	unsigned long flags;
+
+	field = hidinput_get_led_field(hid);
+	if (!field) {
+		hid_warn(hid, "LED event field not found\n");
+		return;
+	}
+
+	spin_lock_irqsave(&usbhid->lock, flags);
+	if (!test_bit(HID_DISCONNECTED, &usbhid->iofl)) {
+		usbhid->ledcount = hidinput_count_leds(hid);
+		hid_dbg(usbhid->hid, "New ledcount = %u\n", usbhid->ledcount);
+		__usbhid_submit_report(hid, field->report, USB_DIR_OUT);
+	}
+	spin_unlock_irqrestore(&usbhid->lock, flags);
+}
+
 static int usb_hidinput_input_event(struct input_dev *dev, unsigned int type, unsigned int code, int value)
 {
 	struct hid_device *hid = input_get_drvdata(dev);
@@ -590,21 +641,19 @@ static int usb_hidinput_input_event(struct input_dev *dev, unsigned int type, un
 		return -1;
 
 	if ((offset = hidinput_find_field(hid, type, code, &field)) == -1) {
-		dev_warn(&dev->dev, "event field not found\n");
+		hid_warn(dev, "event field not found\n");
 		return -1;
 	}
 
+	spin_lock_irqsave(&usbhid->lock, flags);
 	hid_set_field(field, offset, value);
-	if (value) {
-		spin_lock_irqsave(&usbhid->lock, flags);
-		usbhid->ledcount++;
-		spin_unlock_irqrestore(&usbhid->lock, flags);
-	} else {
-		spin_lock_irqsave(&usbhid->lock, flags);
-		usbhid->ledcount--;
-		spin_unlock_irqrestore(&usbhid->lock, flags);
-	}
-	usbhid_submit_report(hid, field->report, USB_DIR_OUT);
+	spin_unlock_irqrestore(&usbhid->lock, flags);
+
+	/*
+	 * Defer performing requested LED action.
+	 * This is more likely gather all LED changes into a single URB.
+	 */
+	schedule_work(&usbhid->led_work);
 
 	return 0;
 }
@@ -656,7 +705,7 @@ int usbhid_open(struct hid_device *hid)
 	mutex_lock(&hid_open_mut);
 	if (!hid->open++) {
 		res = usb_autopm_get_interface(usbhid->intf);
-		/* the device must be awake to reliable request remote wakeup */
+		/* the device must be awake to reliably request remote wakeup */
 		if (res < 0) {
 			hid->open--;
 			mutex_unlock(&hid_open_mut);
@@ -722,7 +771,7 @@ void usbhid_init_reports(struct hid_device *hid)
 	}
 
 	if (err)
-		dev_warn(&hid->dev, "timeout initializing reports\n");
+		hid_warn(hid, "timeout initializing reports\n");
 }
 
 /*
@@ -798,6 +847,40 @@ static int hid_alloc_buffers(struct usb_device *dev, struct hid_device *hid)
 	return 0;
 }
 
+static int usbhid_get_raw_report(struct hid_device *hid,
+		unsigned char report_number, __u8 *buf, size_t count,
+		unsigned char report_type)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	struct usb_device *dev = hid_to_usb_dev(hid);
+	struct usb_interface *intf = usbhid->intf;
+	struct usb_host_interface *interface = intf->cur_altsetting;
+	int skipped_report_id = 0;
+	int ret;
+
+	/* Byte 0 is the report number. Report data starts at byte 1.*/
+	buf[0] = report_number;
+	if (report_number == 0x0) {
+		/* Offset the return buffer by 1, so that the report ID
+		   will remain in byte 0. */
+		buf++;
+		count--;
+		skipped_report_id = 1;
+	}
+	ret = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
+		HID_REQ_GET_REPORT,
+		USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+		((report_type + 1) << 8) | report_number,
+		interface->desc.bInterfaceNumber, buf, count,
+		USB_CTRL_SET_TIMEOUT);
+
+	/* count also the report id */
+	if (ret > 0 && skipped_report_id)
+		ret++;
+
+	return ret;
+}
+
 static int usbhid_output_raw_report(struct hid_device *hid, __u8 *buf, size_t count,
 		unsigned char report_type)
 {
@@ -807,9 +890,10 @@ static int usbhid_output_raw_report(struct hid_device *hid, __u8 *buf, size_t co
 	struct usb_host_interface *interface = intf->cur_altsetting;
 	int ret;
 
-	if (usbhid->urbout) {
+	if (usbhid->urbout && report_type != HID_FEATURE_REPORT) {
 		int actual_length;
 		int skipped_report_id = 0;
+
 		if (buf[0] == 0x0) {
 			/* Don't send the Report ID */
 			buf++;
@@ -854,18 +938,6 @@ static void usbhid_restart_queues(struct usbhid_device *usbhid)
 	if (usbhid->urbout)
 		usbhid_restart_out_queue(usbhid);
 	usbhid_restart_ctrl_queue(usbhid);
-}
-
-static void __usbhid_restart_queues(struct work_struct *work)
-{
-	struct usbhid_device *usbhid =
-		container_of(work, struct usbhid_device, restart_work);
-	int r;
-
-	r = usb_autopm_get_interface(usbhid->intf);
-	if (r < 0)
-		return;
-	usb_autopm_put_interface(usbhid->intf);
 }
 
 static void hid_free_buffers(struct usb_device *dev, struct hid_device *hid)
@@ -1076,7 +1148,7 @@ static void usbhid_stop(struct hid_device *hid)
 		return;
 
 	clear_bit(HID_STARTED, &usbhid->iofl);
-	spin_lock_irq(&usbhid->lock);	/* Sync with error handler */
+	spin_lock_irq(&usbhid->lock);	/* Sync with error and led handlers */
 	set_bit(HID_DISCONNECTED, &usbhid->iofl);
 	spin_unlock_irq(&usbhid->lock);
 	usb_kill_urb(usbhid->urbin);
@@ -1139,8 +1211,7 @@ static int usbhid_probe(struct usb_interface *intf, const struct usb_device_id *
 		if (usb_endpoint_is_int_in(&interface->endpoint[n].desc))
 			has_in++;
 	if (!has_in) {
-		dev_err(&intf->dev, "couldn't find an input interrupt "
-				"endpoint\n");
+		hid_err(intf, "couldn't find an input interrupt endpoint\n");
 		return -ENODEV;
 	}
 
@@ -1150,6 +1221,7 @@ static int usbhid_probe(struct usb_interface *intf, const struct usb_device_id *
 
 	usb_set_intfdata(intf, hid);
 	hid->ll_driver = &usb_hid_driver;
+	hid->hid_get_raw_report = usbhid_get_raw_report;
 	hid->hid_output_raw_report = usbhid_output_raw_report;
 	hid->ff_init = hid_pidff_init;
 #ifdef CONFIG_USB_HIDDEV
@@ -1167,6 +1239,8 @@ static int usbhid_probe(struct usb_interface *intf, const struct usb_device_id *
 	if (intf->cur_altsetting->desc.bInterfaceProtocol ==
 			USB_INTERFACE_PROTOCOL_MOUSE)
 		hid->type = HID_TYPE_USBMOUSE;
+	else if (intf->cur_altsetting->desc.bInterfaceProtocol == 0)
+		hid->type = HID_TYPE_USBNONE;
 
 	if (dev->manufacturer)
 		strlcpy(hid->name, dev->manufacturer, sizeof(hid->name));
@@ -1205,14 +1279,15 @@ static int usbhid_probe(struct usb_interface *intf, const struct usb_device_id *
 
 	init_waitqueue_head(&usbhid->wait);
 	INIT_WORK(&usbhid->reset_work, hid_reset);
-	INIT_WORK(&usbhid->restart_work, __usbhid_restart_queues);
 	setup_timer(&usbhid->io_retry, hid_retry_timeout, (unsigned long) hid);
 	spin_lock_init(&usbhid->lock);
+
+	INIT_WORK(&usbhid->led_work, hid_led);
 
 	ret = hid_add_device(hid);
 	if (ret) {
 		if (ret != -ENODEV)
-			dev_err(&intf->dev, "can't add hid device: %d\n", ret);
+			hid_err(intf, "can't add hid device: %d\n", ret);
 		goto err_free;
 	}
 
@@ -1240,13 +1315,13 @@ static void usbhid_disconnect(struct usb_interface *intf)
 static void hid_cancel_delayed_stuff(struct usbhid_device *usbhid)
 {
 	del_timer_sync(&usbhid->io_retry);
-	cancel_work_sync(&usbhid->restart_work);
 	cancel_work_sync(&usbhid->reset_work);
+	cancel_work_sync(&usbhid->led_work);
 }
 
 static void hid_cease_io(struct usbhid_device *usbhid)
 {
-	del_timer(&usbhid->io_retry);
+	del_timer_sync(&usbhid->io_retry);
 	usb_kill_urb(usbhid->urbin);
 	usb_kill_urb(usbhid->urbctrl);
 	usb_kill_urb(usbhid->urbout);
@@ -1261,7 +1336,6 @@ static int hid_pre_reset(struct usb_interface *intf)
 	spin_lock_irq(&usbhid->lock);
 	set_bit(HID_RESET_PENDING, &usbhid->iofl);
 	spin_unlock_irq(&usbhid->lock);
-	cancel_work_sync(&usbhid->restart_work);
 	hid_cease_io(usbhid);
 
 	return 0;
@@ -1309,7 +1383,7 @@ static int hid_suspend(struct usb_interface *intf, pm_message_t message)
 	struct usbhid_device *usbhid = hid->driver_data;
 	int status;
 
-	if (message.event & PM_EVENT_AUTO) {
+	if (PMSG_IS_AUTO(message)) {
 		spin_lock_irq(&usbhid->lock);	/* Sync with error handler */
 		if (!test_bit(HID_RESET_PENDING, &usbhid->iofl)
 		    && !test_bit(HID_CLEAR_HALT, &usbhid->iofl)
@@ -1344,21 +1418,10 @@ static int hid_suspend(struct usb_interface *intf, pm_message_t message)
 			return -EIO;
 	}
 
-	if (!ignoreled && (message.event & PM_EVENT_AUTO)) {
-		spin_lock_irq(&usbhid->lock);
-		if (test_bit(HID_LED_ON, &usbhid->iofl)) {
-			spin_unlock_irq(&usbhid->lock);
-			usbhid_mark_busy(usbhid);
-			return -EBUSY;
-		}
-		spin_unlock_irq(&usbhid->lock);
-	}
-
 	hid_cancel_delayed_stuff(usbhid);
 	hid_cease_io(usbhid);
 
-	if ((message.event & PM_EVENT_AUTO) &&
-			test_bit(HID_KEYS_PRESSED, &usbhid->iofl)) {
+	if (PMSG_IS_AUTO(message) && test_bit(HID_KEYS_PRESSED, &usbhid->iofl)) {
 		/* lost race against keypresses */
 		status = hid_start_in(hid);
 		if (status < 0)
@@ -1460,18 +1523,12 @@ static int __init hid_init(void)
 {
 	int retval = -ENOMEM;
 
-	resumption_waker = create_freezeable_workqueue("usbhid_resumer");
-	if (!resumption_waker)
-		goto no_queue;
 	retval = hid_register_driver(&hid_usb_driver);
 	if (retval)
 		goto hid_register_fail;
 	retval = usbhid_quirks_init(quirks_param);
 	if (retval)
 		goto usbhid_quirks_init_fail;
-	retval = hiddev_init();
-	if (retval)
-		goto hiddev_init_fail;
 	retval = usb_register(&hid_driver);
 	if (retval)
 		goto usb_register_fail;
@@ -1479,24 +1536,18 @@ static int __init hid_init(void)
 
 	return 0;
 usb_register_fail:
-	hiddev_exit();
-hiddev_init_fail:
 	usbhid_quirks_exit();
 usbhid_quirks_init_fail:
 	hid_unregister_driver(&hid_usb_driver);
 hid_register_fail:
-	destroy_workqueue(resumption_waker);
-no_queue:
 	return retval;
 }
 
 static void __exit hid_exit(void)
 {
 	usb_deregister(&hid_driver);
-	hiddev_exit();
 	usbhid_quirks_exit();
 	hid_unregister_driver(&hid_usb_driver);
-	destroy_workqueue(resumption_waker);
 }
 
 module_init(hid_init);

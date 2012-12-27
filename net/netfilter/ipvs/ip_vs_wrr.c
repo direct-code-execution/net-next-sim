@@ -85,10 +85,9 @@ static int ip_vs_wrr_init_svc(struct ip_vs_service *svc)
 	 *    Allocate the mark variable for WRR scheduling
 	 */
 	mark = kmalloc(sizeof(struct ip_vs_wrr_mark), GFP_ATOMIC);
-	if (mark == NULL) {
-		pr_err("%s(): no memory\n", __func__);
+	if (mark == NULL)
 		return -ENOMEM;
-	}
+
 	mark->cl = &svc->destinations;
 	mark->cw = 0;
 	mark->mw = ip_vs_wrr_max_weight(svc);
@@ -147,8 +146,9 @@ ip_vs_wrr_schedule(struct ip_vs_service *svc, const struct sk_buff *skb)
 
 			if (mark->cl == mark->cl->next) {
 				/* no dest entry */
-				IP_VS_ERR_RL("WRR: no destination available: "
-					     "no destinations present\n");
+				ip_vs_scheduler_err(svc,
+					"no destination available: "
+					"no destinations present");
 				dest = NULL;
 				goto out;
 			}
@@ -162,8 +162,8 @@ ip_vs_wrr_schedule(struct ip_vs_service *svc, const struct sk_buff *skb)
 				 */
 				if (mark->cw == 0) {
 					mark->cl = &svc->destinations;
-					IP_VS_ERR_RL("WRR: no destination "
-						     "available\n");
+					ip_vs_scheduler_err(svc,
+						"no destination available");
 					dest = NULL;
 					goto out;
 				}
@@ -185,8 +185,9 @@ ip_vs_wrr_schedule(struct ip_vs_service *svc, const struct sk_buff *skb)
 			/* back to the start, and no dest is found.
 			   It is only possible when all dests are OVERLOADED */
 			dest = NULL;
-			IP_VS_ERR_RL("WRR: no destination available: "
-				     "all destinations are overloaded\n");
+			ip_vs_scheduler_err(svc,
+				"no destination available: "
+				"all destinations are overloaded");
 			goto out;
 		}
 	}

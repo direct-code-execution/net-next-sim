@@ -14,6 +14,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/err.h>
 #include <linux/slab.h>
@@ -78,6 +79,11 @@ static int tps6586x_ldo_list_voltage(struct regulator_dev *rdev,
 				     unsigned selector)
 {
 	struct tps6586x_regulator *info = rdev_get_drvdata(rdev);
+	int rid = rdev_get_id(rdev);
+
+	/* LDO0 has minimal voltage 1.2V rather than 1.25V */
+	if ((rid == TPS6586X_ID_LDO_0) && (selector == 0))
+		return (info->voltages[0] - 50) * 1000;
 
 	return info->voltages[selector] * 1000;
 }
@@ -85,7 +91,8 @@ static int tps6586x_ldo_list_voltage(struct regulator_dev *rdev,
 
 static int __tps6586x_ldo_set_voltage(struct device *parent,
 				      struct tps6586x_regulator *ri,
-				      int min_uV, int max_uV)
+				      int min_uV, int max_uV,
+				      unsigned *selector)
 {
 	int val, uV;
 	uint8_t mask;
@@ -100,6 +107,8 @@ static int __tps6586x_ldo_set_voltage(struct device *parent,
 		/* use the first in-range value */
 		if (min_uV <= uV && uV <= max_uV) {
 
+			*selector = val;
+
 			val <<= ri->volt_shift;
 			mask = ((1 << ri->volt_nbits) - 1) << ri->volt_shift;
 
@@ -111,12 +120,13 @@ static int __tps6586x_ldo_set_voltage(struct device *parent,
 }
 
 static int tps6586x_ldo_set_voltage(struct regulator_dev *rdev,
-				    int min_uV, int max_uV)
+				    int min_uV, int max_uV, unsigned *selector)
 {
 	struct tps6586x_regulator *ri = rdev_get_drvdata(rdev);
 	struct device *parent = to_tps6586x_dev(rdev);
 
-	return __tps6586x_ldo_set_voltage(parent, ri, min_uV, max_uV);
+	return __tps6586x_ldo_set_voltage(parent, ri, min_uV, max_uV,
+					  selector);
 }
 
 static int tps6586x_ldo_get_voltage(struct regulator_dev *rdev)
@@ -140,13 +150,14 @@ static int tps6586x_ldo_get_voltage(struct regulator_dev *rdev)
 }
 
 static int tps6586x_dvm_set_voltage(struct regulator_dev *rdev,
-				    int min_uV, int max_uV)
+				    int min_uV, int max_uV, unsigned *selector)
 {
 	struct tps6586x_regulator *ri = rdev_get_drvdata(rdev);
 	struct device *parent = to_tps6586x_dev(rdev);
 	int ret;
 
-	ret = __tps6586x_ldo_set_voltage(parent, ri, min_uV, max_uV);
+	ret = __tps6586x_ldo_set_voltage(parent, ri, min_uV, max_uV,
+					 selector);
 	if (ret)
 		return ret;
 
@@ -231,8 +242,7 @@ static int tps6586x_dvm_voltages[] = {
 };
 
 #define TPS6586X_REGULATOR(_id, vdata, _ops, vreg, shift, nbits,	\
-			   ereg0, ebit0, ereg1, ebit1, goreg, gobit)	\
-{									\
+			   ereg0, ebit0, ereg1, ebit1)			\
 	.desc	= {							\
 		.name	= "REG-" #_id,					\
 		.ops	= &tps6586x_regulator_##_ops,			\
@@ -248,18 +258,26 @@ static int tps6586x_dvm_voltages[] = {
 	.enable_bit[0]	= (ebit0),					\
 	.enable_reg[1]	= TPS6586X_SUPPLY##ereg1,			\
 	.enable_bit[1]	= (ebit1),					\
-	.voltages	= tps6586x_##vdata##_voltages,			\
-}
+	.voltages	= tps6586x_##vdata##_voltages,
+
+#define TPS6586X_REGULATOR_DVM_GOREG(goreg, gobit)			\
+	.go_reg = TPS6586X_##goreg,					\
+	.go_bit = (gobit),
 
 #define TPS6586X_LDO(_id, vdata, vreg, shift, nbits,			\
 		     ereg0, ebit0, ereg1, ebit1)			\
+{									\
 	TPS6586X_REGULATOR(_id, vdata, ldo_ops, vreg, shift, nbits,	\
-			   ereg0, ebit0, ereg1, ebit1, 0, 0)
+			   ereg0, ebit0, ereg1, ebit1)			\
+}
 
 #define TPS6586X_DVM(_id, vdata, vreg, shift, nbits,			\
 		     ereg0, ebit0, ereg1, ebit1, goreg, gobit)		\
+{									\
 	TPS6586X_REGULATOR(_id, vdata, dvm_ops, vreg, shift, nbits,	\
-			   ereg0, ebit0, ereg1, ebit1, goreg, gobit)
+			   ereg0, ebit0, ereg1, ebit1)			\
+	TPS6586X_REGULATOR_DVM_GOREG(goreg, gobit)			\
+}
 
 static struct tps6586x_regulator tps6586x_regulator[] = {
 	TPS6586X_LDO(LDO_0, ldo, SUPPLYV1, 5, 3, ENC, 0, END, 0),
@@ -267,11 +285,11 @@ static struct tps6586x_regulator tps6586x_regulator[] = {
 	TPS6586X_LDO(LDO_5, ldo, SUPPLYV6, 0, 3, ENE, 6, ENE, 6),
 	TPS6586X_LDO(LDO_6, ldo, SUPPLYV3, 0, 3, ENC, 4, END, 4),
 	TPS6586X_LDO(LDO_7, ldo, SUPPLYV3, 3, 3, ENC, 5, END, 5),
-	TPS6586X_LDO(LDO_8, ldo, SUPPLYV1, 5, 3, ENC, 6, END, 6),
+	TPS6586X_LDO(LDO_8, ldo, SUPPLYV2, 5, 3, ENC, 6, END, 6),
 	TPS6586X_LDO(LDO_9, ldo, SUPPLYV6, 3, 3, ENE, 7, ENE, 7),
-	TPS6586X_LDO(LDO_RTC, ldo, SUPPLYV4, 3, 3, ENE, 7, ENE, 7),
+	TPS6586X_LDO(LDO_RTC, ldo, SUPPLYV4, 3, 3, V4, 7, V4, 7),
 	TPS6586X_LDO(LDO_1, dvm, SUPPLYV1, 0, 5, ENC, 1, END, 1),
-	TPS6586X_LDO(SM_2, sm2, SUPPLYV2, 0, 5, ENC, 1, END, 1),
+	TPS6586X_LDO(SM_2, sm2, SUPPLYV2, 0, 5, ENC, 7, END, 7),
 
 	TPS6586X_DVM(LDO_2, dvm, LDO2BV1, 0, 5, ENA, 3, ENB, 3, VCC2, 6),
 	TPS6586X_DVM(LDO_4, ldo4, LDO4V1, 0, 5, ENC, 3, END, 3, VCC1, 6),
@@ -290,6 +308,10 @@ static inline int tps6586x_regulator_preinit(struct device *parent,
 	uint8_t val1, val2;
 	int ret;
 
+	if (ri->enable_reg[0] == ri->enable_reg[1] &&
+	    ri->enable_bit[0] == ri->enable_bit[1])
+			return 0;
+
 	ret = tps6586x_read(parent, ri->enable_reg[0], &val1);
 	if (ret)
 		return ret;
@@ -298,14 +320,14 @@ static inline int tps6586x_regulator_preinit(struct device *parent,
 	if (ret)
 		return ret;
 
-	if (!(val2 & ri->enable_bit[1]))
+	if (!(val2 & (1 << ri->enable_bit[1])))
 		return 0;
 
 	/*
 	 * The regulator is on, but it's enabled with the bit we don't
 	 * want to use, so we switch the enable bits
 	 */
-	if (!(val1 & ri->enable_bit[0])) {
+	if (!(val1 & (1 << ri->enable_bit[0]))) {
 		ret = tps6586x_set_bits(parent, ri->enable_reg[0],
 					1 << ri->enable_bit[0]);
 		if (ret)
@@ -314,6 +336,36 @@ static inline int tps6586x_regulator_preinit(struct device *parent,
 
 	return tps6586x_clr_bits(parent, ri->enable_reg[1],
 				 1 << ri->enable_bit[1]);
+}
+
+static int tps6586x_regulator_set_slew_rate(struct platform_device *pdev)
+{
+	struct device *parent = pdev->dev.parent;
+	struct regulator_init_data *p = pdev->dev.platform_data;
+	struct tps6586x_settings *setting = p->driver_data;
+	uint8_t reg;
+
+	if (setting == NULL)
+		return 0;
+
+	if (!(setting->slew_rate & TPS6586X_SLEW_RATE_SET))
+		return 0;
+
+	/* only SM0 and SM1 can have the slew rate settings */
+	switch (pdev->id) {
+	case TPS6586X_ID_SM_0:
+		reg = TPS6586X_SM0SL;
+		break;
+	case TPS6586X_ID_SM_1:
+		reg = TPS6586X_SM1SL;
+		break;
+	default:
+		dev_warn(&pdev->dev, "Only SM0/SM1 can set slew rate\n");
+		return -EINVAL;
+	}
+
+	return tps6586x_write(parent, reg,
+			setting->slew_rate & TPS6586X_SLEW_RATE_MASK);
 }
 
 static inline struct tps6586x_regulator *find_regulator_info(int id)
@@ -336,7 +388,7 @@ static int __devinit tps6586x_regulator_probe(struct platform_device *pdev)
 	int id = pdev->id;
 	int err;
 
-	dev_dbg(&pdev->dev, "Probing reulator %d\n", id);
+	dev_dbg(&pdev->dev, "Probing regulator %d\n", id);
 
 	ri = find_regulator_info(id);
 	if (ri == NULL) {
@@ -349,7 +401,7 @@ static int __devinit tps6586x_regulator_probe(struct platform_device *pdev)
 		return err;
 
 	rdev = regulator_register(&ri->desc, &pdev->dev,
-				  pdev->dev.platform_data, ri);
+				  pdev->dev.platform_data, ri, NULL);
 	if (IS_ERR(rdev)) {
 		dev_err(&pdev->dev, "failed to register regulator %s\n",
 				ri->desc.name);
@@ -358,7 +410,7 @@ static int __devinit tps6586x_regulator_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, rdev);
 
-	return 0;
+	return tps6586x_regulator_set_slew_rate(pdev);
 }
 
 static int __devexit tps6586x_regulator_remove(struct platform_device *pdev)

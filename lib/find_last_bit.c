@@ -11,9 +11,11 @@
  */
 
 #include <linux/bitops.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <asm/types.h>
 #include <asm/byteorder.h>
+
+#ifndef find_last_bit
 
 unsigned long find_last_bit(const unsigned long *addr, unsigned long size)
 {
@@ -43,3 +45,5 @@ found:
 	return size;
 }
 EXPORT_SYMBOL(find_last_bit);
+
+#endif

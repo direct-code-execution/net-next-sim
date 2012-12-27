@@ -28,6 +28,7 @@
 #include <linux/slab.h>
 #include <linux/gpio.h>
 #include <linux/leds.h>
+#include <linux/module.h>
 #include <mach/leds-ns2.h>
 
 /*
@@ -141,10 +142,12 @@ static ssize_t ns2_led_sata_store(struct device *dev,
 				  struct device_attribute *attr,
 				  const char *buff, size_t count)
 {
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	struct ns2_led_data *led_dat =
+		container_of(led_cdev, struct ns2_led_data, cdev);
 	int ret;
 	unsigned long enable;
 	enum ns2_led_modes mode;
-	struct ns2_led_data *led_dat = dev_get_drvdata(dev);
 
 	ret = strict_strtoul(buff, 10, &enable);
 	if (ret < 0)
@@ -172,7 +175,9 @@ static ssize_t ns2_led_sata_store(struct device *dev,
 static ssize_t ns2_led_sata_show(struct device *dev,
 				 struct device_attribute *attr, char *buf)
 {
-	struct ns2_led_data *led_dat = dev_get_drvdata(dev);
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	struct ns2_led_data *led_dat =
+		container_of(led_cdev, struct ns2_led_data, cdev);
 
 	return sprintf(buf, "%d\n", led_dat->sata);
 }
@@ -234,7 +239,6 @@ create_ns2_led(struct platform_device *pdev, struct ns2_led_data *led_dat,
 	if (ret < 0)
 		goto err_free_slow;
 
-	dev_set_drvdata(led_dat->cdev.dev, led_dat);
 	ret = device_create_file(led_dat->cdev.dev, &dev_attr_sata);
 	if (ret < 0)
 		goto err_free_cdev;
@@ -251,7 +255,7 @@ err_free_cmd:
 	return ret;
 }
 
-static void __devexit delete_ns2_led(struct ns2_led_data *led_dat)
+static void delete_ns2_led(struct ns2_led_data *led_dat)
 {
 	device_remove_file(led_dat->cdev.dev, &dev_attr_sata);
 	led_classdev_unregister(&led_dat->cdev);
@@ -319,21 +323,10 @@ static struct platform_driver ns2_led_driver = {
 		.owner	= THIS_MODULE,
 	},
 };
-MODULE_ALIAS("platform:leds-ns2");
 
-static int __init ns2_led_init(void)
-{
-	return platform_driver_register(&ns2_led_driver);
-}
-
-static void __exit ns2_led_exit(void)
-{
-	platform_driver_unregister(&ns2_led_driver);
-}
-
-module_init(ns2_led_init);
-module_exit(ns2_led_exit);
+module_platform_driver(ns2_led_driver);
 
 MODULE_AUTHOR("Simon Guinot <sguinot@lacie.com>");
 MODULE_DESCRIPTION("Network Space v2 LED driver");
 MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:leds-ns2");

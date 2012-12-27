@@ -6,6 +6,34 @@ be removed from this file.
 
 ---------------------------
 
+What:	CONFIG_APM_CPU_IDLE, and its ability to call APM BIOS in idle
+When:	2012
+Why:	This optional sub-feature of APM is of dubious reliability,
+	and ancient APM laptops are likely better served by calling HLT.
+	Deleting CONFIG_APM_CPU_IDLE allows x86 to stop exporting
+	the pm_idle function pointer to modules.
+Who:	Len Brown <len.brown@intel.com>
+
+----------------------------
+
+What:	x86_32 "no-hlt" cmdline param
+When:	2012
+Why:	remove a branch from idle path, simplify code used by everybody.
+	This option disabled the use of HLT in idle and machine_halt()
+	for hardware that was flakey 15-years ago.  Today we have
+	"idle=poll" that removed HLT from idle, and so if such a machine
+	is still running the upstream kernel, "idle=poll" is likely sufficient.
+Who:	Len Brown <len.brown@intel.com>
+
+----------------------------
+
+What:	x86 "idle=mwait" cmdline param
+When:	2012
+Why:	simplify x86 idle code
+Who:	Len Brown <len.brown@intel.com>
+
+----------------------------
+
 What:	PRISM54
 When:	2.6.34
 
@@ -49,17 +77,6 @@ Who:	Robin Getz <rgetz@blackfin.uclinux.org> & Matt Mackall <mpm@selenic.com>
 
 ---------------------------
 
-What:	Deprecated snapshot ioctls
-When:	2.6.36
-
-Why:	The ioctls in kernel/power/user.c were marked as deprecated long time
-	ago. Now they notify users about that so that they need to replace
-	their userspace. After some more time, remove them completely.
-
-Who:	Jiri Slaby <jirislaby@gmail.com>
-
----------------------------
-
 What:	The ieee80211_regdom module parameter
 When:	March 2010 / desktop catchup
 
@@ -97,60 +114,6 @@ Who:	Pavel Machek <pavel@ucw.cz>
 
 ---------------------------
 
-What:	Video4Linux API 1 ioctls and from Video devices.
-When:	July 2009
-Files:	include/linux/videodev.h
-Check:	include/linux/videodev.h
-Why:	V4L1 AP1 was replaced by V4L2 API during migration from 2.4 to 2.6
-	series. The old API have lots of drawbacks and don't provide enough
-	means to work with all video and audio standards. The newer API is
-	already available on the main drivers and should be used instead.
-	Newer drivers should use v4l_compat_translate_ioctl function to handle
-	old calls, replacing to newer ones.
-	Decoder iocts are using internally to allow video drivers to
-	communicate with video decoders. This should also be improved to allow
-	V4L2 calls being translated into compatible internal ioctls.
-	Compatibility ioctls will be provided, for a while, via 
-	v4l1-compat module. 
-Who:	Mauro Carvalho Chehab <mchehab@infradead.org>
-
----------------------------
-
-What:	sys_sysctl
-When:	September 2010
-Option: CONFIG_SYSCTL_SYSCALL
-Why:	The same information is available in a more convenient from
-	/proc/sys, and none of the sysctl variables appear to be
-	important performance wise.
-
-	Binary sysctls are a long standing source of subtle kernel
-	bugs and security issues.
-
-	When I looked several months ago all I could find after
-	searching several distributions were 5 user space programs and
-	glibc (which falls back to /proc/sys) using this syscall.
-
-	The man page for sysctl(2) documents it as unusable for user
-	space programs.
-
-	sysctl(2) is not generally ABI compatible to a 32bit user
-	space application on a 64bit and a 32bit kernel.
-
-	For the last several months the policy has been no new binary
-	sysctls and no one has put forward an argument to use them.
-
-	Binary sysctls issues seem to keep happening appearing so
-	properly deprecating them (with a warning to user space) and a
-	2 year grace warning period will mean eventually we can kill
-	them and end the pain.
-
-	In the mean time individual binary sysctls can be dealt with
-	in a piecewise fashion.
-
-Who:	Eric Biederman <ebiederm@xmission.com>
-
----------------------------
-
 What:	/proc/<pid>/oom_adj
 When:	August 2012
 Why:	/proc/<pid>/oom_adj allows userspace to influence the oom killer's
@@ -167,7 +130,7 @@ Why:	/proc/<pid>/oom_adj allows userspace to influence the oom killer's
 
 	A much more powerful interface, /proc/<pid>/oom_score_adj, was
 	introduced with the oom killer rewrite that allows users to increase or
-	decrease the badness() score linearly.  This interface will replace
+	decrease the badness score linearly.  This interface will replace
 	/proc/<pid>/oom_adj.
 
 	A warning will be emitted to the kernel log if an application uses this
@@ -217,11 +180,14 @@ Who:	Zhang Rui <rui.zhang@intel.com>
 
 ---------------------------
 
-What:	/proc/acpi/button
-When:	August 2007
-Why:	/proc/acpi/button has been replaced by events to the input layer
-	since 2.6.20.
-Who:	Len Brown <len.brown@intel.com>
+What:	CONFIG_ACPI_PROCFS_POWER
+When:	2.6.39
+Why:	sysfs I/F for ACPI power devices, including AC and Battery,
+        has been working in upstream kernel since 2.6.24, Sep 2007.
+	In 2.6.37, we make the sysfs I/F always built in and this option
+	disabled by default.
+	Remove this option and the ACPI power procfs interface in 2.6.39.
+Who:	Zhang Rui <rui.zhang@intel.com>
 
 ---------------------------
 
@@ -260,17 +226,7 @@ When:	The schedule was July 2008, but it was decided that we are going to keep t
 Why:	The support code for the old firmware hurts code readability/maintainability
 	and slightly hurts runtime performance. Bugfixes for the old firmware
 	are not provided by Broadcom anymore.
-Who:	Michael Buesch <mb@bu3sch.de>
-
----------------------------
-
-What:	/sys/o2cb symlink
-When:	January 2010
-Why:	/sys/fs/o2cb is the proper location for this information - /sys/o2cb
-	exists as a symlink for backwards compatibility for old versions of
-	ocfs2-tools. 2 years should be sufficient time to phase in new versions
-	which know to look in /sys/fs/o2cb.
-Who:	ocfs2-devel@oss.oracle.com
+Who:	Michael Buesch <m@bues.ch>
 
 ---------------------------
 
@@ -286,19 +242,9 @@ Who:	Ravikiran Thirumalai <kiran@scalex86.org>
 
 ---------------------------
 
-What:	CONFIG_THERMAL_HWMON
-When:	January 2009
-Why:	This option was introduced just to allow older lm-sensors userspace
-	to keep working over the upgrade to 2.6.26. At the scheduled time of
-	removal fixed lm-sensors (2.x or 3.x) should be readily available.
-Who:	Rene Herman <rene.herman@gmail.com>
-
----------------------------
-
 What:	Code that is now under CONFIG_WIRELESS_EXT_SYSFS
 	(in net/core/net-sysfs.c)
-When:	After the only user (hal) has seen a release with the patches
-	for enough time, probably some time in 2010.
+When:	3.5
 Why:	Over 1K .text/.data size reduction, data is available in other
 	ways (ioctls)
 Who:	Johannes Berg <johannes@sipsolutions.net>
@@ -312,14 +258,6 @@ Why:	See commits 129f8ae9b1b5be94517da76009ea956e89104ce8 and
 	Removal is subject to fixing any remaining bugs in ACPI which may
 	cause the thermal throttling not to happen at the right time.
 Who:	Dave Jones <davej@redhat.com>, Matthew Garrett <mjg@redhat.com>
-
------------------------------
-
-What:	__do_IRQ all in one fits nothing interrupt handler
-When:	2.6.32
-Why:	__do_IRQ was kept for easy migration to the type flow handlers.
-	More than two years of migration time is enough.
-Who:	Thomas Gleixner <tglx@linutronix.de>
 
 -----------------------------
 
@@ -386,54 +324,6 @@ Who:	Tejun Heo <tj@kernel.org>
 
 ----------------------------
 
-What:	Support for VMware's guest paravirtuliazation technique [VMI] will be
-	dropped.
-When:	2.6.37 or earlier.
-Why:	With the recent innovations in CPU hardware acceleration technologies
-	from Intel and AMD, VMware ran a few experiments to compare these
-	techniques to guest paravirtualization technique on VMware's platform.
-	These hardware assisted virtualization techniques have outperformed the
-	performance benefits provided by VMI in most of the workloads. VMware
-	expects that these hardware features will be ubiquitous in a couple of
-	years, as a result, VMware has started a phased retirement of this
-	feature from the hypervisor. We will be removing this feature from the
-	Kernel too. Right now we are targeting 2.6.37 but can retire earlier if
-	technical reasons (read opportunity to remove major chunk of pvops)
-	arise.
-
-	Please note that VMI has always been an optimization and non-VMI kernels
-	still work fine on VMware's platform.
-	Latest versions of VMware's product which support VMI are,
-	Workstation 7.0 and VSphere 4.0 on ESX side, future maintainence
-	releases for these products will continue supporting VMI.
-
-	For more details about VMI retirement take a look at this,
-	http://blogs.vmware.com/guestosguide/2009/09/vmi-retirement.html
-
-Who:	Alok N Kataria <akataria@vmware.com>
-
-----------------------------
-
-What:	Support for lcd_switch and display_get in asus-laptop driver
-When:	March 2010
-Why:	These two features use non-standard interfaces. There are the
-	only features that really need multiple path to guess what's
-	the right method name on a specific laptop.
-
-	Removing them will allow to remove a lot of code an significantly
-	clean the drivers.
-
-	This will affect the backlight code which won't be able to know
-	if the backlight is on or off. The platform display file will also be
-	write only (like the one in eeepc-laptop).
-
-	This should'nt affect a lot of user because they usually know
-	when their display is on or off.
-
-Who:	Corentin Chary <corentin.chary@gmail.com>
-
-----------------------------
-
 What:	sysfs-class-rfkill state file
 When:	Feb 2014
 Files:	net/rfkill/core.c
@@ -452,27 +342,8 @@ Who: 	anybody or Florian Mickler <florian@mickler.org>
 
 ----------------------------
 
-What:	capifs
-When:	February 2011
-Files:	drivers/isdn/capi/capifs.*
-Why:	udev fully replaces this special file system that only contains CAPI
-	NCCI TTY device nodes. User space (pppdcapiplugin) works without
-	noticing the difference.
-Who:	Jan Kiszka <jan.kiszka@web.de>
-
-----------------------------
-
-What:	KVM paravirt mmu host support
-When:	January 2011
-Why:	The paravirt mmu host support is slower than non-paravirt mmu, both
-	on newer and older hardware.  It is already not exposed to the guest,
-	and kept only for live migration purposes.
-Who:	Avi Kivity <avi@redhat.com>
-
-----------------------------
-
 What:	iwlwifi 50XX module parameters
-When:	2.6.40
+When:	3.0
 Why:	The "..50" modules parameters were used to configure 5000 series and
 	up devices; different set of module parameters also available for 4965
 	with same functionalities. Consolidate both set into single place
@@ -483,7 +354,7 @@ Who:	Wey-Yi Guy <wey-yi.w.guy@intel.com>
 ----------------------------
 
 What:	iwl4965 alias support
-When:	2.6.40
+When:	3.0
 Why:	Internal alias support has been present in module-init-tools for some
 	time, the MODULE_ALIAS("iwl4965") boilerplate aliases can be removed
 	with no impact.
@@ -498,53 +369,12 @@ When:	April 2011
 Why:	Superseded by xt_CT
 Who:	Netfilter developer team <netfilter-devel@vger.kernel.org>
 
----------------------------
-
-What:	video4linux /dev/vtx teletext API support
-When:	2.6.35
-Files:	drivers/media/video/saa5246a.c drivers/media/video/saa5249.c
-	include/linux/videotext.h
-Why:	The vtx device nodes have been superseded by vbi device nodes
-	for many years. No applications exist that use the vtx support.
-	Of the two i2c drivers that actually support this API the saa5249
-	has been impossible to use for a year now and no known hardware
-	that supports this device exists. The saa5246a is theoretically
-	supported by the old mxb boards, but it never actually worked.
-
-	In summary: there is no hardware that can use this API and there
-	are no applications actually implementing this API.
-
-	The vtx support still reserves minors 192-223 and we would really
-	like to reuse those for upcoming new functionality. In the unlikely
-	event that new hardware appears that wants to use the functionality
-	provided by the vtx API, then that functionality should be build
-	around the sliced VBI API instead.
-Who:	Hans Verkuil <hverkuil@xs4all.nl>
-
 ----------------------------
 
 What:	IRQF_DISABLED
 When:	2.6.36
 Why:	The flag is a NOOP as we run interrupt handlers with interrupts disabled
 Who:	Thomas Gleixner <tglx@linutronix.de>
-
-----------------------------
-
-What:	old ieee1394 subsystem (CONFIG_IEEE1394)
-When:	2.6.37
-Files:	drivers/ieee1394/ except init_ohci1394_dma.c
-Why:	superseded by drivers/firewire/ (CONFIG_FIREWIRE) which offers more
-	features, better performance, and better security, all with smaller
-	and more modern code base
-Who:	Stefan Richter <stefanr@s5r6.in-berlin.de>
-
-----------------------------
-
-What:	The acpi_sleep=s4_nonvs command line option
-When:	2.6.37
-Files:	arch/x86/kernel/acpi/sleep.c
-Why:	superseded by acpi_sleep=nonvs
-Who:	Rafael J. Wysocki <rjw@sisk.pl>
 
 ----------------------------
 
@@ -557,10 +387,165 @@ Who:	FUJITA Tomonori <fujita.tomonori@lab.ntt.co.jp>
 
 ----------------------------
 
-What: 	DMA_xxBIT_MASK macros
-When:	Jun 2011
-Why:	DMA_xxBIT_MASK macros were replaced with DMA_BIT_MASK() macros.
-Who:	FUJITA Tomonori <fujita.tomonori@lab.ntt.co.jp>
+What:	iwlwifi disable_hw_scan module parameters
+When:	3.0
+Why:	Hareware scan is the prefer method for iwlwifi devices for
+	scanning operation. Remove software scan support for all the
+	iwlwifi devices.
+
+Who:	Wey-Yi Guy <wey-yi.w.guy@intel.com>
 
 ----------------------------
 
+What:	Legacy, non-standard chassis intrusion detection interface.
+When:	June 2011
+Why:	The adm9240, w83792d and w83793 hardware monitoring drivers have
+	legacy interfaces for chassis intrusion detection. A standard
+	interface has been added to each driver, so the legacy interface
+	can be removed.
+Who:	Jean Delvare <khali@linux-fr.org>
+
+----------------------------
+
+What:	xt_connlimit rev 0
+When:	2012
+Who:	Jan Engelhardt <jengelh@medozas.de>
+Files:	net/netfilter/xt_connlimit.c
+
+----------------------------
+
+What:	ipt_addrtype match include file
+When:	2012
+Why:	superseded by xt_addrtype
+Who:	Florian Westphal <fw@strlen.de>
+Files:	include/linux/netfilter_ipv4/ipt_addrtype.h
+
+----------------------------
+
+What:	i2c_driver.attach_adapter
+	i2c_driver.detach_adapter
+When:	September 2011
+Why:	These legacy callbacks should no longer be used as i2c-core offers
+	a variety of preferable alternative ways to instantiate I2C devices.
+Who:	Jean Delvare <khali@linux-fr.org>
+
+----------------------------
+
+What:	Opening a radio device node will no longer automatically switch the
+	tuner mode from tv to radio.
+When:	3.3
+Why:	Just opening a V4L device should not change the state of the hardware
+	like that. It's very unexpected and against the V4L spec. Instead, you
+	switch to radio mode by calling VIDIOC_S_FREQUENCY. This is the second
+	and last step of the move to consistent handling of tv and radio tuners.
+Who:	Hans Verkuil <hans.verkuil@cisco.com>
+
+----------------------------
+
+What:	g_file_storage driver
+When:	3.8
+Why:	This driver has been superseded by g_mass_storage.
+Who:	Alan Stern <stern@rowland.harvard.edu>
+
+----------------------------
+
+What:   threeg and interface sysfs files in /sys/devices/platform/acer-wmi
+When:   2012
+Why:    In 3.0, we can now autodetect internal 3G device and already have
+	the threeg rfkill device. So, we plan to remove threeg sysfs support
+	for it's no longer necessary.
+
+	We also plan to remove interface sysfs file that exposed which ACPI-WMI
+	interface that was used by acer-wmi driver. It will replaced by
+	information log when acer-wmi initial.
+Who:    Lee, Chun-Yi <jlee@novell.com>
+
+---------------------------
+
+What:	/sys/devices/platform/_UDC_/udc/_UDC_/is_dualspeed file and
+	is_dualspeed line in /sys/devices/platform/ci13xxx_*/udc/device file.
+When:	3.8
+Why:	The is_dualspeed file is superseded by maximum_speed in the same
+	directory and is_dualspeed line in device file is superseded by
+	max_speed line in the same file.
+
+	The maximum_speed/max_speed specifies maximum speed supported by UDC.
+	To check if dualspeeed is supported, check if the value is >= 3.
+	Various possible speeds are defined in <linux/usb/ch9.h>.
+Who:	Michal Nazarewicz <mina86@mina86.com>
+
+----------------------------
+
+What:	The XFS nodelaylog mount option
+When:	3.3
+Why:	The delaylog mode that has been the default since 2.6.39 has proven
+	stable, and the old code is in the way of additional improvements in
+	the log code.
+Who:	Christoph Hellwig <hch@lst.de>
+
+----------------------------
+
+What:	iwlagn alias support
+When:	3.5
+Why:	The iwlagn module has been renamed iwlwifi.  The alias will be around
+	for backward compatibility for several cycles and then dropped.
+Who:	Don Fry <donald.h.fry@intel.com>
+
+----------------------------
+
+What:	pci_scan_bus_parented()
+When:	3.5
+Why:	The pci_scan_bus_parented() interface creates a new root bus.  The
+	bus is created with default resources (ioport_resource and
+	iomem_resource) that are always wrong, so we rely on arch code to
+	correct them later.  Callers of pci_scan_bus_parented() should
+	convert to using pci_scan_root_bus() so they can supply a list of
+	bus resources when the bus is created.
+Who:	Bjorn Helgaas <bhelgaas@google.com>
+
+----------------------------
+
+What:	Low Performance USB Block driver ("CONFIG_BLK_DEV_UB")
+When:	3.6
+Why:	This driver provides support for USB storage devices like "USB
+	sticks". As of now, it is deactivated in Debian, Fedora and
+        Ubuntu. All current users can switch over to usb-storage
+        (CONFIG_USB_STORAGE) which only drawback is the additional SCSI
+        stack.
+Who:	Sebastian Andrzej Siewior <sebastian@breakpoint.cc>
+
+----------------------------
+
+What:	kmap_atomic(page, km_type)
+When:	3.5
+Why:	The old kmap_atomic() with two arguments is deprecated, we only
+	keep it for backward compatibility for few cycles and then drop it.
+Who:	Cong Wang <amwang@redhat.com>
+
+----------------------------
+
+What:	get_robust_list syscall
+When:	2013
+Why:	There appear to be no production users of the get_robust_list syscall,
+	and it runs the risk of leaking address locations, allowing the bypass
+	of ASLR. It was only ever intended for debugging, so it should be
+	removed.
+Who:	Kees Cook <keescook@chromium.org>
+
+----------------------------
+
+What:	setitimer accepts user NULL pointer (value)
+When:	3.6
+Why:	setitimer is not returning -EFAULT if user pointer is NULL. This
+	violates the spec.
+Who:	Sasikantha Babu <sasikanth.v19@gmail.com>
+
+----------------------------
+
+What:	V4L2_CID_HCENTER, V4L2_CID_VCENTER V4L2 controls
+When:	3.7
+Why:	The V4L2_CID_VCENTER, V4L2_CID_HCENTER controls have been deprecated
+	for about 4 years and they are not used by any mainline driver.
+	There are newer controls (V4L2_CID_PAN*, V4L2_CID_TILT*) that provide
+	similar	functionality.
+Who:	Sylwester Nawrocki <sylvester.nawrocki@gmail.com>

@@ -10,6 +10,7 @@
  *    Author(s): Christian Borntraeger <borntraeger@de.ibm.com>
  */
 
+#include <linux/kernel_stat.h>
 #include <linux/init.h>
 #include <linux/bootmem.h>
 #include <linux/err.h>
@@ -19,12 +20,13 @@
 #include <linux/virtio_console.h>
 #include <linux/interrupt.h>
 #include <linux/virtio_ring.h>
+#include <linux/export.h>
 #include <linux/pfn.h>
 #include <asm/io.h>
 #include <asm/kvm_para.h>
 #include <asm/kvm_virtio.h>
 #include <asm/setup.h>
-#include <asm/s390_ext.h>
+#include <asm/irq.h>
 
 #define VIRTIO_SUBCODE_64 0x0D00
 
@@ -32,6 +34,7 @@
  * The pointer to our (page) of device descriptions.
  */
 static void *kvm_devices;
+static struct work_struct hotplug_work;
 
 struct kvm_device {
 	struct virtio_device vdev;
@@ -195,7 +198,7 @@ static struct virtqueue *kvm_find_vq(struct virtio_device *vdev,
 		goto out;
 
 	vq = vring_new_virtqueue(config->num, KVM_S390_VIRTIO_RING_ALIGN,
-				 vdev, (void *) config->address,
+				 vdev, true, (void *) config->address,
 				 kvm_notify, callback, name);
 	if (!vq) {
 		err = -ENOMEM;
@@ -260,6 +263,11 @@ error:
 	return PTR_ERR(vqs[i]);
 }
 
+static const char *kvm_bus_name(struct virtio_device *vdev)
+{
+	return "";
+}
+
 /*
  * The config ops structure as defined by virtio config
  */
@@ -273,6 +281,7 @@ static struct virtio_config_ops kvm_vq_configspace_ops = {
 	.reset = kvm_reset,
 	.find_vqs = kvm_find_vqs,
 	.del_vqs = kvm_del_vqs,
+	.bus_name = kvm_bus_name,
 };
 
 /*
@@ -328,33 +337,84 @@ static void scan_devices(void)
 }
 
 /*
+ * match for a kvm device with a specific desc pointer
+ */
+static int match_desc(struct device *dev, void *data)
+{
+	struct virtio_device *vdev = dev_to_virtio(dev);
+	struct kvm_device *kdev = to_kvmdev(vdev);
+
+	return kdev->desc == data;
+}
+
+/*
+ * hotplug_device tries to find changes in the device page.
+ */
+static void hotplug_devices(struct work_struct *dummy)
+{
+	unsigned int i;
+	struct kvm_device_desc *d;
+	struct device *dev;
+
+	for (i = 0; i < PAGE_SIZE; i += desc_size(d)) {
+		d = kvm_devices + i;
+
+		/* end of list */
+		if (d->type == 0)
+			break;
+
+		/* device already exists */
+		dev = device_find_child(kvm_root, d, match_desc);
+		if (dev) {
+			/* XXX check for hotplug remove */
+			put_device(dev);
+			continue;
+		}
+
+		/* new device */
+		printk(KERN_INFO "Adding new virtio device %p\n", d);
+		add_kvm_device(d, i);
+	}
+}
+
+/*
  * we emulate the request_irq behaviour on top of s390 extints
  */
-static void kvm_extint_handler(u16 code)
+static void kvm_extint_handler(struct ext_code ext_code,
+			       unsigned int param32, unsigned long param64)
 {
 	struct virtqueue *vq;
-	u16 subcode;
-	int config_changed;
+	u32 param;
 
-	subcode = S390_lowcore.cpu_addr;
-	if ((subcode & 0xff00) != VIRTIO_SUBCODE_64)
+	if ((ext_code.subcode & 0xff00) != VIRTIO_SUBCODE_64)
 		return;
+	kstat_cpu(smp_processor_id()).irqs[EXTINT_VRT]++;
 
 	/* The LSB might be overloaded, we have to mask it */
-	vq = (struct virtqueue *)(S390_lowcore.ext_params2 & ~1UL);
+	vq = (struct virtqueue *)(param64 & ~1UL);
 
-	/* We use the LSB of extparam, to decide, if this interrupt is a config
-	 * change or a "standard" interrupt */
-	config_changed = S390_lowcore.ext_params & 1;
+	/* We use ext_params to decide what this interrupt means */
+	param = param32 & VIRTIO_PARAM_MASK;
 
-	if (config_changed) {
+	switch (param) {
+	case VIRTIO_PARAM_CONFIG_CHANGED:
+	{
 		struct virtio_driver *drv;
 		drv = container_of(vq->vdev->dev.driver,
 				   struct virtio_driver, driver);
 		if (drv->config_changed)
 			drv->config_changed(vq->vdev);
-	} else
+
+		break;
+	}
+	case VIRTIO_PARAM_DEV_ADD:
+		schedule_work(&hotplug_work);
+		break;
+	case VIRTIO_PARAM_VRING_INTERRUPT:
+	default:
 		vring_interrupt(0, vq);
+		break;
+	}
 }
 
 /*
@@ -383,7 +443,9 @@ static int __init kvm_devices_init(void)
 
 	kvm_devices = (void *) real_memory_size;
 
-	ctl_set_bit(0, 9);
+	INIT_WORK(&hotplug_work, hotplug_devices);
+
+	service_subclass_irq_register();
 	register_external_interrupt(0x2603, kvm_extint_handler);
 
 	scan_devices();

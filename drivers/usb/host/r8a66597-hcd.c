@@ -6,7 +6,7 @@
  * Portions Copyright (C) 2004-2005 David Brownell
  * Portions Copyright (C) 1999 Roman Weissgaerber
  *
- * Author : Yoshihiro Shimoda <shimoda.yoshihiro@renesas.com>
+ * Author : Yoshihiro Shimoda <yoshihiro.shimoda.uh@renesas.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -959,7 +959,7 @@ static void init_pipe_info(struct r8a66597 *r8a66597, struct urb *urb,
 	info.pipenum = get_empty_pipenum(r8a66597, ep);
 	info.address = get_urb_to_r8a66597_addr(r8a66597, urb);
 	info.epnum = usb_endpoint_num(ep);
-	info.maxpacket = le16_to_cpu(ep->wMaxPacketSize);
+	info.maxpacket = usb_endpoint_maxp(ep);
 	info.type = get_r8a66597_type(usb_endpoint_type(ep));
 	info.bufnum = get_bufnum(info.pipenum);
 	info.buf_bsize = get_buf_bsize(info.pipenum);
@@ -1438,7 +1438,7 @@ static void packet_write(struct r8a66597 *r8a66597, u16 pipenum)
 	if (pipenum > 0)
 		r8a66597_write(r8a66597, ~(1 << pipenum), BEMPSTS);
 	if (urb->transfer_buffer) {
-		r8a66597_write_fifo(r8a66597, td->pipe->fifoaddr, buf, size);
+		r8a66597_write_fifo(r8a66597, td->pipe, buf, size);
 		if (!usb_pipebulk(urb->pipe) || td->maxpacket != size)
 			r8a66597_write(r8a66597, BVAL, td->pipe->fifoctr);
 	}
@@ -2150,8 +2150,9 @@ static void r8a66597_hub_descriptor(struct r8a66597 *r8a66597,
 	desc->bDescLength = 9;
 	desc->bPwrOn2PwrGood = 0;
 	desc->wHubCharacteristics = cpu_to_le16(0x0011);
-	desc->bitmap[0] = ((1 << r8a66597->max_root_hub) - 1) << 1;
-	desc->bitmap[1] = ~0;
+	desc->u.hs.DeviceRemovable[0] =
+		((1 << r8a66597->max_root_hub) - 1) << 1;
+	desc->u.hs.DeviceRemovable[1] = ~0;
 }
 
 static int r8a66597_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
@@ -2305,7 +2306,7 @@ static int r8a66597_bus_resume(struct usb_hcd *hcd)
 
 		dbg("resume port = %d", port);
 		rh->port &= ~USB_PORT_STAT_SUSPEND;
-		rh->port |= USB_PORT_STAT_C_SUSPEND < 16;
+		rh->port |= USB_PORT_STAT_C_SUSPEND << 16;
 		r8a66597_mdfy(r8a66597, RESUME, RESUME | UACT, dvstctr_reg);
 		msleep(50);
 		r8a66597_mdfy(r8a66597, UACT, RESUME | UACT, dvstctr_reg);
@@ -2397,7 +2398,7 @@ static const struct dev_pm_ops r8a66597_dev_pm_ops = {
 #define R8A66597_DEV_PM_OPS	NULL
 #endif
 
-static int __init_or_module r8a66597_remove(struct platform_device *pdev)
+static int __devexit r8a66597_remove(struct platform_device *pdev)
 {
 	struct r8a66597		*r8a66597 = dev_get_drvdata(&pdev->dev);
 	struct usb_hcd		*hcd = r8a66597_to_hcd(r8a66597);
@@ -2426,6 +2427,9 @@ static int __devinit r8a66597_probe(struct platform_device *pdev)
 	int ret = 0;
 	int i;
 	unsigned long irq_trigger;
+
+	if (usb_disabled())
+		return -ENODEV;
 
 	if (pdev->dev.dma_mask) {
 		ret = -EINVAL;
@@ -2516,8 +2520,9 @@ static int __devinit r8a66597_probe(struct platform_device *pdev)
 	INIT_LIST_HEAD(&r8a66597->child_device);
 
 	hcd->rsrc_start = res->start;
+	hcd->has_tt = 1;
 
-	ret = usb_add_hcd(hcd, irq, IRQF_DISABLED | irq_trigger);
+	ret = usb_add_hcd(hcd, irq, irq_trigger);
 	if (ret != 0) {
 		dev_err(&pdev->dev, "Failed to add hcd\n");
 		goto clean_up3;
@@ -2542,7 +2547,7 @@ clean_up:
 
 static struct platform_driver r8a66597_driver = {
 	.probe =	r8a66597_probe,
-	.remove =	r8a66597_remove,
+	.remove =	__devexit_p(r8a66597_remove),
 	.driver		= {
 		.name = (char *) hcd_name,
 		.owner	= THIS_MODULE,
@@ -2550,20 +2555,4 @@ static struct platform_driver r8a66597_driver = {
 	},
 };
 
-static int __init r8a66597_init(void)
-{
-	if (usb_disabled())
-		return -ENODEV;
-
-	printk(KERN_INFO KBUILD_MODNAME ": driver %s, %s\n", hcd_name,
-	       DRIVER_VERSION);
-	return platform_driver_register(&r8a66597_driver);
-}
-module_init(r8a66597_init);
-
-static void __exit r8a66597_cleanup(void)
-{
-	platform_driver_unregister(&r8a66597_driver);
-}
-module_exit(r8a66597_cleanup);
-
+module_platform_driver(r8a66597_driver);

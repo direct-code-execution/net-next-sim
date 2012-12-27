@@ -16,6 +16,7 @@
  */
 
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/if.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
@@ -24,6 +25,7 @@
 #include <linux/delay.h>
 #include <linux/crc32.h>
 #include <linux/eeprom_93cx6.h>
+#include <linux/module.h>
 #include <net/mac80211.h>
 
 #include "adm8211.h"
@@ -1248,7 +1250,8 @@ static int adm8211_hw_reset(struct ieee80211_hw *dev)
 	return 0;
 }
 
-static u64 adm8211_get_tsft(struct ieee80211_hw *dev)
+static u64 adm8211_get_tsft(struct ieee80211_hw *dev,
+			    struct ieee80211_vif *vif)
 {
 	struct adm8211_priv *priv = dev->priv;
 	u32 tsftl;
@@ -1658,7 +1661,7 @@ static void adm8211_tx_raw(struct ieee80211_hw *dev, struct sk_buff *skb,
 }
 
 /* Put adm8211_tx_hdr on skb and transmit */
-static int adm8211_tx(struct ieee80211_hw *dev, struct sk_buff *skb)
+static void adm8211_tx(struct ieee80211_hw *dev, struct sk_buff *skb)
 {
 	struct adm8211_tx_hdr *txhdr;
 	size_t payload_len, hdrlen;
@@ -1707,8 +1710,6 @@ static int adm8211_tx(struct ieee80211_hw *dev, struct sk_buff *skb)
 	txhdr->retry_limit = info->control.rates[0].count;
 
 	adm8211_tx_raw(dev, skb, plcp_signal, hdrlen);
-
-	return NETDEV_TX_OK;
 }
 
 static int adm8211_alloc_rings(struct ieee80211_hw *dev)

@@ -162,6 +162,7 @@ static struct class *misc_class;
 static const struct file_operations misc_fops = {
 	.owner		= THIS_MODULE,
 	.open		= misc_open,
+	.llseek		= noop_llseek,
 };
 
 /**
@@ -257,7 +258,7 @@ int misc_deregister(struct miscdevice *misc)
 EXPORT_SYMBOL(misc_register);
 EXPORT_SYMBOL(misc_deregister);
 
-static char *misc_devnode(struct device *dev, mode_t *mode)
+static char *misc_devnode(struct device *dev, umode_t *mode)
 {
 	struct miscdevice *c = dev_get_drvdata(dev);
 

@@ -43,7 +43,6 @@
 #include <linux/mca.h>
 #include <linux/kprobes.h>
 #include <linux/slab.h>
-#include <asm/system.h>
 #include <asm/io.h>
 #include <linux/proc_fs.h>
 #include <linux/mman.h>
@@ -259,7 +258,7 @@ static int __init mca_init(void)
 	/*
 	 * WARNING: Be careful when making changes here. Putting an adapter
 	 * and the motherboard simultaneously into setup mode may result in
-	 * damage to chips (according to The Indispensible PC Hardware Book
+	 * damage to chips (according to The Indispensable PC Hardware Book
 	 * by Hans-Peter Messmer). Also, we disable system interrupts (so
 	 * that we are not disturbed in the middle of this).
 	 */

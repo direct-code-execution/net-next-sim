@@ -23,7 +23,7 @@
 
 /* general boundary defintions */
 #define SENSEINFOBYTES          32 /* may vary between hbas */
-#define MAXSGENTRIES            32
+#define SG_ENTRIES_IN_CMD	32 /* Max SG entries excluding chain blocks */
 #define HPSA_SG_CHAIN		0x80000000
 #define MAXREPLYQS              256
 
@@ -101,9 +101,11 @@
 #define CFGTBL_ChangeReq        0x00000001l
 #define CFGTBL_AccCmds          0x00000001l
 #define DOORBELL_CTLR_RESET	0x00000004l
+#define DOORBELL_CTLR_RESET2	0x00000020l
 
 #define CFGTBL_Trans_Simple     0x00000002l
 #define CFGTBL_Trans_Performant 0x00000004l
+#define CFGTBL_Trans_use_short_tags 0x20000000l
 
 #define CFGTBL_BusType_Ultra2   0x00000001l
 #define CFGTBL_BusType_Ultra3   0x00000002l
@@ -120,9 +122,11 @@ union u64bit {
 };
 
 /* FIXME this is a per controller value (barf!) */
-#define HPSA_MAX_TARGETS_PER_CTLR 16
-#define HPSA_MAX_LUN 256
+#define HPSA_MAX_LUN 1024
 #define HPSA_MAX_PHYS_LUN 1024
+#define MAX_EXT_TARGETS 32
+#define HPSA_MAX_DEVICES (HPSA_MAX_PHYS_LUN + HPSA_MAX_LUN + \
+	MAX_EXT_TARGETS + 1) /* + 1 is for the controller itself */
 
 /* SCSI-3 Commands */
 #pragma pack(1)
@@ -255,16 +259,9 @@ struct ErrorInfo {
 #define CMD_IOCTL_PEND  0x01
 #define CMD_SCSI	0x03
 
-/* This structure needs to be divisible by 32 for new
- * indexing method and performant mode.
- */
-#define PAD32 32
-#define PAD64DIFF 0
-#define USEEXTRA ((sizeof(void *) - 4)/4)
-#define PADSIZE (PAD32 + PAD64DIFF * USEEXTRA)
-
 #define DIRECT_LOOKUP_SHIFT 5
 #define DIRECT_LOOKUP_BIT 0x10
+#define DIRECT_LOOKUP_MASK (~((1 << DIRECT_LOOKUP_SHIFT) - 1))
 
 #define HPSA_ERROR_BIT          0x02
 struct ctlr_info; /* defined in hpsa.h */
@@ -284,14 +281,14 @@ struct CommandList {
 	struct CommandListHeader Header;
 	struct RequestBlock      Request;
 	struct ErrDescriptor     ErrDesc;
-	struct SGDescriptor      SG[MAXSGENTRIES];
+	struct SGDescriptor      SG[SG_ENTRIES_IN_CMD];
 	/* information associated with the command */
 	u32			   busaddr; /* physical addr of this record */
 	struct ErrorInfo *err_info; /* pointer to the allocated mem */
 	struct ctlr_info	   *h;
 	int			   cmd_type;
 	long			   cmdindex;
-	struct hlist_node list;
+	struct list_head list;
 	struct request *rq;
 	struct completion *waiting;
 	void   *scsi_cmd;
@@ -343,6 +340,8 @@ struct CfgTable {
 	u8		reserved[0x78 - 0x58];
 	u32		misc_fw_support; /* offset 0x78 */
 #define			MISC_FW_DOORBELL_RESET (0x02)
+#define			MISC_FW_DOORBELL_RESET2 (0x010)
+	u8		driver_version[32];
 };
 
 #define NUM_BLOCKFETCH_ENTRIES 8

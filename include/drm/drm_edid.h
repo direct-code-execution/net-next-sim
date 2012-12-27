@@ -155,12 +155,35 @@ struct detailed_timing {
 #define DRM_EDID_INPUT_SEPARATE_SYNCS  (1 << 3)
 #define DRM_EDID_INPUT_BLANK_TO_BLACK  (1 << 4)
 #define DRM_EDID_INPUT_VIDEO_LEVEL     (3 << 5)
-#define DRM_EDID_INPUT_DIGITAL         (1 << 7) /* bits below must be zero if set */
+#define DRM_EDID_INPUT_DIGITAL         (1 << 7)
+#define DRM_EDID_DIGITAL_DEPTH_MASK    (7 << 4)
+#define DRM_EDID_DIGITAL_DEPTH_UNDEF   (0 << 4)
+#define DRM_EDID_DIGITAL_DEPTH_6       (1 << 4)
+#define DRM_EDID_DIGITAL_DEPTH_8       (2 << 4)
+#define DRM_EDID_DIGITAL_DEPTH_10      (3 << 4)
+#define DRM_EDID_DIGITAL_DEPTH_12      (4 << 4)
+#define DRM_EDID_DIGITAL_DEPTH_14      (5 << 4)
+#define DRM_EDID_DIGITAL_DEPTH_16      (6 << 4)
+#define DRM_EDID_DIGITAL_DEPTH_RSVD    (7 << 4)
+#define DRM_EDID_DIGITAL_TYPE_UNDEF    (0)
+#define DRM_EDID_DIGITAL_TYPE_DVI      (1)
+#define DRM_EDID_DIGITAL_TYPE_HDMI_A   (2)
+#define DRM_EDID_DIGITAL_TYPE_HDMI_B   (3)
+#define DRM_EDID_DIGITAL_TYPE_MDDI     (4)
+#define DRM_EDID_DIGITAL_TYPE_DP       (5)
 
 #define DRM_EDID_FEATURE_DEFAULT_GTF      (1 << 0)
 #define DRM_EDID_FEATURE_PREFERRED_TIMING (1 << 1)
 #define DRM_EDID_FEATURE_STANDARD_COLOR   (1 << 2)
+/* If analog */
 #define DRM_EDID_FEATURE_DISPLAY_TYPE     (3 << 3) /* 00=mono, 01=rgb, 10=non-rgb, 11=unknown */
+/* If digital */
+#define DRM_EDID_FEATURE_COLOR_MASK	  (3 << 3)
+#define DRM_EDID_FEATURE_RGB		  (0 << 3)
+#define DRM_EDID_FEATURE_RGB_YCRCB444	  (1 << 3)
+#define DRM_EDID_FEATURE_RGB_YCRCB422	  (2 << 3)
+#define DRM_EDID_FEATURE_RGB_YCRCB	  (3 << 3) /* both 4:4:4 and 4:2:2 */
+
 #define DRM_EDID_FEATURE_PM_ACTIVE_OFF    (1 << 5)
 #define DRM_EDID_FEATURE_PM_SUSPEND       (1 << 6)
 #define DRM_EDID_FEATURE_PM_STANDBY       (1 << 7)
@@ -206,5 +229,15 @@ struct edid {
 } __attribute__((packed));
 
 #define EDID_PRODUCT_ID(e) ((e)->prod_code[0] | ((e)->prod_code[1] << 8))
+
+struct drm_encoder;
+struct drm_connector;
+struct drm_display_mode;
+void drm_edid_to_eld(struct drm_connector *connector, struct edid *edid);
+int drm_av_sync_delay(struct drm_connector *connector,
+		      struct drm_display_mode *mode);
+struct drm_connector *drm_select_eld(struct drm_encoder *encoder,
+				     struct drm_display_mode *mode);
+int drm_load_edid_firmware(struct drm_connector *connector);
 
 #endif /* __DRM_EDID_H__ */

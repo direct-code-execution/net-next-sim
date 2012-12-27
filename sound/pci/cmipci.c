@@ -27,7 +27,7 @@
 #include <linux/pci.h>
 #include <linux/slab.h>
 #include <linux/gameport.h>
-#include <linux/moduleparam.h>
+#include <linux/module.h>
 #include <linux/mutex.h>
 #include <sound/core.h>
 #include <sound/info.h>
@@ -54,10 +54,10 @@ MODULE_SUPPORTED_DEVICE("{{C-Media,CMI8738},"
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
-static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;	/* Enable switches */
+static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;	/* Enable switches */
 static long mpu_port[SNDRV_CARDS];
 static long fm_port[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS-1)]=1};
-static int soft_ac3[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS-1)]=1};
+static bool soft_ac3[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS-1)]=1};
 #ifdef SUPPORT_JOYSTICK
 static int joystick_port[SNDRV_CARDS];
 #endif
@@ -73,7 +73,7 @@ MODULE_PARM_DESC(mpu_port, "MPU-401 port.");
 module_param_array(fm_port, long, NULL, 0444);
 MODULE_PARM_DESC(fm_port, "FM port.");
 module_param_array(soft_ac3, bool, NULL, 0444);
-MODULE_PARM_DESC(soft_ac3, "Sofware-conversion of raw SPDIF packets (model 033 only).");
+MODULE_PARM_DESC(soft_ac3, "Software-conversion of raw SPDIF packets (model 033 only).");
 #ifdef SUPPORT_JOYSTICK
 module_param_array(joystick_port, int, NULL, 0444);
 MODULE_PARM_DESC(joystick_port, "Joystick port address.");
@@ -656,8 +656,8 @@ out:
 }
 
 /*
- * Program pll register bits, I assume that the 8 registers 0xf8 upto 0xff
- * are mapped onto the 8 ADC/DAC sampling frequency which can be choosen
+ * Program pll register bits, I assume that the 8 registers 0xf8 up to 0xff
+ * are mapped onto the 8 ADC/DAC sampling frequency which can be chosen
  * at the register CM_REG_FUNCTRL1 (0x04).
  * Problem: other ways are also possible (any information about that?)
  */
@@ -666,7 +666,7 @@ static void snd_cmipci_set_pll(struct cmipci *cm, unsigned int rate, unsigned in
 	unsigned int reg = CM_REG_PLL + slot;
 	/*
 	 * Guess that this programs at reg. 0x04 the pos 15:13/12:10
-	 * for DSFC/ASFC (000 upto 111).
+	 * for DSFC/ASFC (000 up to 111).
 	 */
 
 	/* FIXME: Init (Do we've to set an other register first before programming?) */
@@ -2507,14 +2507,12 @@ static int snd_cmipci_line_in_mode_info(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_info *uinfo)
 {
 	struct cmipci *cm = snd_kcontrol_chip(kcontrol);
-	static char *texts[3] = { "Line-In", "Rear Output", "Bass Output" };
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_ENUMERATED;
-	uinfo->count = 1;
-	uinfo->value.enumerated.items = cm->chip_version >= 39 ? 3 : 2;
-	if (uinfo->value.enumerated.item >= uinfo->value.enumerated.items)
-		uinfo->value.enumerated.item = uinfo->value.enumerated.items - 1;
-	strcpy(uinfo->value.enumerated.name, texts[uinfo->value.enumerated.item]);
-	return 0;
+	static const char *const texts[3] = {
+		"Line-In", "Rear Output", "Bass Output"
+	};
+
+	return snd_ctl_enum_info(uinfo, 1,
+				 cm->chip_version >= 39 ? 3 : 2, texts);
 }
 
 static inline unsigned int get_line_in_mode(struct cmipci *cm)
@@ -2564,14 +2562,9 @@ static int snd_cmipci_line_in_mode_put(struct snd_kcontrol *kcontrol,
 static int snd_cmipci_mic_in_mode_info(struct snd_kcontrol *kcontrol,
 				       struct snd_ctl_elem_info *uinfo)
 {
-	static char *texts[2] = { "Mic-In", "Center/LFE Output" };
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_ENUMERATED;
-	uinfo->count = 1;
-	uinfo->value.enumerated.items = 2;
-	if (uinfo->value.enumerated.item >= uinfo->value.enumerated.items)
-		uinfo->value.enumerated.item = uinfo->value.enumerated.items - 1;
-	strcpy(uinfo->value.enumerated.name, texts[uinfo->value.enumerated.item]);
-	return 0;
+	static const char *const texts[2] = { "Mic-In", "Center/LFE Output" };
+
+	return snd_ctl_enum_info(uinfo, 1, 2, texts);
 }
 
 static int snd_cmipci_mic_in_mode_get(struct snd_kcontrol *kcontrol,
@@ -3060,7 +3053,7 @@ static int __devinit snd_cmipci_create(struct snd_card *card, struct pci_dev *pc
 	cm->iobase = pci_resource_start(pci, 0);
 
 	if (request_irq(pci->irq, snd_cmipci_interrupt,
-			IRQF_SHARED, card->driver, cm)) {
+			IRQF_SHARED, KBUILD_MODNAME, cm)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_cmipci_free(cm);
 		return -EBUSY;
@@ -3235,8 +3228,9 @@ static int __devinit snd_cmipci_create(struct snd_card *card, struct pci_dev *pc
 		if ((err = snd_mpu401_uart_new(card, 0, MPU401_HW_CMIPCI,
 					       iomidi,
 					       (integrated_midi ?
-						MPU401_INFO_INTEGRATED : 0),
-					       cm->irq, 0, &cm->rmidi)) < 0) {
+						MPU401_INFO_INTEGRATED : 0) |
+					       MPU401_INFO_IRQ_HOOK,
+					       -1, &cm->rmidi)) < 0) {
 			printk(KERN_ERR "cmipci: no UART401 device at 0x%lx\n", iomidi);
 		}
 	}
@@ -3405,7 +3399,7 @@ static int snd_cmipci_resume(struct pci_dev *pci)
 #endif /* CONFIG_PM */
 
 static struct pci_driver driver = {
-	.name = "C-Media PCI",
+	.name = KBUILD_MODNAME,
 	.id_table = snd_cmipci_ids,
 	.probe = snd_cmipci_probe,
 	.remove = __devexit_p(snd_cmipci_remove),

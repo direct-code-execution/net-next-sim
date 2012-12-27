@@ -78,6 +78,16 @@ The device naming scheme is:
 /dev/cciss/c1d1p2		Controller 1, disk 1, partition 2
 /dev/cciss/c1d1p3		Controller 1, disk 1, partition 3
 
+CCISS simple mode support
+-------------------------
+
+The "cciss_simple_mode=1" boot parameter may be used to prevent the driver
+from putting the controller into "performant" mode. The difference is that
+with simple mode, each command completion requires an interrupt, while with
+"performant mode" (the default, and ordinarily better performing) it is
+possible to have multiple command completions indicated by a single
+interrupt.
+
 SCSI tape drive and medium changer support
 ------------------------------------------
 
@@ -88,14 +98,12 @@ You must enable "SCSI tape drive support for Smart Array 5xxx" and
 "SCSI support" in your kernel configuration to be able to use SCSI
 tape drives with your Smart Array 5xxx controller.
 
-Additionally, note that the driver will not engage the SCSI core at init 
-time.  The driver must be directed to dynamically engage the SCSI core via 
-the /proc filesystem entry which the "block" side of the driver creates as 
-/proc/driver/cciss/cciss* at runtime.  This is because at driver init time, 
-the SCSI core may not yet be initialized (because the driver is a block 
-driver) and attempting to register it with the SCSI core in such a case 
-would cause a hang.  This is best done via an initialization script 
-(typically in /etc/init.d, but could vary depending on distribution). 
+Additionally, note that the driver will engage the SCSI core at init
+time if any tape drives or medium changers are detected.  The driver may
+also be directed to dynamically engage the SCSI core via the /proc filesystem
+entry which the "block" side of the driver creates as
+/proc/driver/cciss/cciss* at runtime.  This is best done via a script.
+
 For example:
 
 	for x in /proc/driver/cciss/cciss[0-9]*
@@ -169,3 +177,18 @@ is issued which positions the tape to a known position.  Typically you
 must rewind the tape (by issuing "mt -f /dev/st0 rewind" for example)
 before i/o can proceed again to a tape drive which was reset.
 
+There is a cciss_tape_cmds module parameter which can be used to make cciss
+allocate more commands for use by tape drives.  Ordinarily only a few commands
+(6) are allocated for tape drives because tape drives are slow and
+infrequently used and the primary purpose of Smart Array controllers is to
+act as a RAID controller for disk drives, so the vast majority of commands
+are allocated for disk devices.  However, if you have more than a few tape
+drives attached to a smart array, the default number of commands may not be
+enought (for example, if you have 8 tape drives, you could only rewind 6
+at one time with the default number of commands.)  The cciss_tape_cmds module
+parameter allows more commands (up to 16 more) to be allocated for use by
+tape drives.  For example:
+
+        insmod cciss.ko cciss_tape_cmds=16
+
+Or, as a kernel boot parameter passed in via grub:  cciss.cciss_tape_cmds=8

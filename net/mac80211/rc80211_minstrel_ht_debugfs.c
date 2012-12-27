@@ -10,6 +10,7 @@
 #include <linux/skbuff.h>
 #include <linux/debugfs.h>
 #include <linux/ieee80211.h>
+#include <linux/export.h>
 #include <net/mac80211.h>
 #include "rc80211_minstrel.h"
 #include "rc80211_minstrel_ht.h"
@@ -90,7 +91,7 @@ minstrel_ht_stats_open(struct inode *inode, struct file *file)
 		MINSTREL_TRUNC(mi->avg_ampdu_len * 10) % 10);
 	ms->len = p - ms->buf;
 
-	return 0;
+	return nonseekable_open(inode, file);
 }
 
 static const struct file_operations minstrel_ht_stat_fops = {
@@ -98,6 +99,7 @@ static const struct file_operations minstrel_ht_stat_fops = {
 	.open = minstrel_ht_stats_open,
 	.read = minstrel_stats_read,
 	.release = minstrel_stats_release,
+	.llseek = no_llseek,
 };
 
 void

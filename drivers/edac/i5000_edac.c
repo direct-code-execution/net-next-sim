@@ -27,7 +27,7 @@
 /*
  * Alter this version for the I5000 module when modifications are made
  */
-#define I5000_REVISION    " Ver: 2.0.12 " __DATE__
+#define I5000_REVISION    " Ver: 2.0.12"
 #define EDAC_MOD_STR      "i5000_edac"
 
 #define i5000_printk(level, fmt, arg...) \
@@ -1372,7 +1372,7 @@ static int i5000_probe1(struct pci_dev *pdev, int dev_idx)
 	 * actual number of slots/dimms per channel, we thus utilize the
 	 * resource as specified by the chipset. Thus, we might have
 	 * have more DIMMs per channel than actually on the mobo, but this
-	 * allows the driver to support upto the chipset max, without
+	 * allows the driver to support up to the chipset max, without
 	 * some fancy mobo determination.
 	 */
 	i5000_get_dimm_and_channel_counts(pdev, &num_dimms_per_channel,
@@ -1516,7 +1516,7 @@ static void __devexit i5000_remove_one(struct pci_dev *pdev)
  *
  *	The "E500P" device is the first device supported.
  */
-static const struct pci_device_id i5000_pci_tbl[] __devinitdata = {
+static DEFINE_PCI_DEVICE_TABLE(i5000_pci_tbl) = {
 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_I5000_DEV16),
 	 .driver_data = I5000P},
 

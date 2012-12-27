@@ -31,8 +31,8 @@
 #include <linux/init.h>
 #include <net/x25.h>
 
-static LIST_HEAD(x25_neigh_list);
-static DEFINE_RWLOCK(x25_neigh_list_lock);
+LIST_HEAD(x25_neigh_list);
+DEFINE_RWLOCK(x25_neigh_list_lock);
 
 static void x25_t20timer_expiry(unsigned long);
 
@@ -76,30 +76,32 @@ void x25_link_control(struct sk_buff *skb, struct x25_neigh *nb,
 	int confirm;
 
 	switch (frametype) {
-		case X25_RESTART_REQUEST:
-			confirm = !x25_t20timer_pending(nb);
-			x25_stop_t20timer(nb);
-			nb->state = X25_LINK_STATE_3;
-			if (confirm)
-				x25_transmit_restart_confirmation(nb);
+	case X25_RESTART_REQUEST:
+		confirm = !x25_t20timer_pending(nb);
+		x25_stop_t20timer(nb);
+		nb->state = X25_LINK_STATE_3;
+		if (confirm)
+			x25_transmit_restart_confirmation(nb);
+		break;
+
+	case X25_RESTART_CONFIRMATION:
+		x25_stop_t20timer(nb);
+		nb->state = X25_LINK_STATE_3;
+		break;
+
+	case X25_DIAGNOSTIC:
+		if (!pskb_may_pull(skb, X25_STD_MIN_LEN + 4))
 			break;
 
-		case X25_RESTART_CONFIRMATION:
-			x25_stop_t20timer(nb);
-			nb->state = X25_LINK_STATE_3;
-			break;
+		printk(KERN_WARNING "x25: diagnostic #%d - %02X %02X %02X\n",
+		       skb->data[3], skb->data[4],
+		       skb->data[5], skb->data[6]);
+		break;
 
-		case X25_DIAGNOSTIC:
-			printk(KERN_WARNING "x25: diagnostic #%d - "
-			       "%02X %02X %02X\n",
-			       skb->data[3], skb->data[4],
-			       skb->data[5], skb->data[6]);
-			break;
-
-		default:
-			printk(KERN_WARNING "x25: received unknown %02X "
-			       "with LCI 000\n", frametype);
-			break;
+	default:
+		printk(KERN_WARNING "x25: received unknown %02X with LCI 000\n",
+		       frametype);
+		break;
 	}
 
 	if (nb->state == X25_LINK_STATE_3)
@@ -193,18 +195,18 @@ void x25_transmit_clear_request(struct x25_neigh *nb, unsigned int lci,
 void x25_transmit_link(struct sk_buff *skb, struct x25_neigh *nb)
 {
 	switch (nb->state) {
-		case X25_LINK_STATE_0:
-			skb_queue_tail(&nb->queue, skb);
-			nb->state = X25_LINK_STATE_1;
-			x25_establish_link(nb);
-			break;
-		case X25_LINK_STATE_1:
-		case X25_LINK_STATE_2:
-			skb_queue_tail(&nb->queue, skb);
-			break;
-		case X25_LINK_STATE_3:
-			x25_send_frame(skb, nb);
-			break;
+	case X25_LINK_STATE_0:
+		skb_queue_tail(&nb->queue, skb);
+		nb->state = X25_LINK_STATE_1;
+		x25_establish_link(nb);
+		break;
+	case X25_LINK_STATE_1:
+	case X25_LINK_STATE_2:
+		skb_queue_tail(&nb->queue, skb);
+		break;
+	case X25_LINK_STATE_3:
+		x25_send_frame(skb, nb);
+		break;
 	}
 }
 
@@ -214,14 +216,14 @@ void x25_transmit_link(struct sk_buff *skb, struct x25_neigh *nb)
 void x25_link_established(struct x25_neigh *nb)
 {
 	switch (nb->state) {
-		case X25_LINK_STATE_0:
-			nb->state = X25_LINK_STATE_2;
-			break;
-		case X25_LINK_STATE_1:
-			x25_transmit_restart_request(nb);
-			nb->state = X25_LINK_STATE_2;
-			x25_start_t20timer(nb);
-			break;
+	case X25_LINK_STATE_0:
+		nb->state = X25_LINK_STATE_2;
+		break;
+	case X25_LINK_STATE_1:
+		x25_transmit_restart_request(nb);
+		nb->state = X25_LINK_STATE_2;
+		x25_start_t20timer(nb);
+		break;
 	}
 }
 
@@ -360,16 +362,20 @@ int x25_subscr_ioctl(unsigned int cmd, void __user *arg)
 	dev_put(dev);
 
 	if (cmd == SIOCX25GSUBSCRIP) {
+		read_lock_bh(&x25_neigh_list_lock);
 		x25_subscr.extended	     = nb->extended;
 		x25_subscr.global_facil_mask = nb->global_facil_mask;
+		read_unlock_bh(&x25_neigh_list_lock);
 		rc = copy_to_user(arg, &x25_subscr,
 				  sizeof(x25_subscr)) ? -EFAULT : 0;
 	} else {
 		rc = -EINVAL;
 		if (!(x25_subscr.extended && x25_subscr.extended != 1)) {
 			rc = 0;
+			write_lock_bh(&x25_neigh_list_lock);
 			nb->extended	     = x25_subscr.extended;
 			nb->global_facil_mask = x25_subscr.global_facil_mask;
+			write_unlock_bh(&x25_neigh_list_lock);
 		}
 	}
 	x25_neigh_put(nb);
@@ -392,8 +398,12 @@ void __exit x25_link_free(void)
 	write_lock_bh(&x25_neigh_list_lock);
 
 	list_for_each_safe(entry, tmp, &x25_neigh_list) {
+		struct net_device *dev;
+
 		nb = list_entry(entry, struct x25_neigh, node);
+		dev = nb->dev;
 		__x25_remove_neigh(nb);
+		dev_put(dev);
 	}
 	write_unlock_bh(&x25_neigh_list_lock);
 }

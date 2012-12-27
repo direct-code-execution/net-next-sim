@@ -1,18 +1,17 @@
-/**
-  * This file contains definitions and data structures specific
-  * to Marvell 802.11 NIC. It contains the Device Information
-  * structure struct lbs_private..
-  */
+/*
+ * This file contains definitions and data structures specific
+ * to Marvell 802.11 NIC. It contains the Device Information
+ * structure struct lbs_private..
+ */
 #ifndef _LBS_DEV_H_
 #define _LBS_DEV_H_
 
-#include "mesh.h"
 #include "defs.h"
 #include "host.h"
 
 #include <linux/kfifo.h>
 
-/** sleep_params */
+/* sleep_params */
 struct sleep_params {
 	uint16_t sp_error;
 	uint16_t sp_offset;
@@ -22,8 +21,19 @@ struct sleep_params {
 	uint16_t sp_reserved;
 };
 
+/* Mesh statistics */
+struct lbs_mesh_stats {
+	u32	fwd_bcast_cnt;		/* Fwd: Broadcast counter */
+	u32	fwd_unicast_cnt;	/* Fwd: Unicast counter */
+	u32	fwd_drop_ttl;		/* Fwd: TTL zero */
+	u32	fwd_drop_rbt;		/* Fwd: Recently Broadcasted */
+	u32	fwd_drop_noroute; 	/* Fwd: No route to Destination */
+	u32	fwd_drop_nobuf;		/* Fwd: Run out of internal buffers */
+	u32	drop_blind;		/* Rx:  Dropped by blinding table */
+	u32	tx_failed_cnt;		/* Tx:  Failed transmissions */
+};
 
-/** Private structure for the MV device */
+/* Private structure for the MV device */
 struct lbs_private {
 
 	/* Basic networking */
@@ -43,9 +53,7 @@ struct lbs_private {
 	/* Mesh */
 	struct net_device *mesh_dev; /* Virtual device */
 #ifdef CONFIG_LIBERTAS_MESH
-	u32 mesh_connect_status;
 	struct lbs_mesh_stats mstats;
-	int mesh_open;
 	uint16_t mesh_tlv;
 	u8 mesh_ssid[IEEE80211_MAX_SSID_LEN + 1];
 	u8 mesh_ssid_len;
@@ -87,10 +95,14 @@ struct lbs_private {
 
 	/* Hardware access */
 	void *card;
+	bool iface_running;
 	u8 fw_ready;
 	u8 surpriseremoved;
+	u8 setup_fw_on_resume;
 	int (*hw_host_to_card) (struct lbs_private *priv, u8 type, u8 *payload, u16 nb);
 	void (*reset_card) (struct lbs_private *priv);
+	int (*power_save) (struct lbs_private *priv);
+	int (*power_restore) (struct lbs_private *priv);
 	int (*enter_deep_sleep) (struct lbs_private *priv);
 	int (*exit_deep_sleep) (struct lbs_private *priv);
 	int (*reset_deep_sleep_wakeup) (struct lbs_private *priv);
@@ -100,6 +112,7 @@ struct lbs_private {
 	u32 fwcapinfo;
 	u16 regioncode;
 	u8 current_addr[ETH_ALEN];
+	u8 copied_hwaddr;
 
 	/* Command download */
 	u8 dnld_sent;
@@ -122,12 +135,12 @@ struct lbs_private {
 	/* Events sent from hardware to driver */
 	struct kfifo event_fifo;
 
-	/** thread to service interrupts */
+	/* thread to service interrupts */
 	struct task_struct *main_thread;
 	wait_queue_head_t waitq;
 	struct workqueue_struct *work_thread;
 
-	/** Encryption stuff */
+	/* Encryption stuff */
 	u8 authtype_auto;
 	u8 wep_tx_key;
 	u8 wep_key[4][WLAN_KEY_LEN_WEP104];
@@ -137,6 +150,7 @@ struct lbs_private {
 	uint32_t wol_criteria;
 	uint8_t wol_gpio;
 	uint8_t wol_gap;
+	bool ehs_remove_supported;
 
 	/* Transmitting */
 	int tx_pending_len;		/* -1 while building packet */
@@ -144,6 +158,7 @@ struct lbs_private {
 	/* protected by hard_start_xmit serialization */
 	u8 txretrycount;
 	struct sk_buff *currenttxskb;
+	struct timer_list tx_lockup_timer;
 
 	/* Locks */
 	struct mutex lock;
@@ -158,16 +173,27 @@ struct lbs_private {
 	s16 txpower_min;
 	s16 txpower_max;
 
-	/** Scanning */
+	/* Scanning */
 	struct delayed_work scan_work;
 	int scan_channel;
 	/* Queue of things waiting for scan completion */
 	wait_queue_head_t scan_q;
 	/* Whether the scan was initiated internally and not by cfg80211 */
 	bool internal_scan;
-	unsigned long last_scan;
 };
 
 extern struct cmd_confirm_sleep confirm_sleep;
+
+/* Check if there is an interface active. */
+static inline int lbs_iface_active(struct lbs_private *priv)
+{
+	int r;
+
+	r = netif_running(priv->dev);
+	if (priv->mesh_dev)
+		r |= netif_running(priv->mesh_dev);
+
+	return r;
+}
 
 #endif

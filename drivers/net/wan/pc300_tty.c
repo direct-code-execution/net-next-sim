@@ -131,16 +131,14 @@ static void cpc_tty_trace(pc300dev_t *dev, char* buf, int len, char rxtx);
 static void cpc_tty_signal_off(pc300dev_t *pc300dev, unsigned char);
 static void cpc_tty_signal_on(pc300dev_t *pc300dev, unsigned char);
 
-static int pc300_tiocmset(struct tty_struct *, struct file *,
-			  unsigned int, unsigned int);
-static int pc300_tiocmget(struct tty_struct *, struct file *);
+static int pc300_tiocmset(struct tty_struct *, unsigned int, unsigned int);
+static int pc300_tiocmget(struct tty_struct *);
 
 /* functions called by PC300 driver */
 void cpc_tty_init(pc300dev_t *dev);
 void cpc_tty_unregister_service(pc300dev_t *pc300dev);
 void cpc_tty_receive(pc300dev_t *pc300dev);
 void cpc_tty_trigger_poll(pc300dev_t *pc300dev);
-void cpc_tty_reset_var(void);
 
 /*
  * PC300 TTY clear "signal"
@@ -540,10 +538,10 @@ static int cpc_tty_chars_in_buffer(struct tty_struct *tty)
 		return -ENODEV; 
 	}
    
-	return(0); 
+	return 0;
 } 
 
-static int pc300_tiocmset(struct tty_struct *tty, struct file *file,
+static int pc300_tiocmset(struct tty_struct *tty,
 			  unsigned int set, unsigned int clear)
 {
 	st_cpc_tty_area    *cpc_tty; 
@@ -570,7 +568,7 @@ static int pc300_tiocmset(struct tty_struct *tty, struct file *file,
 	return 0;
 }
 
-static int pc300_tiocmget(struct tty_struct *tty, struct file *file)
+static int pc300_tiocmget(struct tty_struct *tty)
 {
 	unsigned int result;
 	unsigned char status;
@@ -756,7 +754,7 @@ void cpc_tty_receive(pc300dev_t *pc300dev)
 
 	dsr_rx = cpc_readb(card->hw.scabase + DSR_RX(ch));
 
-	cpc_tty = (st_cpc_tty_area *)pc300dev->cpc_tty; 
+	cpc_tty = pc300dev->cpc_tty;
 
 	while (1) { 
 		rx_len = 0;
@@ -1079,20 +1077,3 @@ void cpc_tty_trigger_poll(pc300dev_t *pc300dev)
 	}
 	schedule_work(&(cpc_tty->tty_tx_work)); 
 } 
-
-/*
- * PC300 TTY reset var routine
- * This routine is called by pc300driver to init the TTY area. 
- */
-
-void cpc_tty_reset_var(void)
-{
-	int i ; 
-
-	CPC_TTY_DBG("hdlcX-tty: reset variables\n");
-	/* reset  the tty_driver structure - serial_drv */ 
-	memset(&serial_drv, 0, sizeof(struct tty_driver));
-	for (i=0; i < CPC_TTY_NPORTS; i++){
-		memset(&cpc_tty_area[i],0, sizeof(st_cpc_tty_area)); 
-	}
-}

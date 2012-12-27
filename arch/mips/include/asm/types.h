@@ -15,31 +15,21 @@
  * We don't use int-l64.h for the kernel anymore but still use it for
  * userspace to avoid code changes.
  */
-#if (_MIPS_SZLONG == 64) && !defined(__KERNEL__)
-# include <asm-generic/int-l64.h>
-#else
+#ifdef __KERNEL__
 # include <asm-generic/int-ll64.h>
+#else
+# if _MIPS_SZLONG == 64
+#  include <asm-generic/int-l64.h>
+# else
+#  include <asm-generic/int-ll64.h>
+# endif
 #endif
-
-#ifndef __ASSEMBLY__
-
-typedef unsigned short umode_t;
-
-#endif /* __ASSEMBLY__ */
 
 /*
  * These aren't exported outside the kernel to avoid name space clashes
  */
 #ifdef __KERNEL__
 #ifndef __ASSEMBLY__
-
-#if (defined(CONFIG_HIGHMEM) && defined(CONFIG_64BIT_PHYS_ADDR)) \
-    || defined(CONFIG_64BIT)
-typedef u64 dma_addr_t;
-#else
-typedef u32 dma_addr_t;
-#endif
-typedef u64 dma64_addr_t;
 
 /*
  * Don't use phys_t.  You've been warned.

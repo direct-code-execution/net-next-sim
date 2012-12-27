@@ -101,7 +101,7 @@ enum CountryCode {
 	CTRY_GERMANY = 276,
 	CTRY_GREECE = 300,
 	CTRY_GREENLAND = 304,
-	CTRY_GRENEDA = 308,
+	CTRY_GRENADA = 308,
 	CTRY_GUAM = 316,
 	CTRY_GUATEMALA = 320,
 	CTRY_HAITI = 332,
@@ -250,6 +250,7 @@ enum CountryCode {
 };
 
 bool ath_is_world_regd(struct ath_regulatory *reg);
+bool ath_is_49ghz_allowed(u16 redomain);
 int ath_regd_init(struct ath_regulatory *reg, struct wiphy *wiphy,
 		  int (*reg_notifier)(struct wiphy *wiphy,
 		  struct regulatory_request *request));

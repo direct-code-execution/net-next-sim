@@ -1,5 +1,8 @@
+#include <linux/fs.h>
 #include <linux/spinlock.h>
 #include <linux/list.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
 #include <linux/slab.h>
 
 #include "vmregion.h"
@@ -36,9 +39,9 @@
 
 struct arm_vmregion *
 arm_vmregion_alloc(struct arm_vmregion_head *head, size_t align,
-		   size_t size, gfp_t gfp)
+		   size_t size, gfp_t gfp, const void *caller)
 {
-	unsigned long addr = head->vm_start, end = head->vm_end - size;
+	unsigned long start = head->vm_start, addr = head->vm_end;
 	unsigned long flags;
 	struct arm_vmregion *c, *new;
 
@@ -52,23 +55,24 @@ arm_vmregion_alloc(struct arm_vmregion_head *head, size_t align,
 	if (!new)
 		goto out;
 
+	new->caller = caller;
+
 	spin_lock_irqsave(&head->vm_lock, flags);
 
-	list_for_each_entry(c, &head->vm_list, vm_list) {
-		if ((addr + size) < addr)
-			goto nospc;
-		if ((addr + size) <= c->vm_start)
+	addr = rounddown(addr - size, align);
+	list_for_each_entry_reverse(c, &head->vm_list, vm_list) {
+		if (addr >= c->vm_end)
 			goto found;
-		addr = ALIGN(c->vm_end, align);
-		if (addr > end)
+		addr = rounddown(c->vm_start - size, align);
+		if (addr < start)
 			goto nospc;
 	}
 
  found:
 	/*
-	 * Insert this entry _before_ the one we found.
+	 * Insert this entry after the one we found.
 	 */
-	list_add_tail(&new->vm_list, &c->vm_list);
+	list_add(&new->vm_list, &c->vm_list);
 	new->vm_start = addr;
 	new->vm_end = addr + size;
 	new->vm_active = 1;
@@ -130,3 +134,72 @@ void arm_vmregion_free(struct arm_vmregion_head *head, struct arm_vmregion *c)
 
 	kfree(c);
 }
+
+#ifdef CONFIG_PROC_FS
+static int arm_vmregion_show(struct seq_file *m, void *p)
+{
+	struct arm_vmregion *c = list_entry(p, struct arm_vmregion, vm_list);
+
+	seq_printf(m, "0x%08lx-0x%08lx %7lu", c->vm_start, c->vm_end,
+		c->vm_end - c->vm_start);
+	if (c->caller)
+		seq_printf(m, " %pS", (void *)c->caller);
+	seq_putc(m, '\n');
+	return 0;
+}
+
+static void *arm_vmregion_start(struct seq_file *m, loff_t *pos)
+{
+	struct arm_vmregion_head *h = m->private;
+	spin_lock_irq(&h->vm_lock);
+	return seq_list_start(&h->vm_list, *pos);
+}
+
+static void *arm_vmregion_next(struct seq_file *m, void *p, loff_t *pos)
+{
+	struct arm_vmregion_head *h = m->private;
+	return seq_list_next(p, &h->vm_list, pos);
+}
+
+static void arm_vmregion_stop(struct seq_file *m, void *p)
+{
+	struct arm_vmregion_head *h = m->private;
+	spin_unlock_irq(&h->vm_lock);
+}
+
+static const struct seq_operations arm_vmregion_ops = {
+	.start	= arm_vmregion_start,
+	.stop	= arm_vmregion_stop,
+	.next	= arm_vmregion_next,
+	.show	= arm_vmregion_show,
+};
+
+static int arm_vmregion_open(struct inode *inode, struct file *file)
+{
+	struct arm_vmregion_head *h = PDE(inode)->data;
+	int ret = seq_open(file, &arm_vmregion_ops);
+	if (!ret) {
+		struct seq_file *m = file->private_data;
+		m->private = h;
+	}
+	return ret;
+}
+
+static const struct file_operations arm_vmregion_fops = {
+	.open	= arm_vmregion_open,
+	.read	= seq_read,
+	.llseek	= seq_lseek,
+	.release = seq_release,
+};
+
+int arm_vmregion_create_proc(const char *path, struct arm_vmregion_head *h)
+{
+	proc_create_data(path, S_IRUSR, NULL, &arm_vmregion_fops, h);
+	return 0;
+}
+#else
+int arm_vmregion_create_proc(const char *path, struct arm_vmregion_head *h)
+{
+	return 0;
+}
+#endif

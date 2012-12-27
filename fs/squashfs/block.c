@@ -2,7 +2,7 @@
  * Squashfs - a compressed read only filesystem for Linux
  *
  * Copyright (c) 2002, 2003, 2004, 2005, 2006, 2007, 2008
- * Phillip Lougher <phillip@lougher.demon.co.uk>
+ * Phillip Lougher <phillip@squashfs.org.uk>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -34,7 +34,6 @@
 
 #include "squashfs_fs.h"
 #include "squashfs_fs_sb.h"
-#include "squashfs_fs_i.h"
 #include "squashfs.h"
 #include "decompressor.h"
 
@@ -64,6 +63,14 @@ static struct buffer_head *get_block_length(struct super_block *sb,
 		*length = (unsigned char) bh->b_data[*offset] |
 			(unsigned char) bh->b_data[*offset + 1] << 8;
 		*offset += 2;
+
+		if (*offset == msblk->devblksize) {
+			put_bh(bh);
+			bh = sb_bread(sb, ++(*cur_index));
+			if (bh == NULL)
+				return NULL;
+			*offset = 0;
+		}
 	}
 
 	return bh;
@@ -76,7 +83,8 @@ static struct buffer_head *get_block_length(struct super_block *sb,
  * filesystem), otherwise the length is obtained from the first two bytes of
  * the metadata block.  A bit in the length field indicates if the block
  * is stored uncompressed in the filesystem (usually because compression
- * generated a larger block - this does occasionally happen with zlib).
+ * generated a larger block - this does occasionally happen with compression
+ * algorithms).
  */
 int squashfs_read_data(struct super_block *sb, void **buffer, u64 index,
 			int length, u64 *next_index, int srclength, int pages)

@@ -25,9 +25,8 @@
 #include <linux/io.h>
 #include <linux/uaccess.h>
 
-#include <asm/system.h>
 
-static int nowayout = WATCHDOG_NOWAYOUT;
+static bool nowayout = WATCHDOG_NOWAYOUT;
 static unsigned int margin = 60;	/* (secs) Default is 1 minute */
 static unsigned long wdt_status;
 static DEFINE_MUTEX(wdt_lock);
@@ -41,7 +40,7 @@ static DEFINE_MUTEX(wdt_lock);
 #define IFACE_ON_COMMAND	1
 #define REBOOT_COMMAND		2
 
-#define WATCHDOG_NAME 		"SBC-FITPC2 Watchdog"
+#define WATCHDOG_NAME		"SBC-FITPC2 Watchdog"
 
 static void wdt_send_data(unsigned char command, unsigned char data)
 {
@@ -171,8 +170,7 @@ static int fitpc2_wdt_release(struct inode *inode, struct file *file)
 		wdt_disable();
 		pr_info("Device disabled\n");
 	} else {
-		pr_warning("Device closed unexpectedly -"
-			" timer will not stop\n");
+		pr_warn("Device closed unexpectedly - timer will not stop\n");
 		wdt_enable();
 	}
 
@@ -201,11 +199,14 @@ static struct miscdevice fitpc2_wdt_miscdev = {
 static int __init fitpc2_wdt_init(void)
 {
 	int err;
+	const char *brd_name;
 
-	if (!strstr(dmi_get_system_info(DMI_BOARD_NAME), "SBC-FITPC2"))
+	brd_name = dmi_get_system_info(DMI_BOARD_NAME);
+
+	if (!brd_name || !strstr(brd_name, "SBC-FITPC2"))
 		return -ENODEV;
 
-	pr_info("%s found\n", dmi_get_system_info(DMI_BOARD_NAME));
+	pr_info("%s found\n", brd_name);
 
 	if (!request_region(COMMAND_PORT, 1, WATCHDOG_NAME)) {
 		pr_err("I/O address 0x%04x already in use\n", COMMAND_PORT);
@@ -219,8 +220,8 @@ static int __init fitpc2_wdt_init(void)
 	}
 
 	if (margin < 31 || margin > 255) {
-		pr_err("margin must be in range 31 - 255"
-		       " seconds, you tried to set %d\n", margin);
+		pr_err("margin must be in range 31 - 255 seconds, you tried to set %d\n",
+		       margin);
 		err = -EINVAL;
 		goto err_margin;
 	}
@@ -228,7 +229,7 @@ static int __init fitpc2_wdt_init(void)
 	err = misc_register(&fitpc2_wdt_miscdev);
 	if (err) {
 		pr_err("cannot register miscdev on minor=%d (err=%d)\n",
-							WATCHDOG_MINOR, err);
+		       WATCHDOG_MINOR, err);
 		goto err_margin;
 	}
 
@@ -258,7 +259,7 @@ MODULE_DESCRIPTION("SBC-FITPC2 Watchdog");
 module_param(margin, int, 0);
 MODULE_PARM_DESC(margin, "Watchdog margin in seconds (default 60s)");
 
-module_param(nowayout, int, 0);
+module_param(nowayout, bool, 0);
 MODULE_PARM_DESC(nowayout, "Watchdog cannot be stopped once started");
 
 MODULE_LICENSE("GPL");

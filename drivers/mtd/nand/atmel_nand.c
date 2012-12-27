@@ -22,31 +22,28 @@
  *
  */
 
+#include <linux/dma-mapping.h>
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/platform_device.h>
+#include <linux/of.h>
+#include <linux/of_device.h>
+#include <linux/of_gpio.h>
+#include <linux/of_mtd.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/nand.h>
 #include <linux/mtd/partitions.h>
 
+#include <linux/dmaengine.h>
 #include <linux/gpio.h>
 #include <linux/io.h>
+#include <linux/platform_data/atmel.h>
 
-#include <mach/board.h>
 #include <mach/cpu.h>
 
-#ifdef CONFIG_MTD_NAND_ATMEL_ECC_HW
-#define hard_ecc	1
-#else
-#define hard_ecc	0
-#endif
-
-#ifdef CONFIG_MTD_NAND_ATMEL_ECC_NONE
-#define no_ecc		1
-#else
-#define no_ecc		0
-#endif
+static int use_dma = 1;
+module_param(use_dma, int, 0);
 
 static int on_flash_bbt = 0;
 module_param(on_flash_bbt, int, 0);
@@ -89,18 +86,27 @@ struct atmel_nand_host {
 	struct nand_chip	nand_chip;
 	struct mtd_info		mtd;
 	void __iomem		*io_base;
-	struct atmel_nand_data	*board;
+	dma_addr_t		io_phys;
+	struct atmel_nand_data	board;
 	struct device		*dev;
 	void __iomem		*ecc;
+
+	struct completion	comp;
+	struct dma_chan		*dma_chan;
 };
+
+static int cpu_has_dma(void)
+{
+	return cpu_is_at91sam9rl() || cpu_is_at91sam9g45();
+}
 
 /*
  * Enable NAND.
  */
 static void atmel_nand_enable(struct atmel_nand_host *host)
 {
-	if (host->board->enable_pin)
-		gpio_set_value(host->board->enable_pin, 0);
+	if (gpio_is_valid(host->board.enable_pin))
+		gpio_set_value(host->board.enable_pin, 0);
 }
 
 /*
@@ -108,8 +114,8 @@ static void atmel_nand_enable(struct atmel_nand_host *host)
  */
 static void atmel_nand_disable(struct atmel_nand_host *host)
 {
-	if (host->board->enable_pin)
-		gpio_set_value(host->board->enable_pin, 1);
+	if (gpio_is_valid(host->board.enable_pin))
+		gpio_set_value(host->board.enable_pin, 1);
 }
 
 /*
@@ -130,9 +136,9 @@ static void atmel_nand_cmd_ctrl(struct mtd_info *mtd, int cmd, unsigned int ctrl
 		return;
 
 	if (ctrl & NAND_CLE)
-		writeb(cmd, host->io_base + (1 << host->board->cle));
+		writeb(cmd, host->io_base + (1 << host->board.cle));
 	else
-		writeb(cmd, host->io_base + (1 << host->board->ale));
+		writeb(cmd, host->io_base + (1 << host->board.ale));
 }
 
 /*
@@ -143,14 +149,14 @@ static int atmel_nand_device_ready(struct mtd_info *mtd)
 	struct nand_chip *nand_chip = mtd->priv;
 	struct atmel_nand_host *host = nand_chip->priv;
 
-	return gpio_get_value(host->board->rdy_pin) ^
-                !!host->board->rdy_pin_active_low;
+	return gpio_get_value(host->board.rdy_pin) ^
+                !!host->board.rdy_pin_active_low;
 }
 
 /*
  * Minimal-overhead PIO for data access.
  */
-static void atmel_read_buf(struct mtd_info *mtd, u8 *buf, int len)
+static void atmel_read_buf8(struct mtd_info *mtd, u8 *buf, int len)
 {
 	struct nand_chip	*nand_chip = mtd->priv;
 
@@ -164,7 +170,7 @@ static void atmel_read_buf16(struct mtd_info *mtd, u8 *buf, int len)
 	__raw_readsw(nand_chip->IO_ADDR_R, buf, len / 2);
 }
 
-static void atmel_write_buf(struct mtd_info *mtd, const u8 *buf, int len)
+static void atmel_write_buf8(struct mtd_info *mtd, const u8 *buf, int len)
 {
 	struct nand_chip	*nand_chip = mtd->priv;
 
@@ -176,6 +182,109 @@ static void atmel_write_buf16(struct mtd_info *mtd, const u8 *buf, int len)
 	struct nand_chip	*nand_chip = mtd->priv;
 
 	__raw_writesw(nand_chip->IO_ADDR_W, buf, len / 2);
+}
+
+static void dma_complete_func(void *completion)
+{
+	complete(completion);
+}
+
+static int atmel_nand_dma_op(struct mtd_info *mtd, void *buf, int len,
+			       int is_read)
+{
+	struct dma_device *dma_dev;
+	enum dma_ctrl_flags flags;
+	dma_addr_t dma_src_addr, dma_dst_addr, phys_addr;
+	struct dma_async_tx_descriptor *tx = NULL;
+	dma_cookie_t cookie;
+	struct nand_chip *chip = mtd->priv;
+	struct atmel_nand_host *host = chip->priv;
+	void *p = buf;
+	int err = -EIO;
+	enum dma_data_direction dir = is_read ? DMA_FROM_DEVICE : DMA_TO_DEVICE;
+
+	if (buf >= high_memory)
+		goto err_buf;
+
+	dma_dev = host->dma_chan->device;
+
+	flags = DMA_CTRL_ACK | DMA_PREP_INTERRUPT | DMA_COMPL_SKIP_SRC_UNMAP |
+		DMA_COMPL_SKIP_DEST_UNMAP;
+
+	phys_addr = dma_map_single(dma_dev->dev, p, len, dir);
+	if (dma_mapping_error(dma_dev->dev, phys_addr)) {
+		dev_err(host->dev, "Failed to dma_map_single\n");
+		goto err_buf;
+	}
+
+	if (is_read) {
+		dma_src_addr = host->io_phys;
+		dma_dst_addr = phys_addr;
+	} else {
+		dma_src_addr = phys_addr;
+		dma_dst_addr = host->io_phys;
+	}
+
+	tx = dma_dev->device_prep_dma_memcpy(host->dma_chan, dma_dst_addr,
+					     dma_src_addr, len, flags);
+	if (!tx) {
+		dev_err(host->dev, "Failed to prepare DMA memcpy\n");
+		goto err_dma;
+	}
+
+	init_completion(&host->comp);
+	tx->callback = dma_complete_func;
+	tx->callback_param = &host->comp;
+
+	cookie = tx->tx_submit(tx);
+	if (dma_submit_error(cookie)) {
+		dev_err(host->dev, "Failed to do DMA tx_submit\n");
+		goto err_dma;
+	}
+
+	dma_async_issue_pending(host->dma_chan);
+	wait_for_completion(&host->comp);
+
+	err = 0;
+
+err_dma:
+	dma_unmap_single(dma_dev->dev, phys_addr, len, dir);
+err_buf:
+	if (err != 0)
+		dev_warn(host->dev, "Fall back to CPU I/O\n");
+	return err;
+}
+
+static void atmel_read_buf(struct mtd_info *mtd, u8 *buf, int len)
+{
+	struct nand_chip *chip = mtd->priv;
+	struct atmel_nand_host *host = chip->priv;
+
+	if (use_dma && len > mtd->oobsize)
+		/* only use DMA for bigger than oob size: better performances */
+		if (atmel_nand_dma_op(mtd, buf, len, 1) == 0)
+			return;
+
+	if (host->board.bus_width_16)
+		atmel_read_buf16(mtd, buf, len);
+	else
+		atmel_read_buf8(mtd, buf, len);
+}
+
+static void atmel_write_buf(struct mtd_info *mtd, const u8 *buf, int len)
+{
+	struct nand_chip *chip = mtd->priv;
+	struct atmel_nand_host *host = chip->priv;
+
+	if (use_dma && len > mtd->oobsize)
+		/* only use DMA for bigger than oob size: better performances */
+		if (atmel_nand_dma_op(mtd, (void *)buf, len, 0) == 0)
+			return;
+
+	if (host->board.bus_width_16)
+		atmel_write_buf16(mtd, buf, len);
+	else
+		atmel_write_buf8(mtd, buf, len);
 }
 
 /*
@@ -364,8 +473,54 @@ static void atmel_nand_hwctl(struct mtd_info *mtd, int mode)
 	}
 }
 
-#ifdef CONFIG_MTD_CMDLINE_PARTS
-static const char *part_probes[] = { "cmdlinepart", NULL };
+#if defined(CONFIG_OF)
+static int __devinit atmel_of_init_port(struct atmel_nand_host *host,
+					 struct device_node *np)
+{
+	u32 val;
+	int ecc_mode;
+	struct atmel_nand_data *board = &host->board;
+	enum of_gpio_flags flags;
+
+	if (of_property_read_u32(np, "atmel,nand-addr-offset", &val) == 0) {
+		if (val >= 32) {
+			dev_err(host->dev, "invalid addr-offset %u\n", val);
+			return -EINVAL;
+		}
+		board->ale = val;
+	}
+
+	if (of_property_read_u32(np, "atmel,nand-cmd-offset", &val) == 0) {
+		if (val >= 32) {
+			dev_err(host->dev, "invalid cmd-offset %u\n", val);
+			return -EINVAL;
+		}
+		board->cle = val;
+	}
+
+	ecc_mode = of_get_nand_ecc_mode(np);
+
+	board->ecc_mode = ecc_mode < 0 ? NAND_ECC_SOFT : ecc_mode;
+
+	board->on_flash_bbt = of_get_nand_on_flash_bbt(np);
+
+	if (of_get_nand_bus_width(np) == 16)
+		board->bus_width_16 = 1;
+
+	board->rdy_pin = of_get_gpio_flags(np, 0, &flags);
+	board->rdy_pin_active_low = (flags == OF_GPIO_ACTIVE_LOW);
+
+	board->enable_pin = of_get_gpio(np, 1);
+	board->det_pin = of_get_gpio(np, 2);
+
+	return 0;
+}
+#else
+static int __devinit atmel_of_init_port(struct atmel_nand_host *host,
+					 struct device_node *np)
+{
+	return -EINVAL;
+}
 #endif
 
 /*
@@ -378,12 +533,8 @@ static int __init atmel_nand_probe(struct platform_device *pdev)
 	struct nand_chip *nand_chip;
 	struct resource *regs;
 	struct resource *mem;
+	struct mtd_part_parser_data ppdata = {};
 	int res;
-
-#ifdef CONFIG_MTD_PARTITIONS
-	struct mtd_partition *partitions = NULL;
-	int num_partitions = 0;
-#endif
 
 	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!mem) {
@@ -398,7 +549,9 @@ static int __init atmel_nand_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	host->io_base = ioremap(mem->start, mem->end - mem->start + 1);
+	host->io_phys = (dma_addr_t)mem->start;
+
+	host->io_base = ioremap(mem->start, resource_size(mem));
 	if (host->io_base == NULL) {
 		printk(KERN_ERR "atmel_nand: ioremap failed\n");
 		res = -EIO;
@@ -407,8 +560,15 @@ static int __init atmel_nand_probe(struct platform_device *pdev)
 
 	mtd = &host->mtd;
 	nand_chip = &host->nand_chip;
-	host->board = pdev->dev.platform_data;
 	host->dev = &pdev->dev;
+	if (pdev->dev.of_node) {
+		res = atmel_of_init_port(host, pdev->dev.of_node);
+		if (res)
+			goto err_nand_ioremap;
+	} else {
+		memcpy(&host->board, pdev->dev.platform_data,
+		       sizeof(struct atmel_nand_data));
+	}
 
 	nand_chip->priv = host;		/* link the private data structures */
 	mtd->priv = nand_chip;
@@ -419,59 +579,76 @@ static int __init atmel_nand_probe(struct platform_device *pdev)
 	nand_chip->IO_ADDR_W = host->io_base;
 	nand_chip->cmd_ctrl = atmel_nand_cmd_ctrl;
 
-	if (host->board->rdy_pin)
+	if (gpio_is_valid(host->board.rdy_pin))
 		nand_chip->dev_ready = atmel_nand_device_ready;
 
+	nand_chip->ecc.mode = host->board.ecc_mode;
+
 	regs = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	if (!regs && hard_ecc) {
+	if (!regs && nand_chip->ecc.mode == NAND_ECC_HW) {
 		printk(KERN_ERR "atmel_nand: can't get I/O resource "
 				"regs\nFalling back on software ECC\n");
+		nand_chip->ecc.mode = NAND_ECC_SOFT;
 	}
 
-	nand_chip->ecc.mode = NAND_ECC_SOFT;	/* enable ECC */
-	if (no_ecc)
-		nand_chip->ecc.mode = NAND_ECC_NONE;
-	if (hard_ecc && regs) {
-		host->ecc = ioremap(regs->start, regs->end - regs->start + 1);
+	if (nand_chip->ecc.mode == NAND_ECC_HW) {
+		host->ecc = ioremap(regs->start, resource_size(regs));
 		if (host->ecc == NULL) {
 			printk(KERN_ERR "atmel_nand: ioremap failed\n");
 			res = -EIO;
 			goto err_ecc_ioremap;
 		}
-		nand_chip->ecc.mode = NAND_ECC_HW;
 		nand_chip->ecc.calculate = atmel_nand_calculate;
 		nand_chip->ecc.correct = atmel_nand_correct;
 		nand_chip->ecc.hwctl = atmel_nand_hwctl;
 		nand_chip->ecc.read_page = atmel_nand_read_page;
 		nand_chip->ecc.bytes = 4;
+		nand_chip->ecc.strength = 1;
 	}
 
 	nand_chip->chip_delay = 20;		/* 20us command delay time */
 
-	if (host->board->bus_width_16) {	/* 16-bit bus width */
+	if (host->board.bus_width_16)	/* 16-bit bus width */
 		nand_chip->options |= NAND_BUSWIDTH_16;
-		nand_chip->read_buf = atmel_read_buf16;
-		nand_chip->write_buf = atmel_write_buf16;
-	} else {
-		nand_chip->read_buf = atmel_read_buf;
-		nand_chip->write_buf = atmel_write_buf;
-	}
+
+	nand_chip->read_buf = atmel_read_buf;
+	nand_chip->write_buf = atmel_write_buf;
 
 	platform_set_drvdata(pdev, host);
 	atmel_nand_enable(host);
 
-	if (host->board->det_pin) {
-		if (gpio_get_value(host->board->det_pin)) {
+	if (gpio_is_valid(host->board.det_pin)) {
+		if (gpio_get_value(host->board.det_pin)) {
 			printk(KERN_INFO "No SmartMedia card inserted.\n");
 			res = -ENXIO;
 			goto err_no_card;
 		}
 	}
 
-	if (on_flash_bbt) {
+	if (host->board.on_flash_bbt || on_flash_bbt) {
 		printk(KERN_INFO "atmel_nand: Use On Flash BBT\n");
-		nand_chip->options |= NAND_USE_FLASH_BBT;
+		nand_chip->bbt_options |= NAND_BBT_USE_FLASH;
 	}
+
+	if (!cpu_has_dma())
+		use_dma = 0;
+
+	if (use_dma) {
+		dma_cap_mask_t mask;
+
+		dma_cap_zero(mask);
+		dma_cap_set(DMA_MEMCPY, mask);
+		host->dma_chan = dma_request_channel(mask, NULL, NULL);
+		if (!host->dma_chan) {
+			dev_err(host->dev, "Failed to request DMA channel\n");
+			use_dma = 0;
+		}
+	}
+	if (use_dma)
+		dev_info(host->dev, "Using %s for DMA transfers.\n",
+					dma_chan_name(host->dma_chan));
+	else
+		dev_info(host->dev, "No DMA support for NAND access.\n");
 
 	/* first scan to find the device and get the page size */
 	if (nand_scan_ident(mtd, 1, NULL)) {
@@ -522,39 +699,20 @@ static int __init atmel_nand_probe(struct platform_device *pdev)
 		goto err_scan_tail;
 	}
 
-#ifdef CONFIG_MTD_PARTITIONS
-#ifdef CONFIG_MTD_CMDLINE_PARTS
 	mtd->name = "atmel_nand";
-	num_partitions = parse_mtd_partitions(mtd, part_probes,
-					      &partitions, 0);
-#endif
-	if (num_partitions <= 0 && host->board->partition_info)
-		partitions = host->board->partition_info(mtd->size,
-							 &num_partitions);
-
-	if ((!partitions) || (num_partitions == 0)) {
-		printk(KERN_ERR "atmel_nand: No partitions defined, or unsupported device.\n");
-		res = -ENXIO;
-		goto err_no_partitions;
-	}
-
-	res = add_mtd_partitions(mtd, partitions, num_partitions);
-#else
-	res = add_mtd_device(mtd);
-#endif
-
+	ppdata.of_node = pdev->dev.of_node;
+	res = mtd_device_parse_register(mtd, NULL, &ppdata,
+			host->board.parts, host->board.num_parts);
 	if (!res)
 		return res;
 
-#ifdef CONFIG_MTD_PARTITIONS
-err_no_partitions:
-#endif
-	nand_release(mtd);
 err_scan_tail:
 err_scan_ident:
 err_no_card:
 	atmel_nand_disable(host);
 	platform_set_drvdata(pdev, NULL);
+	if (host->dma_chan)
+		dma_release_channel(host->dma_chan);
 	if (host->ecc)
 		iounmap(host->ecc);
 err_ecc_ioremap:
@@ -578,17 +736,31 @@ static int __exit atmel_nand_remove(struct platform_device *pdev)
 
 	if (host->ecc)
 		iounmap(host->ecc);
+
+	if (host->dma_chan)
+		dma_release_channel(host->dma_chan);
+
 	iounmap(host->io_base);
 	kfree(host);
 
 	return 0;
 }
 
+#if defined(CONFIG_OF)
+static const struct of_device_id atmel_nand_dt_ids[] = {
+	{ .compatible = "atmel,at91rm9200-nand" },
+	{ /* sentinel */ }
+};
+
+MODULE_DEVICE_TABLE(of, atmel_nand_dt_ids);
+#endif
+
 static struct platform_driver atmel_nand_driver = {
 	.remove		= __exit_p(atmel_nand_remove),
 	.driver		= {
 		.name	= "atmel_nand",
 		.owner	= THIS_MODULE,
+		.of_match_table	= of_match_ptr(atmel_nand_dt_ids),
 	},
 };
 

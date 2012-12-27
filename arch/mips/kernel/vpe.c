@@ -19,7 +19,7 @@
  * VPE support module
  *
  * Provides support for loading a MIPS SP program on VPE1.
- * The SP enviroment is rather simple, no tlb's.  It needs to be relocatable
+ * The SP environment is rather simple, no tlb's.  It needs to be relocatable
  * (or partially linked). You should initialise your stack in the startup
  * code. This loader looks for the symbol __start and sets up
  * execution to resume from there. The MIPS SDE kit contains suitable examples.
@@ -29,7 +29,6 @@
  */
 #include <linux/kernel.h>
 #include <linux/device.h>
-#include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <asm/uaccess.h>
@@ -46,11 +45,10 @@
 #include <asm/mipsregs.h>
 #include <asm/mipsmtregs.h>
 #include <asm/cacheflush.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/cpu.h>
 #include <asm/mips_mt.h>
 #include <asm/processor.h>
-#include <asm/system.h>
 #include <asm/vpe.h>
 #include <asm/kspd.h>
 
@@ -148,9 +146,9 @@ struct {
 	spinlock_t tc_list_lock;
 	struct list_head tc_list;	/* Thread contexts */
 } vpecontrol = {
-	.vpe_list_lock	= SPIN_LOCK_UNLOCKED,
+	.vpe_list_lock	= __SPIN_LOCK_UNLOCKED(vpe_list_lock),
 	.vpe_list	= LIST_HEAD_INIT(vpecontrol.vpe_list),
-	.tc_list_lock	= SPIN_LOCK_UNLOCKED,
+	.tc_list_lock	= __SPIN_LOCK_UNLOCKED(tc_list_lock),
 	.tc_list	= LIST_HEAD_INIT(vpecontrol.tc_list)
 };
 
@@ -192,7 +190,7 @@ static struct tc *get_tc(int index)
 	}
 	spin_unlock(&vpecontrol.tc_list_lock);
 
-	return NULL;
+	return res;
 }
 
 /* allocate a vpe and associate it with this minor (or index) */
@@ -1092,6 +1090,10 @@ static int vpe_open(struct inode *inode, struct file *filp)
 
 	/* this of-course trashes what was there before... */
 	v->pbuffer = vmalloc(P_SIZE);
+	if (!v->pbuffer) {
+		pr_warning("VPE loader: unable to allocate memory\n");
+		return -ENOMEM;
+	}
 	v->plen = P_SIZE;
 	v->load_addr = NULL;
 	v->len = 0;
@@ -1149,10 +1151,9 @@ static int vpe_release(struct inode *inode, struct file *filp)
 	if (ret < 0)
 		v->shared_ptr = NULL;
 
-	// cleanup any temp buffers
-	if (v->pbuffer)
-		vfree(v->pbuffer);
+	vfree(v->pbuffer);
 	v->plen = 0;
+
 	return ret;
 }
 
@@ -1168,11 +1169,6 @@ static ssize_t vpe_write(struct file *file, const char __user * buffer,
 	v = get_vpe(tclimit);
 	if (v == NULL)
 		return -ENODEV;
-
-	if (v->pbuffer == NULL) {
-		printk(KERN_ERR "VPE loader: no buffer for program\n");
-		return -ENOMEM;
-	}
 
 	if ((count + v->len) > v->plen) {
 		printk(KERN_WARNING
@@ -1192,7 +1188,8 @@ static const struct file_operations vpe_fops = {
 	.owner = THIS_MODULE,
 	.open = vpe_open,
 	.release = vpe_release,
-	.write = vpe_write
+	.write = vpe_write,
+	.llseek = noop_llseek,
 };
 
 /* module wrapper entry points */

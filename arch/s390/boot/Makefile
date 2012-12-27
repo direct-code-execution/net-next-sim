@@ -6,7 +6,7 @@ COMPILE_VERSION := __linux_compile_version_id__`hostname |  \
 			tr -c '[0-9A-Za-z]' '_'`__`date | \
 			tr -c '[0-9A-Za-z]' '_'`_t
 
-EXTRA_CFLAGS  := -DCOMPILE_VERSION=$(COMPILE_VERSION) -gstabs -I.
+ccflags-y  := -DCOMPILE_VERSION=$(COMPILE_VERSION) -gstabs -I.
 
 targets := image
 targets += bzImage
@@ -23,4 +23,4 @@ $(obj)/compressed/vmlinux: FORCE
 
 install: $(CONFIGURE) $(obj)/image
 	sh -x  $(srctree)/$(obj)/install.sh $(KERNELRELEASE) $(obj)/image \
-	      System.map Kerntypes "$(INSTALL_PATH)"
+	      System.map "$(INSTALL_PATH)"

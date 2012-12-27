@@ -6,6 +6,7 @@
 #include <linux/dmi.h>
 #include <linux/sched.h>
 #include <linux/tboot.h>
+#include <linux/delay.h>
 #include <acpi/reboot.h>
 #include <asm/io.h>
 #include <asm/apic.h>
@@ -18,6 +19,7 @@
 #include <asm/pci_x86.h>
 #include <asm/virtext.h>
 #include <asm/cpu.h>
+#include <asm/nmi.h>
 
 #ifdef CONFIG_X86_32
 # include <linux/ctype.h>
@@ -34,8 +36,16 @@ EXPORT_SYMBOL(pm_power_off);
 
 static const struct desc_ptr no_idt = {};
 static int reboot_mode;
-enum reboot_type reboot_type = BOOT_KBD;
+enum reboot_type reboot_type = BOOT_ACPI;
 int reboot_force;
+
+/* This variable is used privately to keep track of whether or not
+ * reboot_type is still set to its default value (i.e., reboot= hasn't
+ * been set on the command line).  This is needed so that we can
+ * suppress DMI scanning for reboot quirks.  Without it, it's
+ * impossible to override a faulty reboot quirk without recompiling.
+ */
+static int reboot_default = 1;
 
 #if defined(CONFIG_X86_32) && defined(CONFIG_SMP)
 static int reboot_cpu = -1;
@@ -65,6 +75,12 @@ bool port_cf9_safe = false;
 static int __init reboot_setup(char *str)
 {
 	for (;;) {
+		/* Having anything passed on the command line via
+		 * reboot= will cause us to disable DMI checking
+		 * below.
+		 */
+		reboot_default = 0;
+
 		switch (*str) {
 		case 'w':
 			reboot_mode = 0x1234;
@@ -84,7 +100,7 @@ static int __init reboot_setup(char *str)
 			}
 				/* we will leave sorting out the final value
 				   when we are ready to reboot, since we might not
-				   have set up boot_cpu_id or smp_num_cpu */
+				   have detected BSP APIC ID or smp_num_cpu */
 			break;
 #endif /* CONFIG_SMP */
 
@@ -122,7 +138,7 @@ __setup("reboot=", reboot_setup);
  */
 
 /*
- * Some machines require the "reboot=b"  commandline option,
+ * Some machines require the "reboot=b" or "reboot=k"  commandline options,
  * this quirk makes that automatic.
  */
 static int __init set_bios_reboot(const struct dmi_system_id *d)
@@ -130,6 +146,15 @@ static int __init set_bios_reboot(const struct dmi_system_id *d)
 	if (reboot_type != BOOT_BIOS) {
 		reboot_type = BOOT_BIOS;
 		printk(KERN_INFO "%s series board detected. Selecting BIOS-method for reboots.\n", d->ident);
+	}
+	return 0;
+}
+
+static int __init set_kbd_reboot(const struct dmi_system_id *d)
+{
+	if (reboot_type != BOOT_KBD) {
+		reboot_type = BOOT_KBD;
+		printk(KERN_INFO "%s series board detected. Selecting KBD-method for reboot.\n", d->ident);
 	}
 	return 0;
 }
@@ -284,78 +309,39 @@ static struct dmi_system_id __initdata reboot_dmi_table[] = {
 			DMI_MATCH(DMI_BOARD_NAME, "P4S800"),
 		},
 	},
+	{ /* Handle reboot issue on Acer Aspire one */
+		.callback = set_kbd_reboot,
+		.ident = "Acer Aspire One A110",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Acer"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "AOA110"),
+		},
+	},
 	{ }
 };
 
 static int __init reboot_init(void)
 {
-	dmi_check_system(reboot_dmi_table);
+	/* Only do the DMI check if reboot_type hasn't been overridden
+	 * on the command line
+	 */
+	if (reboot_default) {
+		dmi_check_system(reboot_dmi_table);
+	}
 	return 0;
 }
 core_initcall(reboot_init);
 
-/* The following code and data reboots the machine by switching to real
-   mode and jumping to the BIOS reset entry point, as if the CPU has
-   really been reset.  The previous version asked the keyboard
-   controller to pulse the CPU reset line, which is more thorough, but
-   doesn't work with at least one type of 486 motherboard.  It is easy
-   to stop this code working; hence the copious comments. */
-static const unsigned long long
-real_mode_gdt_entries [3] =
+extern const unsigned char machine_real_restart_asm[];
+extern const u64 machine_real_restart_gdt[3];
+
+void machine_real_restart(unsigned int type)
 {
-	0x0000000000000000ULL,	/* Null descriptor */
-	0x00009b000000ffffULL,	/* 16-bit real-mode 64k code at 0x00000000 */
-	0x000093000100ffffULL	/* 16-bit real-mode 64k data at 0x00000100 */
-};
+	void *restart_va;
+	unsigned long restart_pa;
+	void (*restart_lowmem)(unsigned int);
+	u64 *lowmem_gdt;
 
-static const struct desc_ptr
-real_mode_gdt = { sizeof (real_mode_gdt_entries) - 1, (long)real_mode_gdt_entries },
-real_mode_idt = { 0x3ff, 0 };
-
-/* This is 16-bit protected mode code to disable paging and the cache,
-   switch to real mode and jump to the BIOS reset code.
-
-   The instruction that switches to real mode by writing to CR0 must be
-   followed immediately by a far jump instruction, which set CS to a
-   valid value for real mode, and flushes the prefetch queue to avoid
-   running instructions that have already been decoded in protected
-   mode.
-
-   Clears all the flags except ET, especially PG (paging), PE
-   (protected-mode enable) and TS (task switch for coprocessor state
-   save).  Flushes the TLB after paging has been disabled.  Sets CD and
-   NW, to disable the cache on a 486, and invalidates the cache.  This
-   is more like the state of a 486 after reset.  I don't know if
-   something else should be done for other chips.
-
-   More could be done here to set up the registers as if a CPU reset had
-   occurred; hopefully real BIOSs don't assume much. */
-static const unsigned char real_mode_switch [] =
-{
-	0x66, 0x0f, 0x20, 0xc0,			/*    movl  %cr0,%eax        */
-	0x66, 0x83, 0xe0, 0x11,			/*    andl  $0x00000011,%eax */
-	0x66, 0x0d, 0x00, 0x00, 0x00, 0x60,	/*    orl   $0x60000000,%eax */
-	0x66, 0x0f, 0x22, 0xc0,			/*    movl  %eax,%cr0        */
-	0x66, 0x0f, 0x22, 0xd8,			/*    movl  %eax,%cr3        */
-	0x66, 0x0f, 0x20, 0xc3,			/*    movl  %cr0,%ebx        */
-	0x66, 0x81, 0xe3, 0x00, 0x00, 0x00, 0x60,	/*    andl  $0x60000000,%ebx */
-	0x74, 0x02,				/*    jz    f                */
-	0x0f, 0x09,				/*    wbinvd                 */
-	0x24, 0x10,				/* f: andb  $0x10,al         */
-	0x66, 0x0f, 0x22, 0xc0			/*    movl  %eax,%cr0        */
-};
-static const unsigned char jump_to_bios [] =
-{
-	0xea, 0x00, 0x00, 0xff, 0xff		/*    ljmp  $0xffff,$0x0000  */
-};
-
-/*
- * Switch to real mode and then execute the code
- * specified by the code and length parameters.
- * We assume that length will aways be less that 100!
- */
-void machine_real_restart(const unsigned char *code, int length)
-{
 	local_irq_disable();
 
 	/* Write zero to CMOS register number 0x0f, which the BIOS POST
@@ -371,16 +357,10 @@ void machine_real_restart(const unsigned char *code, int length)
 	CMOS_WRITE(0x00, 0x8f);
 	spin_unlock(&rtc_lock);
 
-	/* Remap the kernel at virtual address zero, as well as offset zero
-	   from the kernel segment.  This assumes the kernel segment starts at
-	   virtual address PAGE_OFFSET. */
-	memcpy(swapper_pg_dir, swapper_pg_dir + KERNEL_PGD_BOUNDARY,
-		sizeof(swapper_pg_dir [0]) * KERNEL_PGD_PTRS);
-
 	/*
-	 * Use `swapper_pg_dir' as our page directory.
+	 * Switch back to the initial page table.
 	 */
-	load_cr3(swapper_pg_dir);
+	load_cr3(initial_page_table);
 
 	/* Write 0x1234 to absolute memory location 0x472.  The BIOS reads
 	   this on booting to tell it to "Bypass memory test (also warm
@@ -389,41 +369,23 @@ void machine_real_restart(const unsigned char *code, int length)
 	   too. */
 	*((unsigned short *)0x472) = reboot_mode;
 
-	/* For the switch to real mode, copy some code to low memory.  It has
-	   to be in the first 64k because it is running in 16-bit mode, and it
-	   has to have the same physical and virtual address, because it turns
-	   off paging.  Copy it near the end of the first page, out of the way
-	   of BIOS variables. */
-	memcpy((void *)(0x1000 - sizeof(real_mode_switch) - 100),
-		real_mode_switch, sizeof (real_mode_switch));
-	memcpy((void *)(0x1000 - 100), code, length);
+	/* Patch the GDT in the low memory trampoline */
+	lowmem_gdt = TRAMPOLINE_SYM(machine_real_restart_gdt);
 
-	/* Set up the IDT for real mode. */
-	load_idt(&real_mode_idt);
+	restart_va = TRAMPOLINE_SYM(machine_real_restart_asm);
+	restart_pa = virt_to_phys(restart_va);
+	restart_lowmem = (void (*)(unsigned int))restart_pa;
 
-	/* Set up a GDT from which we can load segment descriptors for real
-	   mode.  The GDT is not used in real mode; it is just needed here to
-	   prepare the descriptors. */
-	load_gdt(&real_mode_gdt);
+	/* GDT[0]: GDT self-pointer */
+	lowmem_gdt[0] =
+		(u64)(sizeof(machine_real_restart_gdt) - 1) +
+		((u64)virt_to_phys(lowmem_gdt) << 16);
+	/* GDT[1]: 64K real mode code segment */
+	lowmem_gdt[1] =
+		GDT_ENTRY(0x009b, restart_pa, 0xffff);
 
-	/* Load the data segment registers, and thus the descriptors ready for
-	   real mode.  The base address of each segment is 0x100, 16 times the
-	   selector value being loaded here.  This is so that the segment
-	   registers don't have to be reloaded after switching to real mode:
-	   the values are consistent for real mode operation already. */
-	__asm__ __volatile__ ("movl $0x0010,%%eax\n"
-				"\tmovl %%eax,%%ds\n"
-				"\tmovl %%eax,%%es\n"
-				"\tmovl %%eax,%%fs\n"
-				"\tmovl %%eax,%%gs\n"
-				"\tmovl %%eax,%%ss" : : : "eax");
-
-	/* Jump to the 16-bit code that we copied earlier.  It disables paging
-	   and the cache, switches to real mode, and jumps to the BIOS reset
-	   entry point. */
-	__asm__ __volatile__ ("ljmp $0x0008,%0"
-				:
-				: "i" ((void *)(0x1000 - sizeof (real_mode_switch) - 100)));
+	/* Jump to the identity-mapped low memory code */
+	restart_lowmem(type);
 }
 #ifdef CONFIG_APM_MODULE
 EXPORT_SYMBOL(machine_real_restart);
@@ -477,12 +439,49 @@ static struct dmi_system_id __initdata pci_reboot_dmi_table[] = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "iMac9,1"),
 		},
 	},
+	{	/* Handle problems with rebooting on the Latitude E6320. */
+		.callback = set_pci_reboot,
+		.ident = "Dell Latitude E6320",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Latitude E6320"),
+		},
+	},
+	{	/* Handle problems with rebooting on the Latitude E5420. */
+		.callback = set_pci_reboot,
+		.ident = "Dell Latitude E5420",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Latitude E5420"),
+		},
+	},
+	{	/* Handle problems with rebooting on the Latitude E6420. */
+		.callback = set_pci_reboot,
+		.ident = "Dell Latitude E6420",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Latitude E6420"),
+		},
+	},
+	{	/* Handle problems with rebooting on the OptiPlex 990. */
+		.callback = set_pci_reboot,
+		.ident = "Dell OptiPlex 990",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "OptiPlex 990"),
+		},
+	},
 	{ }
 };
 
 static int __init pci_reboot_init(void)
 {
-	dmi_check_system(pci_reboot_dmi_table);
+	/* Only do the DMI check if reboot_type hasn't been overridden
+	 * on the command line
+	 */
+	if (reboot_default) {
+		dmi_check_system(pci_reboot_dmi_table);
+	}
 	return 0;
 }
 core_initcall(pci_reboot_init);
@@ -498,7 +497,7 @@ static inline void kb_wait(void)
 	}
 }
 
-static void vmxoff_nmi(int cpu, struct die_args *args)
+static void vmxoff_nmi(int cpu, struct pt_regs *regs)
 {
 	cpu_emergency_vmxoff();
 }
@@ -544,9 +543,24 @@ void __attribute__((weak)) mach_reboot_fixups(void)
 {
 }
 
+/*
+ * Windows compatible x86 hardware expects the following on reboot:
+ *
+ * 1) If the FADT has the ACPI reboot register flag set, try it
+ * 2) If still alive, write to the keyboard controller
+ * 3) If still alive, write to the ACPI reboot register again
+ * 4) If still alive, write to the keyboard controller again
+ *
+ * If the machine is still alive at this stage, it gives up. We default to
+ * following the same pattern, except that if we're still alive after (4) we'll
+ * try to force a triple fault and then cycle between hitting the keyboard
+ * controller and doing that
+ */
 static void native_machine_emergency_restart(void)
 {
 	int i;
+	int attempt = 0;
+	int orig_reboot_type = reboot_type;
 
 	if (reboot_emergency)
 		emergency_vmx_disable_all();
@@ -568,6 +582,13 @@ static void native_machine_emergency_restart(void)
 				outb(0xfe, 0x64); /* pulse reset low */
 				udelay(50);
 			}
+			if (attempt == 0 && orig_reboot_type == BOOT_ACPI) {
+				attempt = 1;
+				reboot_type = BOOT_ACPI;
+			} else {
+				reboot_type = BOOT_TRIPLE;
+			}
+			break;
 
 		case BOOT_TRIPLE:
 			load_idt(&no_idt);
@@ -578,7 +599,7 @@ static void native_machine_emergency_restart(void)
 
 #ifdef CONFIG_X86_32
 		case BOOT_BIOS:
-			machine_real_restart(jump_to_bios, sizeof(jump_to_bios));
+			machine_real_restart(MRR_BIOS);
 
 			reboot_type = BOOT_KBD;
 			break;
@@ -641,7 +662,7 @@ void native_machine_shutdown(void)
 	/* O.K Now that I'm on the appropriate processor,
 	 * stop all of the others.
 	 */
-	smp_send_stop();
+	stop_other_cpus();
 #endif
 
 	lapic_shutdown();
@@ -748,13 +769,9 @@ static nmi_shootdown_cb shootdown_callback;
 
 static atomic_t waiting_for_crash_ipi;
 
-static int crash_nmi_callback(struct notifier_block *self,
-			unsigned long val, void *data)
+static int crash_nmi_callback(unsigned int val, struct pt_regs *regs)
 {
 	int cpu;
-
-	if (val != DIE_NMI_IPI)
-		return NOTIFY_OK;
 
 	cpu = raw_smp_processor_id();
 
@@ -763,10 +780,10 @@ static int crash_nmi_callback(struct notifier_block *self,
 	 * an NMI if system was initially booted with nmi_watchdog parameter.
 	 */
 	if (cpu == crashing_cpu)
-		return NOTIFY_STOP;
+		return NMI_HANDLED;
 	local_irq_disable();
 
-	shootdown_callback(cpu, (struct die_args *)data);
+	shootdown_callback(cpu, regs);
 
 	atomic_dec(&waiting_for_crash_ipi);
 	/* Assume hlt works */
@@ -774,17 +791,13 @@ static int crash_nmi_callback(struct notifier_block *self,
 	for (;;)
 		cpu_relax();
 
-	return 1;
+	return NMI_HANDLED;
 }
 
 static void smp_send_nmi_allbutself(void)
 {
 	apic->send_IPI_allbutself(NMI_VECTOR);
 }
-
-static struct notifier_block crash_nmi_nb = {
-	.notifier_call = crash_nmi_callback,
-};
 
 /* Halt all other CPUs, calling the specified function on each of them
  *
@@ -804,7 +817,8 @@ void nmi_shootdown_cpus(nmi_shootdown_cb callback)
 
 	atomic_set(&waiting_for_crash_ipi, num_online_cpus() - 1);
 	/* Would it be better to replace the trap vector here? */
-	if (register_die_notifier(&crash_nmi_nb))
+	if (register_nmi_handler(NMI_LOCAL, crash_nmi_callback,
+				 NMI_FLAG_FIRST, "crash"))
 		return;		/* return what? */
 	/* Ensure the new callback function is set before sending
 	 * out the NMI

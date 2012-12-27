@@ -19,6 +19,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #define MODULE_NAME "conex"
 
 #include "gspca.h"
@@ -129,7 +131,7 @@ static void reg_r(struct gspca_dev *gspca_dev,
 
 #ifdef GSPCA_DEBUG
 	if (len > USB_BUF_SZ) {
-		err("reg_r: buffer overflow");
+		pr_err("reg_r: buffer overflow\n");
 		return;
 	}
 #endif
@@ -169,7 +171,7 @@ static void reg_w(struct gspca_dev *gspca_dev,
 
 #ifdef GSPCA_DEBUG
 	if (len > USB_BUF_SZ) {
-		err("reg_w: buffer overflow");
+		pr_err("reg_w: buffer overflow\n");
 		return;
 	}
 	PDEBUG(D_USBO, "reg write [%02x] = %02x..", index, *buffer);
@@ -687,7 +689,7 @@ static void cx11646_jpeg(struct gspca_dev*gspca_dev)
 	reg_w_val(gspca_dev, 0x00c0, 0x00);
 	reg_r(gspca_dev, 0x0001, 1);
 	length = 8;
-	switch (gspca_dev->cam.cam_mode[(int) gspca_dev->curr_mode].priv) {
+	switch (gspca_dev->cam.cam_mode[gspca_dev->curr_mode].priv) {
 	case 0:
 		for (i = 0; i < 27; i++) {
 			if (i == 26)
@@ -901,7 +903,7 @@ static void sd_pkt_scan(struct gspca_dev *gspca_dev,
 	gspca_frame_add(gspca_dev, INTER_PACKET, data, len);
 }
 
-static void setbrightness(struct gspca_dev*gspca_dev)
+static void setbrightness(struct gspca_dev *gspca_dev)
 {
 	struct sd *sd = (struct sd *) gspca_dev;
 	__u8 regE5cbx[] = { 0x88, 0x00, 0xd4, 0x01, 0x88, 0x01, 0x01, 0x01 };
@@ -924,7 +926,7 @@ static void setbrightness(struct gspca_dev*gspca_dev)
 	reg_w_val(gspca_dev, 0x0070, reg70);
 }
 
-static void setcontrast(struct gspca_dev*gspca_dev)
+static void setcontrast(struct gspca_dev *gspca_dev)
 {
 	struct sd *sd = (struct sd *) gspca_dev;
 	__u8 regE5acx[] = { 0x88, 0x0a, 0x0c, 0x01 };	/* seem MSB */
@@ -1040,14 +1042,14 @@ static const struct sd_desc sd_desc = {
 };
 
 /* -- module initialisation -- */
-static const struct usb_device_id device_table[] __devinitconst = {
+static const struct usb_device_id device_table[] = {
 	{USB_DEVICE(0x0572, 0x0041)},
 	{}
 };
 MODULE_DEVICE_TABLE(usb, device_table);
 
 /* -- device connect -- */
-static int __devinit sd_probe(struct usb_interface *intf,
+static int sd_probe(struct usb_interface *intf,
 			const struct usb_device_id *id)
 {
 	return gspca_dev_probe(intf, id, &sd_desc, sizeof(struct sd),
@@ -1065,21 +1067,4 @@ static struct usb_driver sd_driver = {
 #endif
 };
 
-/* -- module insert / remove -- */
-static int __init sd_mod_init(void)
-{
-	int ret;
-	ret = usb_register(&sd_driver);
-	if (ret < 0)
-		return ret;
-	PDEBUG(D_PROBE, "registered");
-	return 0;
-}
-static void __exit sd_mod_exit(void)
-{
-	usb_deregister(&sd_driver);
-	PDEBUG(D_PROBE, "deregistered");
-}
-
-module_init(sd_mod_init);
-module_exit(sd_mod_exit);
+module_usb_driver(sd_driver);

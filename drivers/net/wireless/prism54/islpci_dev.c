@@ -18,6 +18,7 @@
  *
  */
 
+#include <linux/hardirq.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 
@@ -630,7 +631,7 @@ islpci_alloc_memory(islpci_private *priv)
 	printk(KERN_DEBUG "islpci_alloc_memory\n");
 #endif
 
-	/* remap the PCI device base address to accessable */
+	/* remap the PCI device base address to accessible */
 	if (!(priv->device_base =
 	      ioremap(pci_resource_start(priv->pdev, 0),
 		      ISL38XX_PCI_MEM_SIZE))) {
@@ -709,7 +710,7 @@ islpci_alloc_memory(islpci_private *priv)
 				   PCI_DMA_FROMDEVICE);
 		if (!priv->pci_map_rx_address[counter]) {
 			/* error mapping the buffer to device
-			   accessable memory address */
+			   accessible memory address */
 			printk(KERN_ERR "failed to map skb DMA'able\n");
 			goto out_free;
 		}
@@ -773,7 +774,7 @@ islpci_free_memory(islpci_private *priv)
 		priv->data_low_rx[counter] = NULL;
 	}
 
-	/* Free the acces control list and the WPA list */
+	/* Free the access control list and the WPA list */
 	prism54_acl_clean(&priv->acl);
 	prism54_wpa_bss_ie_clean(priv);
 	mgt_clean(priv);
@@ -792,8 +793,8 @@ islpci_set_multicast_list(struct net_device *dev)
 static void islpci_ethtool_get_drvinfo(struct net_device *dev,
                                        struct ethtool_drvinfo *info)
 {
-	strcpy(info->driver, DRV_NAME);
-	strcpy(info->version, DRV_VERSION);
+	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strlcpy(info->version, DRV_VERSION, sizeof(info->version));
 }
 
 static const struct ethtool_ops islpci_ethtool_ops = {
@@ -803,7 +804,6 @@ static const struct ethtool_ops islpci_ethtool_ops = {
 static const struct net_device_ops islpci_netdev_ops = {
 	.ndo_open 		= islpci_open,
 	.ndo_stop		= islpci_close,
-	.ndo_do_ioctl		= prism54_ioctl,
 	.ndo_start_xmit		= islpci_eth_transmit,
 	.ndo_tx_timeout		= islpci_eth_tx_timeout,
 	.ndo_set_mac_address 	= prism54_set_mac_address,

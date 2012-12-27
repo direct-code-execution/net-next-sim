@@ -364,6 +364,7 @@ pptp_inbound_pkt(struct sk_buff *skb,
 		break;
 
 	case PPTP_WAN_ERROR_NOTIFY:
+	case PPTP_SET_LINK_INFO:
 	case PPTP_ECHO_REQUEST:
 	case PPTP_ECHO_REPLY:
 		/* I don't have to explain these ;) */
@@ -519,8 +520,7 @@ conntrack_pptp_help(struct sk_buff *skb, unsigned int protoff,
 	u_int16_t msg;
 
 	/* don't do any tracking before tcp handshake complete */
-	if (ctinfo != IP_CT_ESTABLISHED &&
-	    ctinfo != IP_CT_ESTABLISHED + IP_CT_IS_REPLY)
+	if (ctinfo != IP_CT_ESTABLISHED && ctinfo != IP_CT_ESTABLISHED_REPLY)
 		return NF_ACCEPT;
 
 	nexthdr_off = protoff;

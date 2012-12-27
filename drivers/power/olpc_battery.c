@@ -201,6 +201,72 @@ static int olpc_bat_get_tech(union power_supply_propval *val)
 	return ret;
 }
 
+static int olpc_bat_get_charge_full_design(union power_supply_propval *val)
+{
+	uint8_t ec_byte;
+	union power_supply_propval tech;
+	int ret, mfr;
+
+	ret = olpc_bat_get_tech(&tech);
+	if (ret)
+		return ret;
+
+	ec_byte = BAT_ADDR_MFR_TYPE;
+	ret = olpc_ec_cmd(EC_BAT_EEPROM, &ec_byte, 1, &ec_byte, 1);
+	if (ret)
+		return ret;
+
+	mfr = ec_byte >> 4;
+
+	switch (tech.intval) {
+	case POWER_SUPPLY_TECHNOLOGY_NiMH:
+		switch (mfr) {
+		case 1: /* Gold Peak */
+			val->intval = 3000000*.8;
+			break;
+		default:
+			return -EIO;
+		}
+		break;
+
+	case POWER_SUPPLY_TECHNOLOGY_LiFe:
+		switch (mfr) {
+		case 1: /* Gold Peak */
+			val->intval = 2800000;
+			break;
+		case 2: /* BYD */
+			val->intval = 3100000;
+			break;
+		default:
+			return -EIO;
+		}
+		break;
+
+	default:
+		return -EIO;
+	}
+
+	return ret;
+}
+
+static int olpc_bat_get_charge_now(union power_supply_propval *val)
+{
+	uint8_t soc;
+	union power_supply_propval full;
+	int ret;
+
+	ret = olpc_ec_cmd(EC_BAT_SOC, NULL, 0, &soc, 1);
+	if (ret)
+		return ret;
+
+	ret = olpc_bat_get_charge_full_design(&full);
+	if (ret)
+		return ret;
+
+	val->intval = soc * (full.intval / 100);
+	return 0;
+}
+
 /*********************************************************************
  *		Battery properties
  *********************************************************************/
@@ -267,18 +333,20 @@ static int olpc_bat_get_property(struct power_supply *psy,
 			return ret;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_AVG:
+	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		ret = olpc_ec_cmd(EC_BAT_VOLTAGE, NULL, 0, (void *)&ec_word, 2);
 		if (ret)
 			return ret;
 
-		val->intval = (int)be16_to_cpu(ec_word) * 9760L / 32;
+		val->intval = (s16)be16_to_cpu(ec_word) * 9760L / 32;
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_AVG:
+	case POWER_SUPPLY_PROP_CURRENT_NOW:
 		ret = olpc_ec_cmd(EC_BAT_CURRENT, NULL, 0, (void *)&ec_word, 2);
 		if (ret)
 			return ret;
 
-		val->intval = (int)be16_to_cpu(ec_word) * 15625L / 120;
+		val->intval = (s16)be16_to_cpu(ec_word) * 15625L / 120;
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
 		ret = olpc_ec_cmd(EC_BAT_SOC, NULL, 0, &ec_byte, 1);
@@ -294,12 +362,22 @@ static int olpc_bat_get_property(struct power_supply *psy,
 		else
 			val->intval = POWER_SUPPLY_CAPACITY_LEVEL_NORMAL;
 		break;
+	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
+		ret = olpc_bat_get_charge_full_design(val);
+		if (ret)
+			return ret;
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_NOW:
+		ret = olpc_bat_get_charge_now(val);
+		if (ret)
+			return ret;
+		break;
 	case POWER_SUPPLY_PROP_TEMP:
 		ret = olpc_ec_cmd(EC_BAT_TEMP, NULL, 0, (void *)&ec_word, 2);
 		if (ret)
 			return ret;
 
-		val->intval = (int)be16_to_cpu(ec_word) * 100 / 256;
+		val->intval = (s16)be16_to_cpu(ec_word) * 100 / 256;
 		break;
 	case POWER_SUPPLY_PROP_TEMP_AMBIENT:
 		ret = olpc_ec_cmd(EC_AMB_TEMP, NULL, 0, (void *)&ec_word, 2);
@@ -313,7 +391,7 @@ static int olpc_bat_get_property(struct power_supply *psy,
 		if (ret)
 			return ret;
 
-		val->intval = (int)be16_to_cpu(ec_word) * 6250 / 15;
+		val->intval = (s16)be16_to_cpu(ec_word) * 6250 / 15;
 		break;
 	case POWER_SUPPLY_PROP_SERIAL_NUMBER:
 		ret = olpc_ec_cmd(EC_BAT_SERIAL, NULL, 0, (void *)&ser_buf, 8);
@@ -331,18 +409,43 @@ static int olpc_bat_get_property(struct power_supply *psy,
 	return ret;
 }
 
-static enum power_supply_property olpc_bat_props[] = {
+static enum power_supply_property olpc_xo1_bat_props[] = {
 	POWER_SUPPLY_PROP_STATUS,
 	POWER_SUPPLY_PROP_CHARGE_TYPE,
 	POWER_SUPPLY_PROP_PRESENT,
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
 	POWER_SUPPLY_PROP_VOLTAGE_AVG,
+	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_CURRENT_AVG,
+	POWER_SUPPLY_PROP_CURRENT_NOW,
 	POWER_SUPPLY_PROP_CAPACITY,
 	POWER_SUPPLY_PROP_CAPACITY_LEVEL,
+	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
+	POWER_SUPPLY_PROP_CHARGE_NOW,
 	POWER_SUPPLY_PROP_TEMP,
 	POWER_SUPPLY_PROP_TEMP_AMBIENT,
+	POWER_SUPPLY_PROP_MANUFACTURER,
+	POWER_SUPPLY_PROP_SERIAL_NUMBER,
+	POWER_SUPPLY_PROP_CHARGE_COUNTER,
+};
+
+/* XO-1.5 does not have ambient temperature property */
+static enum power_supply_property olpc_xo15_bat_props[] = {
+	POWER_SUPPLY_PROP_STATUS,
+	POWER_SUPPLY_PROP_CHARGE_TYPE,
+	POWER_SUPPLY_PROP_PRESENT,
+	POWER_SUPPLY_PROP_HEALTH,
+	POWER_SUPPLY_PROP_TECHNOLOGY,
+	POWER_SUPPLY_PROP_VOLTAGE_AVG,
+	POWER_SUPPLY_PROP_VOLTAGE_NOW,
+	POWER_SUPPLY_PROP_CURRENT_AVG,
+	POWER_SUPPLY_PROP_CURRENT_NOW,
+	POWER_SUPPLY_PROP_CAPACITY,
+	POWER_SUPPLY_PROP_CAPACITY_LEVEL,
+	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
+	POWER_SUPPLY_PROP_CHARGE_NOW,
+	POWER_SUPPLY_PROP_TEMP,
 	POWER_SUPPLY_PROP_MANUFACTURER,
 	POWER_SUPPLY_PROP_SERIAL_NUMBER,
 	POWER_SUPPLY_PROP_CHARGE_COUNTER,
@@ -416,30 +519,34 @@ static struct device_attribute olpc_bat_error = {
  *		Initialisation
  *********************************************************************/
 
-static struct platform_device *bat_pdev;
-
 static struct power_supply olpc_bat = {
-	.properties = olpc_bat_props,
-	.num_properties = ARRAY_SIZE(olpc_bat_props),
+	.name = "olpc-battery",
 	.get_property = olpc_bat_get_property,
 	.use_for_apm = 1,
 };
 
-void olpc_battery_trigger_uevent(unsigned long cause)
+static int olpc_battery_suspend(struct platform_device *pdev,
+				pm_message_t state)
 {
-	if (cause & EC_SCI_SRC_ACPWR)
-		kobject_uevent(&olpc_ac.dev->kobj, KOBJ_CHANGE);
-	if (cause & (EC_SCI_SRC_BATERR|EC_SCI_SRC_BATSOC|EC_SCI_SRC_BATTERY))
-		kobject_uevent(&olpc_bat.dev->kobj, KOBJ_CHANGE);
+	if (device_may_wakeup(olpc_ac.dev))
+		olpc_ec_wakeup_set(EC_SCI_SRC_ACPWR);
+	else
+		olpc_ec_wakeup_clear(EC_SCI_SRC_ACPWR);
+
+	if (device_may_wakeup(olpc_bat.dev))
+		olpc_ec_wakeup_set(EC_SCI_SRC_BATTERY | EC_SCI_SRC_BATSOC
+				   | EC_SCI_SRC_BATERR);
+	else
+		olpc_ec_wakeup_clear(EC_SCI_SRC_BATTERY | EC_SCI_SRC_BATSOC
+				     | EC_SCI_SRC_BATERR);
+
+	return 0;
 }
 
-static int __init olpc_bat_init(void)
+static int __devinit olpc_battery_probe(struct platform_device *pdev)
 {
-	int ret = 0;
+	int ret;
 	uint8_t status;
-
-	if (!olpc_platform_info.ecver)
-		return -ENXIO;
 
 	/*
 	 * We've seen a number of EC protocol changes; this driver requires
@@ -457,17 +564,19 @@ static int __init olpc_bat_init(void)
 
 	/* Ignore the status. It doesn't actually matter */
 
-	bat_pdev = platform_device_register_simple("olpc-battery", 0, NULL, 0);
-	if (IS_ERR(bat_pdev))
-		return PTR_ERR(bat_pdev);
-
-	ret = power_supply_register(&bat_pdev->dev, &olpc_ac);
+	ret = power_supply_register(&pdev->dev, &olpc_ac);
 	if (ret)
-		goto ac_failed;
+		return ret;
 
-	olpc_bat.name = bat_pdev->name;
+	if (olpc_board_at_least(olpc_board_pre(0xd0))) { /* XO-1.5 */
+		olpc_bat.properties = olpc_xo15_bat_props;
+		olpc_bat.num_properties = ARRAY_SIZE(olpc_xo15_bat_props);
+	} else { /* XO-1 */
+		olpc_bat.properties = olpc_xo1_bat_props;
+		olpc_bat.num_properties = ARRAY_SIZE(olpc_xo1_bat_props);
+	}
 
-	ret = power_supply_register(&bat_pdev->dev, &olpc_bat);
+	ret = power_supply_register(&pdev->dev, &olpc_bat);
 	if (ret)
 		goto battery_failed;
 
@@ -479,7 +588,12 @@ static int __init olpc_bat_init(void)
 	if (ret)
 		goto error_failed;
 
-	goto success;
+	if (olpc_ec_wakeup_available()) {
+		device_set_wakeup_capable(olpc_ac.dev, true);
+		device_set_wakeup_capable(olpc_bat.dev, true);
+	}
+
+	return 0;
 
 error_failed:
 	device_remove_bin_file(olpc_bat.dev, &olpc_bat_eeprom);
@@ -487,23 +601,36 @@ eeprom_failed:
 	power_supply_unregister(&olpc_bat);
 battery_failed:
 	power_supply_unregister(&olpc_ac);
-ac_failed:
-	platform_device_unregister(bat_pdev);
-success:
 	return ret;
 }
 
-static void __exit olpc_bat_exit(void)
+static int __devexit olpc_battery_remove(struct platform_device *pdev)
 {
 	device_remove_file(olpc_bat.dev, &olpc_bat_error);
 	device_remove_bin_file(olpc_bat.dev, &olpc_bat_eeprom);
 	power_supply_unregister(&olpc_bat);
 	power_supply_unregister(&olpc_ac);
-	platform_device_unregister(bat_pdev);
+	return 0;
 }
 
-module_init(olpc_bat_init);
-module_exit(olpc_bat_exit);
+static const struct of_device_id olpc_battery_ids[] __devinitconst = {
+	{ .compatible = "olpc,xo1-battery" },
+	{}
+};
+MODULE_DEVICE_TABLE(of, olpc_battery_ids);
+
+static struct platform_driver olpc_battery_driver = {
+	.driver = {
+		.name = "olpc-battery",
+		.owner = THIS_MODULE,
+		.of_match_table = olpc_battery_ids,
+	},
+	.probe = olpc_battery_probe,
+	.remove = __devexit_p(olpc_battery_remove),
+	.suspend = olpc_battery_suspend,
+};
+
+module_platform_driver(olpc_battery_driver);
 
 MODULE_AUTHOR("David Woodhouse <dwmw2@infradead.org>");
 MODULE_LICENSE("GPL");

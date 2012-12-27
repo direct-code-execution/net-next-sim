@@ -195,9 +195,9 @@
 		 * to cover the pipeline delay.
 		 */
 		.set	mips32
-		mfc0	v1, CP0_TCSTATUS
+		mfc0	k0, CP0_TCSTATUS
 		.set	mips0
-		LONG_S	v1, PT_TCSTATUS(sp)
+		LONG_S	k0, PT_TCSTATUS(sp)
 #endif /* CONFIG_MIPS_MT_SMTC */
 		LONG_S	$4, PT_R4(sp)
 		LONG_S	$5, PT_R5(sp)
@@ -346,7 +346,7 @@
 		 * we can't dispatch it directly without trashing
 		 * some registers, so we'll try to detect this unlikely
 		 * case and program a software interrupt in the VPE,
-		 * as would be done for a cross-VPE IPI.  To accomodate
+		 * as would be done for a cross-VPE IPI.  To accommodate
 		 * the handling of that case, we're doing a DVPE instead
 		 * of just a DMT here to protect against other threads.
 		 * This is a lot of cruft to cover a tiny window.

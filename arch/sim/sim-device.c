@@ -31,7 +31,6 @@ static u32 always_on(struct net_device *dev)
 
 static const struct ethtool_ops sim_ethtool_ops = {
   .get_link               = always_on,
-  .get_sg                 = always_on,
 };
 
 static const struct net_device_ops sim_dev_ops = {
@@ -50,7 +49,6 @@ static void sim_dev_setup(struct net_device *dev)
   dev->flags              = 0; 
   //dev->priv_flags        &= ~IFF_XMIT_DST_RELEASE;
   dev->features           = 0
-    | NETIF_F_NO_CSUM
     | NETIF_F_HIGHDMA
     | NETIF_F_NETNS_LOCAL;
   // disabled  NETIF_F_TSO NETIF_F_SG  NETIF_F_FRAGLIST NETIF_F_LLTX

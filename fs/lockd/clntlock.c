@@ -14,7 +14,6 @@
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/svc.h>
 #include <linux/lockd/lockd.h>
-#include <linux/smp_lock.h>
 #include <linux/kthread.h>
 
 #define NLMDBG_FACILITY		NLMDBG_CLIENT
@@ -42,6 +41,7 @@ struct nlm_wait {
 };
 
 static LIST_HEAD(nlm_blocked);
+static DEFINE_SPINLOCK(nlm_blocked_lock);
 
 /**
  * nlmclnt_init - Set up per-NFS mount point lockd data structures
@@ -62,7 +62,8 @@ struct nlm_host *nlmclnt_init(const struct nlmclnt_initdata *nlm_init)
 
 	host = nlmclnt_lookup_host(nlm_init->address, nlm_init->addrlen,
 				   nlm_init->protocol, nlm_version,
-				   nlm_init->hostname, nlm_init->noresvport);
+				   nlm_init->hostname, nlm_init->noresvport,
+				   nlm_init->net);
 	if (host == NULL) {
 		lockd_down();
 		return ERR_PTR(-ENOLCK);
@@ -79,7 +80,7 @@ EXPORT_SYMBOL_GPL(nlmclnt_init);
  */
 void nlmclnt_done(struct nlm_host *host)
 {
-	nlm_release_host(host);
+	nlmclnt_release_host(host);
 	lockd_down();
 }
 EXPORT_SYMBOL_GPL(nlmclnt_done);
@@ -97,7 +98,10 @@ struct nlm_wait *nlmclnt_prepare_block(struct nlm_host *host, struct file_lock *
 		block->b_lock = fl;
 		init_waitqueue_head(&block->b_wait);
 		block->b_status = nlm_lck_blocked;
+
+		spin_lock(&nlm_blocked_lock);
 		list_add(&block->b_list, &nlm_blocked);
+		spin_unlock(&nlm_blocked_lock);
 	}
 	return block;
 }
@@ -106,7 +110,9 @@ void nlmclnt_finish_block(struct nlm_wait *block)
 {
 	if (block == NULL)
 		return;
+	spin_lock(&nlm_blocked_lock);
 	list_del(&block->b_list);
+	spin_unlock(&nlm_blocked_lock);
 	kfree(block);
 }
 
@@ -154,6 +160,7 @@ __be32 nlmclnt_grant(const struct sockaddr *addr, const struct nlm_lock *lock)
 	 * Look up blocked request based on arguments. 
 	 * Warning: must not use cookie to match it!
 	 */
+	spin_lock(&nlm_blocked_lock);
 	list_for_each_entry(block, &nlm_blocked, b_list) {
 		struct file_lock *fl_blocked = block->b_lock;
 
@@ -178,6 +185,7 @@ __be32 nlmclnt_grant(const struct sockaddr *addr, const struct nlm_lock *lock)
 		wake_up(&block->b_wait);
 		res = nlm_granted;
 	}
+	spin_unlock(&nlm_blocked_lock);
 	return res;
 }
 
@@ -216,10 +224,6 @@ reclaimer(void *ptr)
 	allow_signal(SIGKILL);
 
 	down_write(&host->h_rwsem);
-
-	/* This one ensures that our parent doesn't terminate while the
-	 * reclaim is in progress */
-	lock_kernel();
 	lockd_up();	/* note: this cannot fail as lockd is already running */
 
 	dprintk("lockd: reclaiming locks for host %s\n", host->h_name);
@@ -260,16 +264,17 @@ restart:
 	dprintk("NLM: done reclaiming locks for host %s\n", host->h_name);
 
 	/* Now, wake up all processes that sleep on a blocked lock */
+	spin_lock(&nlm_blocked_lock);
 	list_for_each_entry(block, &nlm_blocked, b_list) {
 		if (block->b_host == host) {
 			block->b_status = nlm_lck_denied_grace_period;
 			wake_up(&block->b_wait);
 		}
 	}
+	spin_unlock(&nlm_blocked_lock);
 
 	/* Release host handle after use */
-	nlm_release_host(host);
+	nlmclnt_release_host(host);
 	lockd_down();
-	unlock_kernel();
 	return 0;
 }

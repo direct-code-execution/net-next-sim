@@ -14,6 +14,7 @@
  */
 
 #include <crypto/internal/hash.h>
+#include <linux/module.h>
 #include "sha.h"
 #include "crypt_s390.h"
 
@@ -38,6 +39,7 @@ int s390_sha_update(struct shash_desc *desc, const u8 *data, unsigned int len)
 		BUG_ON(ret != bsize);
 		data += bsize - index;
 		len -= bsize - index;
+		index = 0;
 	}
 
 	/* process as many blocks as possible */

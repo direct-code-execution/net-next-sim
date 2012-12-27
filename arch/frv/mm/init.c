@@ -33,15 +33,12 @@
 #include <asm/segment.h>
 #include <asm/page.h>
 #include <asm/pgtable.h>
-#include <asm/system.h>
 #include <asm/mmu_context.h>
 #include <asm/virtconvert.h>
 #include <asm/sections.h>
 #include <asm/tlb.h>
 
 #undef DEBUG
-
-DEFINE_PER_CPU(struct mmu_gather, mmu_gathers);
 
 /*
  * BAD_PAGE is the page that is used for page faults when linux

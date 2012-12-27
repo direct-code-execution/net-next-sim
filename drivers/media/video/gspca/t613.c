@@ -26,8 +26,11 @@
  *			Costantino Leandro
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #define MODULE_NAME "t613"
 
+#include <linux/input.h>
 #include <linux/slab.h>
 #include "gspca.h"
 
@@ -55,6 +58,7 @@ struct sd {
 	u8 effect;
 
 	u8 sensor;
+	u8 button_pressed;
 };
 enum sensors {
 	SENSOR_OM6802,
@@ -92,8 +96,6 @@ static int sd_setmirror(struct gspca_dev *gspca_dev, __s32 val);
 static int sd_getmirror(struct gspca_dev *gspca_dev, __s32 *val);
 static int sd_seteffect(struct gspca_dev *gspca_dev, __s32 val);
 static int sd_geteffect(struct gspca_dev *gspca_dev, __s32 *val);
-static int sd_querymenu(struct gspca_dev *gspca_dev,
-			struct v4l2_querymenu *menu);
 
 static const struct ctrl sd_ctrls[] = {
 	{
@@ -487,7 +489,7 @@ static const u8 gamma_table[GAMMA_MAX][17] = {
 	{0x00, 0x02, 0x07, 0x0f, 0x18, 0x24, 0x30, 0x3f,	/* 3 */
 	 0x4f, 0x61, 0x73, 0x88, 0x9d, 0xb4, 0xcd, 0xe6,
 	 0xff},
-	{0x00, 0x04, 0x0B, 0x15, 0x20, 0x2d, 0x3b, 0x4a,	/* 4 */
+	{0x00, 0x04, 0x0b, 0x15, 0x20, 0x2d, 0x3b, 0x4a,	/* 4 */
 	 0x5b, 0x6c, 0x7f, 0x92, 0xa7, 0xbc, 0xd2, 0xe9,
 	 0xff},
 	{0x00, 0x07, 0x11, 0x15, 0x20, 0x2d, 0x48, 0x58,	/* 5 */
@@ -574,7 +576,7 @@ static void reg_w_buf(struct gspca_dev *gspca_dev,
 
 		tmpbuf = kmemdup(buffer, len, GFP_KERNEL);
 		if (!tmpbuf) {
-			err("Out of memory");
+			pr_err("Out of memory\n");
 			return;
 		}
 		usb_control_msg(gspca_dev->dev,
@@ -600,7 +602,7 @@ static void reg_w_ixbuf(struct gspca_dev *gspca_dev,
 	} else {
 		p = tmpbuf = kmalloc(len * 2, GFP_KERNEL);
 		if (!tmpbuf) {
-			err("Out of memory");
+			pr_err("Out of memory\n");
 			return;
 		}
 	}
@@ -654,7 +656,7 @@ static void om6802_sensor_init(struct gspca_dev *gspca_dev)
 	}
 	byte = reg_r(gspca_dev, 0x0063);
 	if (byte != 0x17) {
-		err("Bad sensor reset %02x", byte);
+		pr_err("Bad sensor reset %02x\n", byte);
 		/* continue? */
 	}
 
@@ -892,7 +894,7 @@ static int sd_init(struct gspca_dev *gspca_dev)
 		sd->sensor = SENSOR_OM6802;
 		break;
 	default:
-		PDEBUG(D_ERR|D_PROBE, "unknown sensor %04x", sensor_id);
+		pr_err("unknown sensor %04x\n", sensor_id);
 		return -EINVAL;
 	}
 
@@ -907,7 +909,7 @@ static int sd_init(struct gspca_dev *gspca_dev)
 				break;		/* OK */
 		}
 		if (i < 0) {
-			err("Bad sensor reset %02x", test_byte);
+			pr_err("Bad sensor reset %02x\n", test_byte);
 			return -EIO;
 		}
 		reg_w_buf(gspca_dev, n2, sizeof n2);
@@ -1095,15 +1097,35 @@ static void sd_stopN(struct gspca_dev *gspca_dev)
 		msleep(20);
 		reg_w(gspca_dev, 0x0309);
 	}
+#if defined(CONFIG_INPUT) || defined(CONFIG_INPUT_MODULE)
+	/* If the last button state is pressed, release it now! */
+	if (sd->button_pressed) {
+		input_report_key(gspca_dev->input_dev, KEY_CAMERA, 0);
+		input_sync(gspca_dev->input_dev);
+		sd->button_pressed = 0;
+	}
+#endif
 }
 
 static void sd_pkt_scan(struct gspca_dev *gspca_dev,
 			u8 *data,			/* isoc packet */
 			int len)			/* iso packet length */
 {
+	struct sd *sd = (struct sd *) gspca_dev;
 	int pkt_type;
 
 	if (data[0] == 0x5a) {
+#if defined(CONFIG_INPUT) || defined(CONFIG_INPUT_MODULE)
+		if (len > 20) {
+			u8 state = (data[20] & 0x80) ? 1 : 0;
+			if (sd->button_pressed != state) {
+				input_report_key(gspca_dev->input_dev,
+						 KEY_CAMERA, state);
+				input_sync(gspca_dev->input_dev);
+				sd->button_pressed = state;
+			}
+		}
+#endif
 		/* Control Packet, after this came the header again,
 		 * but extra bytes came in the packet before this,
 		 * sometimes an EOF arrives, sometimes not... */
@@ -1379,20 +1401,17 @@ static int sd_getlowlight(struct gspca_dev *gspca_dev, __s32 *val)
 static int sd_querymenu(struct gspca_dev *gspca_dev,
 			struct v4l2_querymenu *menu)
 {
+	static const char *freq_nm[3] = {"NoFliker", "50 Hz", "60 Hz"};
+
 	switch (menu->id) {
 	case V4L2_CID_POWER_LINE_FREQUENCY:
-		switch (menu->index) {
-		case 1:		/* V4L2_CID_POWER_LINE_FREQUENCY_50HZ */
-			strcpy((char *) menu->name, "50 Hz");
-			return 0;
-		case 2:		/* V4L2_CID_POWER_LINE_FREQUENCY_60HZ */
-			strcpy((char *) menu->name, "60 Hz");
-			return 0;
-		}
-		break;
+		if ((unsigned) menu->index >= ARRAY_SIZE(freq_nm))
+			break;
+		strcpy((char *) menu->name, freq_nm[menu->index]);
+		return 0;
 	case V4L2_CID_EFFECTS:
 		if ((unsigned) menu->index < ARRAY_SIZE(effects_control)) {
-			strncpy((char *) menu->name,
+			strlcpy((char *) menu->name,
 				effects_control[menu->index],
 				sizeof menu->name);
 			return 0;
@@ -1413,10 +1432,13 @@ static const struct sd_desc sd_desc = {
 	.stopN = sd_stopN,
 	.pkt_scan = sd_pkt_scan,
 	.querymenu = sd_querymenu,
+#if defined(CONFIG_INPUT) || defined(CONFIG_INPUT_MODULE)
+	.other_input = 1,
+#endif
 };
 
 /* -- module initialisation -- */
-static const __devinitdata struct usb_device_id device_table[] = {
+static const struct usb_device_id device_table[] = {
 	{USB_DEVICE(0x17a1, 0x0128)},
 	{}
 };
@@ -1441,21 +1463,4 @@ static struct usb_driver sd_driver = {
 #endif
 };
 
-/* -- module insert / remove -- */
-static int __init sd_mod_init(void)
-{
-	int ret;
-	ret = usb_register(&sd_driver);
-	if (ret < 0)
-		return ret;
-	PDEBUG(D_PROBE, "registered");
-	return 0;
-}
-static void __exit sd_mod_exit(void)
-{
-	usb_deregister(&sd_driver);
-	PDEBUG(D_PROBE, "deregistered");
-}
-
-module_init(sd_mod_init);
-module_exit(sd_mod_exit);
+module_usb_driver(sd_driver);

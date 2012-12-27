@@ -45,7 +45,7 @@
 
 MODULE_AUTHOR("VMware, Inc.");
 MODULE_DESCRIPTION("VMware Memory Control (Balloon) Driver");
-MODULE_VERSION("1.2.1.1-k");
+MODULE_VERSION("1.2.1.3-k");
 MODULE_ALIAS("dmi:*:svnVMware*:*");
 MODULE_ALIAS("vmware_vmmemctl");
 MODULE_LICENSE("GPL");
@@ -151,7 +151,7 @@ MODULE_LICENSE("GPL");
 struct vmballoon_stats {
 	unsigned int timer;
 
-	/* allocation statustics */
+	/* allocation statistics */
 	unsigned int alloc;
 	unsigned int alloc_fail;
 	unsigned int sleep_alloc;
@@ -215,7 +215,6 @@ struct vmballoon {
 };
 
 static struct vmballoon balloon;
-static struct workqueue_struct *vmballoon_wq;
 
 /*
  * Send "start" command to the host, communicating supported version
@@ -315,24 +314,25 @@ static bool vmballoon_send_get_target(struct vmballoon *b, u32 *new_target)
  * fear that guest will need it. Host may reject some pages, we need to
  * check the return value and maybe submit a different page.
  */
-static bool vmballoon_send_lock_page(struct vmballoon *b, unsigned long pfn)
+static int vmballoon_send_lock_page(struct vmballoon *b, unsigned long pfn,
+				     unsigned int *hv_status)
 {
 	unsigned long status, dummy;
 	u32 pfn32;
 
 	pfn32 = (u32)pfn;
 	if (pfn32 != pfn)
-		return false;
+		return -1;
 
 	STATS_INC(b->stats.lock);
 
-	status = VMWARE_BALLOON_CMD(LOCK, pfn, dummy);
+	*hv_status = status = VMWARE_BALLOON_CMD(LOCK, pfn, dummy);
 	if (vmballoon_check_status(b, status))
-		return true;
+		return 0;
 
 	pr_debug("%s - ppn %lx, hv returns %ld\n", __func__, pfn, status);
 	STATS_INC(b->stats.lock_fail);
-	return false;
+	return 1;
 }
 
 /*
@@ -410,7 +410,9 @@ static int vmballoon_reserve_page(struct vmballoon *b, bool can_sleep)
 {
 	struct page *page;
 	gfp_t flags;
-	bool locked = false;
+	unsigned int hv_status;
+	int locked;
+	flags = can_sleep ? VMW_PAGE_ALLOC_CANSLEEP : VMW_PAGE_ALLOC_NOSLEEP;
 
 	do {
 		if (!can_sleep)
@@ -418,7 +420,6 @@ static int vmballoon_reserve_page(struct vmballoon *b, bool can_sleep)
 		else
 			STATS_INC(b->stats.sleep_alloc);
 
-		flags = can_sleep ? VMW_PAGE_ALLOC_CANSLEEP : VMW_PAGE_ALLOC_NOSLEEP;
 		page = alloc_page(flags);
 		if (!page) {
 			if (!can_sleep)
@@ -429,11 +430,12 @@ static int vmballoon_reserve_page(struct vmballoon *b, bool can_sleep)
 		}
 
 		/* inform monitor */
-		locked = vmballoon_send_lock_page(b, page_to_pfn(page));
-		if (!locked) {
+		locked = vmballoon_send_lock_page(b, page_to_pfn(page), &hv_status);
+		if (locked > 0) {
 			STATS_INC(b->stats.refused_alloc);
 
-			if (b->reset_required) {
+			if (hv_status == VMW_BALLOON_ERROR_RESET ||
+			    hv_status == VMW_BALLOON_ERROR_PPN_NOTNEEDED) {
 				__free_page(page);
 				return -EIO;
 			}
@@ -447,7 +449,7 @@ static int vmballoon_reserve_page(struct vmballoon *b, bool can_sleep)
 			if (++b->n_refused_pages >= VMW_BALLOON_MAX_REFUSED)
 				return -EIO;
 		}
-	} while (!locked);
+	} while (locked != 0);
 
 	/* track allocated page */
 	list_add(&page->lru, &b->pages);
@@ -671,7 +673,12 @@ static void vmballoon_work(struct work_struct *work)
 			vmballoon_deflate(b);
 	}
 
-	queue_delayed_work(vmballoon_wq, dwork, round_jiffies_relative(HZ));
+	/*
+	 * We are using a freezable workqueue so that balloon operations are
+	 * stopped while the system transitions to/from sleep/hibernation.
+	 */
+	queue_delayed_work(system_freezable_wq,
+			   dwork, round_jiffies_relative(HZ));
 }
 
 /*
@@ -782,12 +789,6 @@ static int __init vmballoon_init(void)
 	if (x86_hyper != &x86_hyper_vmware)
 		return -ENODEV;
 
-	vmballoon_wq = create_freezeable_workqueue("vmmemctl");
-	if (!vmballoon_wq) {
-		pr_err("failed to create workqueue\n");
-		return -ENOMEM;
-	}
-
 	INIT_LIST_HEAD(&balloon.pages);
 	INIT_LIST_HEAD(&balloon.refused_pages);
 
@@ -802,34 +803,27 @@ static int __init vmballoon_init(void)
 	 */
 	if (!vmballoon_send_start(&balloon)) {
 		pr_err("failed to send start command to the host\n");
-		error = -EIO;
-		goto fail;
+		return -EIO;
 	}
 
 	if (!vmballoon_send_guest_id(&balloon)) {
 		pr_err("failed to send guest ID to the host\n");
-		error = -EIO;
-		goto fail;
+		return -EIO;
 	}
 
 	error = vmballoon_debugfs_init(&balloon);
 	if (error)
-		goto fail;
+		return error;
 
-	queue_delayed_work(vmballoon_wq, &balloon.dwork, 0);
+	queue_delayed_work(system_freezable_wq, &balloon.dwork, 0);
 
 	return 0;
-
-fail:
-	destroy_workqueue(vmballoon_wq);
-	return error;
 }
 module_init(vmballoon_init);
 
 static void __exit vmballoon_exit(void)
 {
 	cancel_delayed_work_sync(&balloon.dwork);
-	destroy_workqueue(vmballoon_wq);
 
 	vmballoon_debugfs_exit(&balloon);
 

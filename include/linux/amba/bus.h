@@ -16,10 +16,13 @@
 
 #include <linux/clk.h>
 #include <linux/device.h>
+#include <linux/mod_devicetable.h>
 #include <linux/err.h>
 #include <linux/resource.h>
+#include <linux/regulator/consumer.h>
 
 #define AMBA_NR_IRQS	2
+#define AMBA_CID	0xb105f00d
 
 struct clk;
 
@@ -32,20 +35,14 @@ struct amba_device {
 	unsigned int		irq[AMBA_NR_IRQS];
 };
 
-struct amba_id {
-	unsigned int		id;
-	unsigned int		mask;
-	void			*data;
-};
-
 struct amba_driver {
 	struct device_driver	drv;
-	int			(*probe)(struct amba_device *, struct amba_id *);
+	int			(*probe)(struct amba_device *, const struct amba_id *);
 	int			(*remove)(struct amba_device *);
 	void			(*shutdown)(struct amba_device *);
 	int			(*suspend)(struct amba_device *, pm_message_t);
 	int			(*resume)(struct amba_device *);
-	struct amba_id		*id_table;
+	const struct amba_id	*id_table;
 };
 
 enum amba_vendor {
@@ -53,11 +50,18 @@ enum amba_vendor {
 	AMBA_VENDOR_ST = 0x80,
 };
 
+extern struct bus_type amba_bustype;
+
+#define to_amba_device(d)	container_of(d, struct amba_device, dev)
+
 #define amba_get_drvdata(d)	dev_get_drvdata(&d->dev)
 #define amba_set_drvdata(d,p)	dev_set_drvdata(&d->dev, p)
 
 int amba_driver_register(struct amba_driver *);
 void amba_driver_unregister(struct amba_driver *);
+struct amba_device *amba_device_alloc(const char *, resource_size_t, size_t);
+void amba_device_put(struct amba_device *);
+int amba_device_add(struct amba_device *, struct resource *);
 int amba_device_register(struct amba_device *, struct resource *);
 void amba_device_unregister(struct amba_device *);
 struct amba_device *amba_find_device(const char *, struct device *, unsigned int, unsigned int);
@@ -70,9 +74,57 @@ void amba_release_regions(struct amba_device *);
 #define amba_pclk_disable(d)	\
 	do { if (!IS_ERR((d)->pclk)) clk_disable((d)->pclk); } while (0)
 
-#define amba_config(d)	(((d)->periphid >> 24) & 0xff)
-#define amba_rev(d)	(((d)->periphid >> 20) & 0x0f)
-#define amba_manf(d)	(((d)->periphid >> 12) & 0xff)
-#define amba_part(d)	((d)->periphid & 0xfff)
+/* Some drivers don't use the struct amba_device */
+#define AMBA_CONFIG_BITS(a) (((a) >> 24) & 0xff)
+#define AMBA_REV_BITS(a) (((a) >> 20) & 0x0f)
+#define AMBA_MANF_BITS(a) (((a) >> 12) & 0xff)
+#define AMBA_PART_BITS(a) ((a) & 0xfff)
+
+#define amba_config(d)	AMBA_CONFIG_BITS((d)->periphid)
+#define amba_rev(d)	AMBA_REV_BITS((d)->periphid)
+#define amba_manf(d)	AMBA_MANF_BITS((d)->periphid)
+#define amba_part(d)	AMBA_PART_BITS((d)->periphid)
+
+#define __AMBA_DEV(busid, data, mask)				\
+	{							\
+		.coherent_dma_mask = mask,			\
+		.init_name = busid,				\
+		.platform_data = data,				\
+	}
+
+/*
+ * APB devices do not themselves have the ability to address memory,
+ * so DMA masks should be zero (much like USB peripheral devices.)
+ * The DMA controller DMA masks should be used instead (much like
+ * USB host controllers in conventional PCs.)
+ */
+#define AMBA_APB_DEVICE(name, busid, id, base, irqs, data)	\
+struct amba_device name##_device = {				\
+	.dev = __AMBA_DEV(busid, data, 0),			\
+	.res = DEFINE_RES_MEM(base, SZ_4K),			\
+	.irq = irqs,						\
+	.periphid = id,						\
+}
+
+/*
+ * AHB devices are DMA capable, so set their DMA masks
+ */
+#define AMBA_AHB_DEVICE(name, busid, id, base, irqs, data)	\
+struct amba_device name##_device = {				\
+	.dev = __AMBA_DEV(busid, data, ~0ULL),			\
+	.res = DEFINE_RES_MEM(base, SZ_4K),			\
+	.dma_mask = ~0ULL,					\
+	.irq = irqs,						\
+	.periphid = id,						\
+}
+
+/*
+ * module_amba_driver() - Helper macro for drivers that don't do anything
+ * special in module init/exit.  This eliminates a lot of boilerplate.  Each
+ * module may only use this macro once, and calling it replaces module_init()
+ * and module_exit()
+ */
+#define module_amba_driver(__amba_drv) \
+	module_driver(__amba_drv, amba_driver_register, amba_driver_unregister)
 
 #endif

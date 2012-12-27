@@ -49,10 +49,6 @@ ACPI_MODULE_NAME("processor_perflib");
 
 static DEFINE_MUTEX(performance_mutex);
 
-/* Use cpufreq debug layer for _PPC changes. */
-#define cpufreq_printk(msg...) cpufreq_debug_printk(CPUFREQ_DEBUG_CORE, \
-						"cpufreq-core", msg)
-
 /*
  * _PPC support is implemented as a CPUfreq policy notifier:
  * This means each time a CPUfreq driver registered also with
@@ -145,7 +141,7 @@ static int acpi_processor_get_platform_limit(struct acpi_processor *pr)
 		return -ENODEV;
 	}
 
-	cpufreq_printk("CPU %d: _PPC is %d - frequency %s limited\n", pr->id,
+	pr_debug("CPU %d: _PPC is %d - frequency %s limited\n", pr->id,
 		       (int)ppc, ppc ? "" : "not");
 
 	pr->performance_platform_limit = (int)ppc;
@@ -242,6 +238,28 @@ void acpi_processor_ppc_exit(void)
 					    CPUFREQ_POLICY_NOTIFIER);
 
 	acpi_processor_ppc_status &= ~PPC_REGISTERED;
+}
+
+/*
+ * Do a quick check if the systems looks like it should use ACPI
+ * cpufreq. We look at a _PCT method being available, but don't
+ * do a whole lot of sanity checks.
+ */
+void acpi_processor_load_module(struct acpi_processor *pr)
+{
+	static int requested;
+	acpi_status status = 0;
+	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+
+	if (!arch_has_acpi_pdc() || requested)
+		return;
+	status = acpi_evaluate_object(pr->handle, "_PCT", NULL, &buffer);
+	if (!ACPI_FAILURE(status)) {
+		printk(KERN_INFO PREFIX "Requesting acpi_cpufreq\n");
+		request_module_nowait("acpi_cpufreq");
+		requested = 1;
+	}
+	kfree(buffer.pointer);
 }
 
 static int acpi_processor_get_performance_control(struct acpi_processor *pr)

@@ -34,26 +34,8 @@
  */
 
 #include <linux/highmem.h>
+#include <linux/export.h>
 #include "drmP.h"
-
-/**
- * Called when "/proc/dri/%dev%/mem" is read.
- *
- * \param buf output buffer.
- * \param start start of output data.
- * \param offset requested start offset.
- * \param len requested number of bytes.
- * \param eof whether there is no more data to return.
- * \param data private data.
- * \return number of written bytes.
- *
- * No-op.
- */
-int drm_mem_info(char *buf, char **start, off_t offset,
-		 int len, int *eof, void *data)
-{
-	return 0;
-}
 
 #if __OS_HAS_AGP
 static void *agp_remap(unsigned long offset, unsigned long size,
@@ -99,29 +81,23 @@ static void *agp_remap(unsigned long offset, unsigned long size,
 	return addr;
 }
 
-/** Wrapper around agp_allocate_memory() */
-DRM_AGP_MEM *drm_alloc_agp(struct drm_device * dev, int pages, u32 type)
-{
-	return drm_agp_allocate_memory(dev->agp->bridge, pages, type);
-}
-
 /** Wrapper around agp_free_memory() */
-int drm_free_agp(DRM_AGP_MEM * handle, int pages)
+void drm_free_agp(DRM_AGP_MEM * handle, int pages)
 {
-	return drm_agp_free_memory(handle) ? 0 : -EINVAL;
+	agp_free_memory(handle);
 }
 EXPORT_SYMBOL(drm_free_agp);
 
 /** Wrapper around agp_bind_memory() */
 int drm_bind_agp(DRM_AGP_MEM * handle, unsigned int start)
 {
-	return drm_agp_bind_memory(handle, start);
+	return agp_bind_memory(handle, start);
 }
 
 /** Wrapper around agp_unbind_memory() */
 int drm_unbind_agp(DRM_AGP_MEM * handle)
 {
-	return drm_agp_unbind_memory(handle);
+	return agp_unbind_memory(handle);
 }
 EXPORT_SYMBOL(drm_unbind_agp);
 

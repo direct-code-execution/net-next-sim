@@ -3,13 +3,13 @@
  *
  * OMAP LEDs dispatcher
  */
+#include <linux/gpio.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 
 #include <asm/leds.h>
 #include <asm/mach-types.h>
 
-#include <mach/gpio.h>
 #include <plat/mux.h>
 
 #include "leds.h"
@@ -17,6 +17,9 @@
 static int __init
 omap_leds_init(void)
 {
+	if (!cpu_class_is_omap1())
+		return -ENODEV;
+
 	if (machine_is_omap_innovator())
 		leds_event = innovator_leds_event;
 

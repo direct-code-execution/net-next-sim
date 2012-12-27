@@ -630,7 +630,7 @@ static void atp_complete_geyser_3_4(struct urb *urb)
 	/* Just update the base values (i.e. touchpad in untouched state) */
 	if (dev->data[dev->info->datalen - 1] & ATP_STATUS_BASE_UPDATE) {
 
-		dprintk(KERN_DEBUG "appletouch: updated base values\n");
+		dprintk("appletouch: updated base values\n");
 
 		memcpy(dev->xy_old, dev->xy_cur, sizeof(dev->xy_old));
 		goto exit;
@@ -938,15 +938,4 @@ static struct usb_driver atp_driver = {
 	.id_table	= atp_table,
 };
 
-static int __init atp_init(void)
-{
-	return usb_register(&atp_driver);
-}
-
-static void __exit atp_exit(void)
-{
-	usb_deregister(&atp_driver);
-}
-
-module_init(atp_init);
-module_exit(atp_exit);
+module_usb_driver(atp_driver);

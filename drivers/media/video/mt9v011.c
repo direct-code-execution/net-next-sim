@@ -9,20 +9,44 @@
 #include <linux/slab.h>
 #include <linux/videodev2.h>
 #include <linux/delay.h>
+#include <linux/module.h>
 #include <asm/div64.h>
 #include <media/v4l2-device.h>
-#include "mt9v011.h"
-#include <media/v4l2-i2c-drv.h>
 #include <media/v4l2-chip-ident.h>
+#include <media/mt9v011.h>
 
 MODULE_DESCRIPTION("Micron mt9v011 sensor driver");
 MODULE_AUTHOR("Mauro Carvalho Chehab <mchehab@redhat.com>");
 MODULE_LICENSE("GPL");
 
-
 static int debug;
 module_param(debug, int, 0);
 MODULE_PARM_DESC(debug, "Debug level (0-2)");
+
+#define R00_MT9V011_CHIP_VERSION	0x00
+#define R01_MT9V011_ROWSTART		0x01
+#define R02_MT9V011_COLSTART		0x02
+#define R03_MT9V011_HEIGHT		0x03
+#define R04_MT9V011_WIDTH		0x04
+#define R05_MT9V011_HBLANK		0x05
+#define R06_MT9V011_VBLANK		0x06
+#define R07_MT9V011_OUT_CTRL		0x07
+#define R09_MT9V011_SHUTTER_WIDTH	0x09
+#define R0A_MT9V011_CLK_SPEED		0x0a
+#define R0B_MT9V011_RESTART		0x0b
+#define R0C_MT9V011_SHUTTER_DELAY	0x0c
+#define R0D_MT9V011_RESET		0x0d
+#define R1E_MT9V011_DIGITAL_ZOOM	0x1e
+#define R20_MT9V011_READ_MODE		0x20
+#define R2B_MT9V011_GREEN_1_GAIN	0x2b
+#define R2C_MT9V011_BLUE_GAIN		0x2c
+#define R2D_MT9V011_RED_GAIN		0x2d
+#define R2E_MT9V011_GREEN_2_GAIN	0x2e
+#define R35_MT9V011_GLOBAL_GAIN		0x35
+#define RF1_MT9V011_CHIP_ENABLE		0xf1
+
+#define MT9V011_VERSION			0x8232
+#define MT9V011_REV_B_VERSION		0x8243
 
 /* supported controls */
 static struct v4l2_queryctrl mt9v011_qctrl[] = {
@@ -31,9 +55,18 @@ static struct v4l2_queryctrl mt9v011_qctrl[] = {
 		.type = V4L2_CTRL_TYPE_INTEGER,
 		.name = "Gain",
 		.minimum = 0,
-		.maximum = (1 << 10) - 1,
+		.maximum = (1 << 12) - 1 - 0x0020,
 		.step = 1,
 		.default_value = 0x0020,
+		.flags = 0,
+	}, {
+		.id = V4L2_CID_EXPOSURE,
+		.type = V4L2_CTRL_TYPE_INTEGER,
+		.name = "Exposure",
+		.minimum = 0,
+		.maximum = 2047,
+		.step = 1,
+		.default_value = 0x01fc,
 		.flags = 0,
 	}, {
 		.id = V4L2_CID_RED_BALANCE,
@@ -82,7 +115,8 @@ struct mt9v011 {
 	unsigned hflip:1;
 	unsigned vflip:1;
 
-	u16 global_gain, red_bal, blue_bal;
+	u16 global_gain, exposure;
+	s16 red_bal, blue_bal;
 };
 
 static inline struct mt9v011 *to_mt9v011(struct v4l2_subdev *sd)
@@ -157,24 +191,68 @@ static const struct i2c_reg_value mt9v011_init_default[] = {
 		{ R07_MT9V011_OUT_CTRL, 0x0002 },	/* chip enable */
 };
 
+
+static u16 calc_mt9v011_gain(s16 lineargain)
+{
+
+	u16 digitalgain = 0;
+	u16 analogmult = 0;
+	u16 analoginit = 0;
+
+	if (lineargain < 0)
+		lineargain = 0;
+
+	/* recommended minimum */
+	lineargain += 0x0020;
+
+	if (lineargain > 2047)
+		lineargain = 2047;
+
+	if (lineargain > 1023) {
+		digitalgain = 3;
+		analogmult = 3;
+		analoginit = lineargain / 16;
+	} else if (lineargain > 511) {
+		digitalgain = 1;
+		analogmult = 3;
+		analoginit = lineargain / 8;
+	} else if (lineargain > 255) {
+		analogmult = 3;
+		analoginit = lineargain / 4;
+	} else if (lineargain > 127) {
+		analogmult = 1;
+		analoginit = lineargain / 2;
+	} else
+		analoginit = lineargain;
+
+	return analoginit + (analogmult << 7) + (digitalgain << 9);
+
+}
+
 static void set_balance(struct v4l2_subdev *sd)
 {
 	struct mt9v011 *core = to_mt9v011(sd);
-	u16 green1_gain, green2_gain, blue_gain, red_gain;
+	u16 green_gain, blue_gain, red_gain;
+	u16 exposure;
+	s16 bal;
 
-	green1_gain = core->global_gain;
-	green2_gain = core->global_gain;
+	exposure = core->exposure;
 
-	blue_gain = core->global_gain +
-		    core->global_gain * core->blue_bal / (1 << 9);
+	green_gain = calc_mt9v011_gain(core->global_gain);
 
-	red_gain = core->global_gain +
-		   core->global_gain * core->blue_bal / (1 << 9);
+	bal = core->global_gain;
+	bal += (core->blue_bal * core->global_gain / (1 << 7));
+	blue_gain = calc_mt9v011_gain(bal);
 
-	mt9v011_write(sd, R2B_MT9V011_GREEN_1_GAIN, green1_gain);
-	mt9v011_write(sd, R2E_MT9V011_GREEN_2_GAIN,  green1_gain);
+	bal = core->global_gain;
+	bal += (core->red_bal * core->global_gain / (1 << 7));
+	red_gain = calc_mt9v011_gain(bal);
+
+	mt9v011_write(sd, R2B_MT9V011_GREEN_1_GAIN, green_gain);
+	mt9v011_write(sd, R2E_MT9V011_GREEN_2_GAIN, green_gain);
 	mt9v011_write(sd, R2C_MT9V011_BLUE_GAIN, blue_gain);
 	mt9v011_write(sd, R2D_MT9V011_RED_GAIN, red_gain);
+	mt9v011_write(sd, R09_MT9V011_SHUTTER_WIDTH, exposure);
 }
 
 static void calc_fps(struct v4l2_subdev *sd, u32 *numerator, u32 *denominator)
@@ -263,7 +341,7 @@ static void set_res(struct v4l2_subdev *sd)
 	 * be missing.
 	 */
 
-	hstart = 14 + (640 - core->width) / 2;
+	hstart = 20 + (640 - core->width) / 2;
 	mt9v011_write(sd, R02_MT9V011_COLSTART, hstart);
 	mt9v011_write(sd, R04_MT9V011_WIDTH, core->width);
 	mt9v011_write(sd, R05_MT9V011_HBLANK, 771 - core->width);
@@ -314,6 +392,9 @@ static int mt9v011_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	switch (ctrl->id) {
 	case V4L2_CID_GAIN:
 		ctrl->value = core->global_gain;
+		return 0;
+	case V4L2_CID_EXPOSURE:
+		ctrl->value = core->exposure;
 		return 0;
 	case V4L2_CID_RED_BALANCE:
 		ctrl->value = core->red_bal;
@@ -368,6 +449,9 @@ static int mt9v011_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	switch (ctrl->id) {
 	case V4L2_CID_GAIN:
 		core->global_gain = ctrl->value;
+		break;
+	case V4L2_CID_EXPOSURE:
+		core->exposure = ctrl->value;
 		break;
 	case V4L2_CID_RED_BALANCE:
 		core->red_bal = ctrl->value;
@@ -470,23 +554,6 @@ static int mt9v011_s_mbus_fmt(struct v4l2_subdev *sd, struct v4l2_mbus_framefmt 
 	return 0;
 }
 
-static int mt9v011_s_config(struct v4l2_subdev *sd, int dumb, void *data)
-{
-	struct mt9v011 *core = to_mt9v011(sd);
-	unsigned *xtal = data;
-
-	v4l2_dbg(1, debug, sd, "s_config called\n");
-
-	if (xtal) {
-		core->xtal = *xtal;
-		v4l2_dbg(1, debug, sd, "xtal set to %d.%03d MHz\n",
-			 *xtal / 1000000, (*xtal / 1000) % 1000);
-	}
-
-	return 0;
-}
-
-
 #ifdef CONFIG_VIDEO_ADV_DEBUG
 static int mt9v011_g_register(struct v4l2_subdev *sd,
 			      struct v4l2_dbg_register *reg)
@@ -537,7 +604,6 @@ static const struct v4l2_subdev_core_ops mt9v011_core_ops = {
 	.g_ctrl = mt9v011_g_ctrl,
 	.s_ctrl = mt9v011_s_ctrl,
 	.reset = mt9v011_reset,
-	.s_config = mt9v011_s_config,
 	.g_chip_ident = mt9v011_g_chip_ident,
 #ifdef CONFIG_VIDEO_ADV_DEBUG
 	.g_register = mt9v011_g_register,
@@ -593,9 +659,18 @@ static int mt9v011_probe(struct i2c_client *c,
 	}
 
 	core->global_gain = 0x0024;
+	core->exposure = 0x01fc;
 	core->width  = 640;
 	core->height = 480;
 	core->xtal = 27000000;	/* Hz */
+
+	if (c->dev.platform_data) {
+		struct mt9v011_platform_data *pdata = c->dev.platform_data;
+
+		core->xtal = pdata->xtal;
+		v4l2_dbg(1, debug, sd, "xtal set to %d.%03d MHz\n",
+			core->xtal / 1000000, (core->xtal / 1000) % 1000);
+	}
 
 	v4l_info(c, "chip found @ 0x%02x (%s - chip version 0x%04x)\n",
 		 c->addr << 1, c->adapter->name, version);
@@ -624,9 +699,14 @@ static const struct i2c_device_id mt9v011_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, mt9v011_id);
 
-static struct v4l2_i2c_driver_data v4l2_i2c_data = {
-	.name = "mt9v011",
-	.probe = mt9v011_probe,
-	.remove = mt9v011_remove,
-	.id_table = mt9v011_id,
+static struct i2c_driver mt9v011_driver = {
+	.driver = {
+		.owner	= THIS_MODULE,
+		.name	= "mt9v011",
+	},
+	.probe		= mt9v011_probe,
+	.remove		= mt9v011_remove,
+	.id_table	= mt9v011_id,
 };
+
+module_i2c_driver(mt9v011_driver);

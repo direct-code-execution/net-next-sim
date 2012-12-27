@@ -28,7 +28,7 @@
 #include <linux/timer.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
-#include <linux/smp_lock.h>
+#include <linux/mutex.h>
 #include <scsi/scsi.h>
 
 #define DRV_NAME "ub"
@@ -116,43 +116,6 @@
 #define UB_MAX_CDB_SIZE      16		/* Corresponds to Bulk */
 
 #define UB_SENSE_SIZE  18
-
-/*
- */
-
-/* command block wrapper */
-struct bulk_cb_wrap {
-	__le32	Signature;		/* contains 'USBC' */
-	u32	Tag;			/* unique per command id */
-	__le32	DataTransferLength;	/* size of data */
-	u8	Flags;			/* direction in bit 0 */
-	u8	Lun;			/* LUN */
-	u8	Length;			/* of of the CDB */
-	u8	CDB[UB_MAX_CDB_SIZE];	/* max command */
-};
-
-#define US_BULK_CB_WRAP_LEN	31
-#define US_BULK_CB_SIGN		0x43425355	/*spells out USBC */
-#define US_BULK_FLAG_IN		1
-#define US_BULK_FLAG_OUT	0
-
-/* command status wrapper */
-struct bulk_cs_wrap {
-	__le32	Signature;		/* should = 'USBS' */
-	u32	Tag;			/* same as original command */
-	__le32	Residue;		/* amount not transferred */
-	u8	Status;			/* see below */
-};
-
-#define US_BULK_CS_WRAP_LEN	13
-#define US_BULK_CS_SIGN		0x53425355	/* spells out 'USBS' */
-#define US_BULK_STAT_OK		0
-#define US_BULK_STAT_FAIL	1
-#define US_BULK_STAT_PHASE	2
-
-/* bulk-only class specific requests */
-#define US_BULK_RESET_REQUEST	0xff
-#define US_BULK_GET_MAX_LUN	0xfe
 
 /*
  */
@@ -248,6 +211,7 @@ struct ub_completion {
 	spinlock_t lock;
 };
 
+static DEFINE_MUTEX(ub_mutex);
 static inline void ub_init_completion(struct ub_completion *x)
 {
 	x->done = 0;
@@ -396,7 +360,7 @@ static int ub_probe_lun(struct ub_dev *sc, int lnum);
 #else
 
 static const struct usb_device_id ub_usb_ids[] = {
-	{ USB_INTERFACE_INFO(USB_CLASS_MASS_STORAGE, US_SC_SCSI, US_PR_BULK) },
+	{ USB_INTERFACE_INFO(USB_CLASS_MASS_STORAGE, USB_SC_SCSI, USB_PR_BULK) },
 	{ }
 };
 
@@ -1715,9 +1679,9 @@ static int ub_bd_unlocked_open(struct block_device *bdev, fmode_t mode)
 {
 	int ret;
 
-	lock_kernel();
+	mutex_lock(&ub_mutex);
 	ret = ub_bd_open(bdev, mode);
-	unlock_kernel();
+	mutex_unlock(&ub_mutex);
 
 	return ret;
 }
@@ -1730,9 +1694,9 @@ static int ub_bd_release(struct gendisk *disk, fmode_t mode)
 	struct ub_lun *lun = disk->private_data;
 	struct ub_dev *sc = lun->udev;
 
-	lock_kernel();
+	mutex_lock(&ub_mutex);
 	ub_put(sc);
-	unlock_kernel();
+	mutex_unlock(&ub_mutex);
 
 	return 0;
 }
@@ -1743,13 +1707,12 @@ static int ub_bd_release(struct gendisk *disk, fmode_t mode)
 static int ub_bd_ioctl(struct block_device *bdev, fmode_t mode,
     unsigned int cmd, unsigned long arg)
 {
-	struct gendisk *disk = bdev->bd_disk;
 	void __user *usermem = (void __user *) arg;
 	int ret;
 
-	lock_kernel();
-	ret = scsi_cmd_ioctl(disk->queue, disk, mode, cmd, usermem);
-	unlock_kernel();
+	mutex_lock(&ub_mutex);
+	ret = scsi_cmd_blk_ioctl(bdev, mode, cmd, usermem);
+	mutex_unlock(&ub_mutex);
 
 	return ret;
 }
@@ -1787,7 +1750,8 @@ static int ub_bd_revalidate(struct gendisk *disk)
  *
  * The return code is bool!
  */
-static int ub_bd_media_changed(struct gendisk *disk)
+static unsigned int ub_bd_check_events(struct gendisk *disk,
+				       unsigned int clearing)
 {
 	struct ub_lun *lun = disk->private_data;
 
@@ -1805,10 +1769,10 @@ static int ub_bd_media_changed(struct gendisk *disk)
 	 */
 	if (ub_sync_tur(lun->udev, lun) != 0) {
 		lun->changed = 1;
-		return 1;
+		return DISK_EVENT_MEDIA_CHANGE;
 	}
 
-	return lun->changed;
+	return lun->changed ? DISK_EVENT_MEDIA_CHANGE : 0;
 }
 
 static const struct block_device_operations ub_bd_fops = {
@@ -1816,7 +1780,7 @@ static const struct block_device_operations ub_bd_fops = {
 	.open		= ub_bd_unlocked_open,
 	.release	= ub_bd_release,
 	.ioctl		= ub_bd_ioctl,
-	.media_changed	= ub_bd_media_changed,
+	.check_events	= ub_bd_check_events,
 	.revalidate_disk = ub_bd_revalidate,
 };
 
@@ -2476,6 +2440,8 @@ static int __init ub_init(void)
 	int rc;
 	int i;
 
+	pr_info("'Low Performance USB Block' driver is deprecated. "
+			"Please switch to usb-storage\n");
 	for (i = 0; i < UB_QLOCK_NUM; i++)
 		spin_lock_init(&ub_qlockv[i]);
 

@@ -10,6 +10,8 @@
 #include <linux/buffer_head.h>
 #include <linux/dlmconstants.h>
 #include <linux/gfs2_ondisk.h>
+#include <linux/writeback.h>
+#include <linux/ktime.h>
 #include "incore.h"
 #include "glock.h"
 
@@ -39,7 +41,11 @@
 	{(1UL << GLF_INVALIDATE_IN_PROGRESS),	"i" },		\
 	{(1UL << GLF_REPLY_PENDING),		"r" },		\
 	{(1UL << GLF_INITIAL),			"I" },		\
-	{(1UL << GLF_FROZEN),			"F" })
+	{(1UL << GLF_FROZEN),			"F" },		\
+	{(1UL << GLF_QUEUED),			"q" },		\
+	{(1UL << GLF_LRU),			"L" },		\
+	{(1UL << GLF_OBJECT),			"o" },		\
+	{(1UL << GLF_BLOCKING),			"b" })
 
 #ifndef NUMPTY
 #define NUMPTY
@@ -93,7 +99,7 @@ TRACE_EVENT(gfs2_glock_state_change,
 		__entry->new_state	= glock_trace_state(new_state);
 		__entry->tgt_state	= glock_trace_state(gl->gl_target);
 		__entry->dmt_state	= glock_trace_state(gl->gl_demote_state);
-		__entry->flags		= gl->gl_flags;
+		__entry->flags		= gl->gl_flags | (gl->gl_object ? (1UL<<GLF_OBJECT) : 0);
 	),
 
 	TP_printk("%u,%u glock %d:%lld state %s to %s tgt:%s dmt:%s flags:%s",
@@ -126,7 +132,7 @@ TRACE_EVENT(gfs2_glock_put,
 		__entry->gltype		= gl->gl_name.ln_type;
 		__entry->glnum		= gl->gl_name.ln_number;
 		__entry->cur_state	= glock_trace_state(gl->gl_state);
-		__entry->flags		= gl->gl_flags;
+		__entry->flags		= gl->gl_flags  | (gl->gl_object ? (1UL<<GLF_OBJECT) : 0);
 	),
 
 	TP_printk("%u,%u glock %d:%lld state %s => %s flags:%s",
@@ -160,7 +166,7 @@ TRACE_EVENT(gfs2_demote_rq,
 		__entry->glnum		= gl->gl_name.ln_number;
 		__entry->cur_state	= glock_trace_state(gl->gl_state);
 		__entry->dmt_state	= glock_trace_state(gl->gl_demote_state);
-		__entry->flags		= gl->gl_flags;
+		__entry->flags		= gl->gl_flags  | (gl->gl_object ? (1UL<<GLF_OBJECT) : 0);
 	),
 
 	TP_printk("%u,%u glock %d:%lld demote %s to %s flags:%s",
@@ -230,6 +236,62 @@ TRACE_EVENT(gfs2_glock_queue,
 		  (unsigned long long)__entry->glnum,
 		  __entry->queue ? "" : "de",
 		  glock_trace_name(__entry->state))
+);
+
+/* DLM sends a reply to GFS2 */
+TRACE_EVENT(gfs2_glock_lock_time,
+
+	TP_PROTO(const struct gfs2_glock *gl, s64 tdiff),
+
+	TP_ARGS(gl, tdiff),
+
+	TP_STRUCT__entry(
+		__field(	dev_t,	dev		)
+		__field(	u64,	glnum		)
+		__field(	u32,	gltype		)
+		__field(	int,	status		)
+		__field(	char,	flags		)
+		__field(	s64,	tdiff		)
+		__field(	s64,	srtt		)
+		__field(	s64,	srttvar		)
+		__field(	s64,	srttb		)
+		__field(	s64,	srttvarb	)
+		__field(	s64,	sirt		)
+		__field(	s64,	sirtvar		)
+		__field(	s64,	dcount		)
+		__field(	s64,	qcount		)
+	),
+
+	TP_fast_assign(
+		__entry->dev            = gl->gl_sbd->sd_vfs->s_dev;
+		__entry->glnum          = gl->gl_name.ln_number;
+		__entry->gltype         = gl->gl_name.ln_type;
+		__entry->status		= gl->gl_lksb.sb_status;
+		__entry->flags		= gl->gl_lksb.sb_flags;
+		__entry->tdiff		= tdiff;
+		__entry->srtt		= gl->gl_stats.stats[GFS2_LKS_SRTT];
+		__entry->srttvar	= gl->gl_stats.stats[GFS2_LKS_SRTTVAR];
+		__entry->srttb		= gl->gl_stats.stats[GFS2_LKS_SRTTB];
+		__entry->srttvarb	= gl->gl_stats.stats[GFS2_LKS_SRTTVARB];
+		__entry->sirt		= gl->gl_stats.stats[GFS2_LKS_SIRT];
+		__entry->sirtvar	= gl->gl_stats.stats[GFS2_LKS_SIRTVAR];
+		__entry->dcount		= gl->gl_stats.stats[GFS2_LKS_DCOUNT];
+		__entry->qcount		= gl->gl_stats.stats[GFS2_LKS_QCOUNT];
+	),
+
+	TP_printk("%u,%u glock %d:%lld status:%d flags:%02x tdiff:%lld srtt:%lld/%lld srttb:%lld/%lld sirt:%lld/%lld dcnt:%lld qcnt:%lld",
+		  MAJOR(__entry->dev), MINOR(__entry->dev), __entry->gltype,
+		  (unsigned long long)__entry->glnum,
+		  __entry->status, __entry->flags,
+		  (long long)__entry->tdiff,
+		  (long long)__entry->srtt,
+		  (long long)__entry->srttvar,
+		  (long long)__entry->srttb,
+		  (long long)__entry->srttvarb,
+		  (long long)__entry->sirt,
+		  (long long)__entry->sirtvar,
+		  (long long)__entry->dcount,
+		  (long long)__entry->qcount)
 );
 
 /* Section 2 - Log/journal
@@ -315,6 +377,33 @@ TRACE_EVENT(gfs2_log_blocks,
 
 	TP_printk("%u,%u log reserve %d", MAJOR(__entry->dev),
 		  MINOR(__entry->dev), __entry->blocks)
+);
+
+/* Writing back the AIL */
+TRACE_EVENT(gfs2_ail_flush,
+
+	TP_PROTO(const struct gfs2_sbd *sdp, const struct writeback_control *wbc, int start),
+
+	TP_ARGS(sdp, wbc, start),
+
+	TP_STRUCT__entry(
+		__field(	dev_t,	dev			)
+		__field(	int, start			)
+		__field(	int, sync_mode			)
+		__field(	long, nr_to_write		)
+	),
+
+	TP_fast_assign(
+		__entry->dev		= sdp->sd_vfs->s_dev;
+		__entry->start		= start;
+		__entry->sync_mode	= wbc->sync_mode;
+		__entry->nr_to_write	= wbc->nr_to_write;
+	),
+
+	TP_printk("%u,%u ail flush %s %s %ld", MAJOR(__entry->dev),
+		  MINOR(__entry->dev), __entry->start ? "start" : "end",
+		  __entry->sync_mode == WB_SYNC_ALL ? "all" : "none",
+		  __entry->nr_to_write)
 );
 
 /* Section 3 - bmap

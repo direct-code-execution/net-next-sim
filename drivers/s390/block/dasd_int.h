@@ -231,6 +231,11 @@ struct dasd_ccw_req {
 /* per dasd_ccw_req flags */
 #define DASD_CQR_FLAGS_USE_ERP   0	/* use ERP for this request */
 #define DASD_CQR_FLAGS_FAILFAST  1	/* FAILFAST */
+#define DASD_CQR_VERIFY_PATH	 2	/* path verification request */
+#define DASD_CQR_ALLOW_SLOCK	 3	/* Try this request even when lock was
+					 * stolen. Should not be combined with
+					 * DASD_CQR_FLAGS_USE_ERP
+					 */
 
 /* Signature for error recovery functions. */
 typedef struct dasd_ccw_req *(*dasd_erp_fn_t) (struct dasd_ccw_req *);
@@ -287,6 +292,14 @@ struct dasd_discipline {
 	int (*do_analysis) (struct dasd_block *);
 
 	/*
+	 * This function is called, when new paths become available.
+	 * Disciplins may use this callback to do necessary setup work,
+	 * e.g. verify that new path is compatible with the current
+	 * configuration.
+	 */
+	int (*verify_path)(struct dasd_device *, __u8);
+
+	/*
 	 * Last things to do when a device is set online, and first things
 	 * when it is set offline.
 	 */
@@ -325,9 +338,9 @@ struct dasd_discipline {
 	void (*dump_sense) (struct dasd_device *, struct dasd_ccw_req *,
 			    struct irb *);
 	void (*dump_sense_dbf) (struct dasd_device *, struct irb *, char *);
-
-	void (*handle_unsolicited_interrupt) (struct dasd_device *,
-					      struct irb *);
+	void (*check_for_device_change) (struct dasd_device *,
+					 struct dasd_ccw_req *,
+					 struct irb *);
 
         /* i/o control functions. */
 	int (*fill_geometry) (struct dasd_block *, struct hd_geometry *);
@@ -342,6 +355,7 @@ struct dasd_discipline {
 	int (*reload) (struct dasd_device *);
 
 	int (*get_uid) (struct dasd_device *, struct dasd_uid *);
+	void (*kick_validate) (struct dasd_device *);
 };
 
 extern struct dasd_discipline *dasd_diag_discipline_pointer;
@@ -362,6 +376,48 @@ extern struct dasd_discipline *dasd_diag_discipline_pointer;
 #define DASD_EER_STATECHANGE 3
 #define DASD_EER_PPRCSUSPEND 4
 
+struct dasd_path {
+	__u8 opm;
+	__u8 tbvpm;
+	__u8 ppm;
+	__u8 npm;
+};
+
+struct dasd_profile_info {
+	/* legacy part of profile data, as in dasd_profile_info_t */
+	unsigned int dasd_io_reqs;	 /* number of requests processed */
+	unsigned int dasd_io_sects;	 /* number of sectors processed */
+	unsigned int dasd_io_secs[32];	 /* histogram of request's sizes */
+	unsigned int dasd_io_times[32];	 /* histogram of requests's times */
+	unsigned int dasd_io_timps[32];	 /* h. of requests's times per sector */
+	unsigned int dasd_io_time1[32];	 /* hist. of time from build to start */
+	unsigned int dasd_io_time2[32];	 /* hist. of time from start to irq */
+	unsigned int dasd_io_time2ps[32]; /* hist. of time from start to irq */
+	unsigned int dasd_io_time3[32];	 /* hist. of time from irq to end */
+	unsigned int dasd_io_nr_req[32]; /* hist. of # of requests in chanq */
+
+	/* new data */
+	struct timespec starttod;	   /* time of start or last reset */
+	unsigned int dasd_io_alias;	   /* requests using an alias */
+	unsigned int dasd_io_tpm;	   /* requests using transport mode */
+	unsigned int dasd_read_reqs;	   /* total number of read  requests */
+	unsigned int dasd_read_sects;	   /* total number read sectors */
+	unsigned int dasd_read_alias;	   /* read request using an alias */
+	unsigned int dasd_read_tpm;	   /* read requests in transport mode */
+	unsigned int dasd_read_secs[32];   /* histogram of request's sizes */
+	unsigned int dasd_read_times[32];  /* histogram of requests's times */
+	unsigned int dasd_read_time1[32];  /* hist. time from build to start */
+	unsigned int dasd_read_time2[32];  /* hist. of time from start to irq */
+	unsigned int dasd_read_time3[32];  /* hist. of time from irq to end */
+	unsigned int dasd_read_nr_req[32]; /* hist. of # of requests in chanq */
+};
+
+struct dasd_profile {
+	struct dentry *dentry;
+	struct dasd_profile_info *data;
+	spinlock_t lock;
+};
+
 struct dasd_device {
 	/* Block device stuff. */
 	struct dasd_block *block;
@@ -377,6 +433,7 @@ struct dasd_device {
 	struct dasd_discipline *discipline;
 	struct dasd_discipline *base_discipline;
 	char *private;
+	struct dasd_path path_data;
 
 	/* Device state and target state. */
 	int state, target;
@@ -399,6 +456,7 @@ struct dasd_device {
 	struct work_struct kick_work;
 	struct work_struct restore_device;
 	struct work_struct reload_device;
+	struct work_struct kick_validate;
 	struct timer_list timer;
 
 	debug_info_t *debug_area;
@@ -410,6 +468,9 @@ struct dasd_device {
 
 	/* default expiration time in s */
 	unsigned long default_expires;
+
+	struct dentry *debugfs_dentry;
+	struct dasd_profile profile;
 };
 
 struct dasd_block {
@@ -432,9 +493,8 @@ struct dasd_block {
 	struct tasklet_struct tasklet;
 	struct timer_list timer;
 
-#ifdef CONFIG_DASD_PROFILE
-	struct dasd_profile_info_t profile;
-#endif
+	struct dentry *debugfs_dentry;
+	struct dasd_profile profile;
 };
 
 
@@ -456,6 +516,10 @@ struct dasd_block {
 					 * confuse this with the user specified
 					 * read-only feature.
 					 */
+#define DASD_FLAG_IS_RESERVED	7	/* The device is reserved */
+#define DASD_FLAG_LOCK_STOLEN	8	/* The device lock was stolen */
+#define DASD_FLAG_SUSPENDED	9	/* The device was suspended */
+
 
 void dasd_put_device_wake(struct dasd_device *);
 
@@ -565,12 +629,13 @@ dasd_check_blocksize(int bsize)
 }
 
 /* externals in dasd.c */
-#define DASD_PROFILE_ON	 1
-#define DASD_PROFILE_OFF 0
+#define DASD_PROFILE_OFF	 0
+#define DASD_PROFILE_ON 	 1
+#define DASD_PROFILE_GLOBAL_ONLY 2
 
 extern debug_info_t *dasd_debug_area;
-extern struct dasd_profile_info_t dasd_global_profile;
-extern unsigned int dasd_profile_level;
+extern struct dasd_profile_info dasd_global_profile_data;
+extern unsigned int dasd_global_profile_level;
 extern const struct block_device_operations dasd_device_operations;
 
 extern struct kmem_cache *dasd_page_cache;
@@ -581,6 +646,7 @@ struct dasd_ccw_req *
 dasd_smalloc_request(int , int, int, struct dasd_device *);
 void dasd_kfree_request(struct dasd_ccw_req *, struct dasd_device *);
 void dasd_sfree_request(struct dasd_ccw_req *, struct dasd_device *);
+void dasd_wakeup_cb(struct dasd_ccw_req *, void *);
 
 static inline int
 dasd_kmalloc_set_cda(struct ccw1 *ccw, void *cda, struct dasd_device *device)
@@ -620,10 +686,15 @@ void dasd_generic_remove (struct ccw_device *cdev);
 int dasd_generic_set_online(struct ccw_device *, struct dasd_discipline *);
 int dasd_generic_set_offline (struct ccw_device *cdev);
 int dasd_generic_notify(struct ccw_device *, int);
+int dasd_generic_last_path_gone(struct dasd_device *);
+int dasd_generic_path_operational(struct dasd_device *);
+
 void dasd_generic_handle_state_change(struct dasd_device *);
 int dasd_generic_pm_freeze(struct ccw_device *);
 int dasd_generic_restore_device(struct ccw_device *);
 enum uc_todo dasd_generic_uc_handler(struct ccw_device *, struct irb *);
+void dasd_generic_path_event(struct ccw_device *, int *);
+int dasd_generic_verify_path(struct dasd_device *, __u8);
 
 int dasd_generic_read_dev_chars(struct dasd_device *, int, void *, int);
 char *dasd_get_sense(struct irb *);
@@ -633,6 +704,11 @@ void dasd_device_remove_stop_bits(struct dasd_device *, int);
 
 int dasd_device_is_ro(struct dasd_device *);
 
+void dasd_profile_reset(struct dasd_profile *);
+int dasd_profile_on(struct dasd_profile *);
+void dasd_profile_off(struct dasd_profile *);
+void dasd_global_profile_reset(void);
+char *dasd_get_user_string(const char __user *, size_t);
 
 /* externals in dasd_devmap.c */
 extern int dasd_max_devindex;
@@ -656,6 +732,9 @@ void dasd_remove_sysfs_files(struct ccw_device *);
 struct dasd_device *dasd_device_from_cdev(struct ccw_device *);
 struct dasd_device *dasd_device_from_cdev_locked(struct ccw_device *);
 struct dasd_device *dasd_device_from_devindex(int);
+
+void dasd_add_link_to_gendisk(struct gendisk *, struct dasd_device *);
+struct dasd_device *dasd_device_from_gendisk(struct gendisk *);
 
 int dasd_parse(void);
 int dasd_busid_known(const char *);

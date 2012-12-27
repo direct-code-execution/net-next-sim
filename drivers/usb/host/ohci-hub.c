@@ -111,6 +111,7 @@ __acquires(ohci->lock)
 	if (!autostop) {
 		ohci->next_statechange = jiffies + msecs_to_jiffies (5);
 		ohci->autostop = 0;
+		ohci->rh_state = OHCI_RH_SUSPENDED;
 	}
 
 done:
@@ -140,7 +141,7 @@ __acquires(ohci->lock)
 
 	if (ohci->hc_control & (OHCI_CTRL_IR | OHCI_SCHED_ENABLES)) {
 		/* this can happen after resuming a swsusp snapshot */
-		if (hcd->state == HC_STATE_RESUMING) {
+		if (ohci->rh_state != OHCI_RH_RUNNING) {
 			ohci_dbg (ohci, "BIOS/SMM active, control %03x\n",
 					ohci->hc_control);
 			status = -EBUSY;
@@ -274,6 +275,7 @@ skip_resume:
 		(void) ohci_readl (ohci, &ohci->regs->control);
 	}
 
+	ohci->rh_state = OHCI_RH_RUNNING;
 	return 0;
 }
 
@@ -336,11 +338,8 @@ static void ohci_finish_controller_resume(struct usb_hcd *hcd)
 	/* If needed, reinitialize and suspend the root hub */
 	if (need_reinit) {
 		spin_lock_irq(&ohci->lock);
-		hcd->state = HC_STATE_RESUMING;
 		ohci_rh_resume(ohci);
-		hcd->state = HC_STATE_QUIESCING;
 		ohci_rh_suspend(ohci, 0);
-		hcd->state = HC_STATE_SUSPENDED;
 		spin_unlock_irq(&ohci->lock);
 	}
 
@@ -356,10 +355,7 @@ static void ohci_finish_controller_resume(struct usb_hcd *hcd)
 		msleep(20);
 	}
 
-	/* Does the root hub have a port wakeup pending? */
-	if (ohci_readl(ohci, &ohci->regs->intrstatus) &
-			(OHCI_INTR_RD | OHCI_INTR_RHSC))
-		usb_hcd_resume_root_hub(hcd);
+	usb_hcd_resume_root_hub(hcd);
 }
 
 /* Carry out polling-, autostop-, and autoresume-related state changes */
@@ -580,15 +576,16 @@ ohci_hub_descriptor (
 	    temp |= 0x0008;
 	desc->wHubCharacteristics = (__force __u16)cpu_to_hc16(ohci, temp);
 
-	/* two bitmaps:  ports removable, and usb 1.0 legacy PortPwrCtrlMask */
+	/* ports removable, and usb 1.0 legacy PortPwrCtrlMask */
 	rh = roothub_b (ohci);
-	memset(desc->bitmap, 0xff, sizeof(desc->bitmap));
-	desc->bitmap [0] = rh & RH_B_DR;
+	memset(desc->u.hs.DeviceRemovable, 0xff,
+			sizeof(desc->u.hs.DeviceRemovable));
+	desc->u.hs.DeviceRemovable[0] = rh & RH_B_DR;
 	if (ohci->num_ports > 7) {
-		desc->bitmap [1] = (rh & RH_B_DR) >> 8;
-		desc->bitmap [2] = 0xff;
+		desc->u.hs.DeviceRemovable[1] = (rh & RH_B_DR) >> 8;
+		desc->u.hs.DeviceRemovable[2] = 0xff;
 	} else
-		desc->bitmap [1] = 0xff;
+		desc->u.hs.DeviceRemovable[1] = 0xff;
 }
 
 /*-------------------------------------------------------------------------*/

@@ -86,7 +86,7 @@ static ssize_t set_speed(struct device *dev, struct device_attribute *attr,
 	return count;
 }
 
-static DEVICE_ATTR(speed, S_IWUGO | S_IRUGO, show_speed, set_speed);
+static DEVICE_ATTR(speed, S_IRUGO | S_IWUSR, show_speed, set_speed);
 
 static int tv_probe(struct usb_interface *interface,
 		    const struct usb_device_id *id)
@@ -137,26 +137,7 @@ static struct usb_driver tv_driver = {
 	.id_table =	id_table,
 };
 
-static int __init tv_init(void)
-{
-	int retval = usb_register(&tv_driver);
-	if (retval) {
-		err("usb_register failed. Error number %d", retval);
-		return retval;
-	}
-
-	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_VERSION ":"
-	       DRIVER_DESC "\n");
-	return 0;
-}
-
-static void __exit tv_exit(void)
-{
-	usb_deregister(&tv_driver);
-}
-
-module_init (tv_init);
-module_exit (tv_exit);
+module_usb_driver(tv_driver);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

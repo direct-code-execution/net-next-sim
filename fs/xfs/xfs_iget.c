@@ -38,9 +38,19 @@
 #include "xfs_trans_priv.h"
 #include "xfs_inode_item.h"
 #include "xfs_bmap.h"
-#include "xfs_btree_trace.h"
 #include "xfs_trace.h"
 
+
+/*
+ * Define xfs inode iolock lockdep classes. We need to ensure that all active
+ * inodes are considered the same for lockdep purposes, including inodes that
+ * are recycled through the XFS_IRECLAIMABLE state. This is the the only way to
+ * guarantee the locks are considered the same when there are multiple lock
+ * initialisation siteѕ. Also, define a reclaimable inode class so it is
+ * obvious in lockdep reports which class the report is against.
+ */
+static struct lock_class_key xfs_iolock_active;
+struct lock_class_key xfs_iolock_reclaimable;
 
 /*
  * Allocate and initialise an xfs_inode.
@@ -65,12 +75,14 @@ xfs_inode_alloc(
 		return NULL;
 	}
 
-	ASSERT(atomic_read(&ip->i_iocount) == 0);
 	ASSERT(atomic_read(&ip->i_pincount) == 0);
 	ASSERT(!spin_is_locked(&ip->i_flags_lock));
-	ASSERT(completion_done(&ip->i_flush));
+	ASSERT(!xfs_isiflocked(ip));
+	ASSERT(ip->i_ino == 0);
 
 	mrlock_init(&ip->i_iolock, MRLOCK_BARRIER, "xfsio", ip->i_ino);
+	lockdep_set_class_and_name(&ip->i_iolock.mr_lock,
+			&xfs_iolock_active, "xfs_iolock_active");
 
 	/* initialise the xfs inode */
 	ip->i_ino = ino;
@@ -79,16 +91,20 @@ xfs_inode_alloc(
 	ip->i_afp = NULL;
 	memset(&ip->i_df, 0, sizeof(xfs_ifork_t));
 	ip->i_flags = 0;
-	ip->i_update_core = 0;
 	ip->i_delayed_blks = 0;
 	memset(&ip->i_d, 0, sizeof(xfs_icdinode_t));
-	ip->i_size = 0;
-	ip->i_new_size = 0;
-
-	/* prevent anyone from using this yet */
-	VFS_I(ip)->i_state = I_NEW;
 
 	return ip;
+}
+
+STATIC void
+xfs_inode_free_callback(
+	struct rcu_head		*head)
+{
+	struct inode		*inode = container_of(head, struct inode, i_rcu);
+	struct xfs_inode	*ip = XFS_I(inode);
+
+	kmem_zone_free(xfs_inode_zone, ip);
 }
 
 void
@@ -129,12 +145,22 @@ xfs_inode_free(
 	}
 
 	/* asserts to verify all state is correct here */
-	ASSERT(atomic_read(&ip->i_iocount) == 0);
 	ASSERT(atomic_read(&ip->i_pincount) == 0);
 	ASSERT(!spin_is_locked(&ip->i_flags_lock));
-	ASSERT(completion_done(&ip->i_flush));
+	ASSERT(!xfs_isiflocked(ip));
 
-	kmem_zone_free(xfs_inode_zone, ip);
+	/*
+	 * Because we use RCU freeing we need to ensure the inode always
+	 * appears to be reclaimed with an invalid inode number when in the
+	 * free state. The ip->i_flags_lock provides the barrier against lookup
+	 * races.
+	 */
+	spin_lock(&ip->i_flags_lock);
+	ip->i_flags = XFS_IRECLAIM;
+	ip->i_ino = 0;
+	spin_unlock(&ip->i_flags_lock);
+
+	call_rcu(&VFS_I(ip)->i_rcu, xfs_inode_free_callback);
 }
 
 /*
@@ -144,14 +170,29 @@ static int
 xfs_iget_cache_hit(
 	struct xfs_perag	*pag,
 	struct xfs_inode	*ip,
+	xfs_ino_t		ino,
 	int			flags,
-	int			lock_flags) __releases(pag->pag_ici_lock)
+	int			lock_flags) __releases(RCU)
 {
 	struct inode		*inode = VFS_I(ip);
 	struct xfs_mount	*mp = ip->i_mount;
 	int			error;
 
+	/*
+	 * check for re-use of an inode within an RCU grace period due to the
+	 * radix tree nodes not being updated yet. We monitor for this by
+	 * setting the inode number to zero before freeing the inode structure.
+	 * If the inode has been reallocated and set up, then the inode number
+	 * will not match, so check for that, too.
+	 */
 	spin_lock(&ip->i_flags_lock);
+	if (ip->i_ino != ino) {
+		trace_xfs_iget_skip(ip);
+		XFS_STATS_INC(xs_ig_frecycle);
+		error = EAGAIN;
+		goto out_error;
+	}
+
 
 	/*
 	 * If we are racing with another cache hit that is currently
@@ -194,7 +235,7 @@ xfs_iget_cache_hit(
 		ip->i_flags |= XFS_IRECLAIM;
 
 		spin_unlock(&ip->i_flags_lock);
-		read_unlock(&pag->pag_ici_lock);
+		rcu_read_unlock();
 
 		error = -inode_init_always(mp->m_super, inode);
 		if (error) {
@@ -202,24 +243,35 @@ xfs_iget_cache_hit(
 			 * Re-initializing the inode failed, and we are in deep
 			 * trouble.  Try to re-add it to the reclaim list.
 			 */
-			read_lock(&pag->pag_ici_lock);
+			rcu_read_lock();
 			spin_lock(&ip->i_flags_lock);
 
-			ip->i_flags &= ~XFS_INEW;
-			ip->i_flags |= XFS_IRECLAIMABLE;
-			__xfs_inode_set_reclaim_tag(pag, ip);
+			ip->i_flags &= ~(XFS_INEW | XFS_IRECLAIM);
+			ASSERT(ip->i_flags & XFS_IRECLAIMABLE);
 			trace_xfs_iget_reclaim_fail(ip);
 			goto out_error;
 		}
 
-		write_lock(&pag->pag_ici_lock);
+		spin_lock(&pag->pag_ici_lock);
 		spin_lock(&ip->i_flags_lock);
-		ip->i_flags &= ~(XFS_IRECLAIMABLE | XFS_IRECLAIM);
+
+		/*
+		 * Clear the per-lifetime state in the inode as we are now
+		 * effectively a new inode and need to return to the initial
+		 * state before reuse occurs.
+		 */
+		ip->i_flags &= ~XFS_IRECLAIM_RESET_FLAGS;
 		ip->i_flags |= XFS_INEW;
 		__xfs_inode_clear_reclaim_tag(mp, pag, ip);
 		inode->i_state = I_NEW;
+
+		ASSERT(!rwsem_is_locked(&ip->i_iolock.mr_lock));
+		mrlock_init(&ip->i_iolock, MRLOCK_BARRIER, "xfsio", ip->i_ino);
+		lockdep_set_class_and_name(&ip->i_iolock.mr_lock,
+				&xfs_iolock_active, "xfs_iolock_active");
+
 		spin_unlock(&ip->i_flags_lock);
-		write_unlock(&pag->pag_ici_lock);
+		spin_unlock(&pag->pag_ici_lock);
 	} else {
 		/* If the VFS inode is being torn down, pause and try again. */
 		if (!igrab(inode)) {
@@ -230,21 +282,21 @@ xfs_iget_cache_hit(
 
 		/* We've got a live one. */
 		spin_unlock(&ip->i_flags_lock);
-		read_unlock(&pag->pag_ici_lock);
+		rcu_read_unlock();
 		trace_xfs_iget_hit(ip);
 	}
 
 	if (lock_flags != 0)
 		xfs_ilock(ip, lock_flags);
 
-	xfs_iflags_clear(ip, XFS_ISTALE);
+	xfs_iflags_clear(ip, XFS_ISTALE | XFS_IDONTCACHE);
 	XFS_STATS_INC(xs_ig_found);
 
 	return 0;
 
 out_error:
 	spin_unlock(&ip->i_flags_lock);
-	read_unlock(&pag->pag_ici_lock);
+	rcu_read_unlock();
 	return error;
 }
 
@@ -262,6 +314,7 @@ xfs_iget_cache_miss(
 	struct xfs_inode	*ip;
 	int			error;
 	xfs_agino_t		agino = XFS_INO_TO_AGINO(mp, ino);
+	int			iflags;
 
 	ip = xfs_inode_alloc(mp, ino);
 	if (!ip)
@@ -297,9 +350,23 @@ xfs_iget_cache_miss(
 			BUG();
 	}
 
-	write_lock(&pag->pag_ici_lock);
+	/*
+	 * These values must be set before inserting the inode into the radix
+	 * tree as the moment it is inserted a concurrent lookup (allowed by the
+	 * RCU locking mechanism) can find it and that lookup must see that this
+	 * is an inode currently under construction (i.e. that XFS_INEW is set).
+	 * The ip->i_flags_lock that protects the XFS_INEW flag forms the
+	 * memory barrier that ensures this detection works correctly at lookup
+	 * time.
+	 */
+	iflags = XFS_INEW;
+	if (flags & XFS_IGET_DONTCACHE)
+		iflags |= XFS_IDONTCACHE;
+	ip->i_udquot = ip->i_gdquot = NULL;
+	xfs_iflags_set(ip, iflags);
 
 	/* insert the new inode */
+	spin_lock(&pag->pag_ici_lock);
 	error = radix_tree_insert(&pag->pag_ici_root, agino, ip);
 	if (unlikely(error)) {
 		WARN_ON(error != -EEXIST);
@@ -307,19 +374,14 @@ xfs_iget_cache_miss(
 		error = EAGAIN;
 		goto out_preload_end;
 	}
-
-	/* These values _must_ be set before releasing the radix tree lock! */
-	ip->i_udquot = ip->i_gdquot = NULL;
-	xfs_iflags_set(ip, XFS_INEW);
-
-	write_unlock(&pag->pag_ici_lock);
+	spin_unlock(&pag->pag_ici_lock);
 	radix_tree_preload_end();
 
 	*ipp = ip;
 	return 0;
 
 out_preload_end:
-	write_unlock(&pag->pag_ici_lock);
+	spin_unlock(&pag->pag_ici_lock);
 	radix_tree_preload_end();
 	if (lock_flags)
 		xfs_iunlock(ip, lock_flags);
@@ -365,8 +427,17 @@ xfs_iget(
 	xfs_perag_t	*pag;
 	xfs_agino_t	agino;
 
-	/* the radix tree exists only in inode capable AGs */
-	if (XFS_INO_TO_AGNO(mp, ino) >= mp->m_maxagi)
+	/*
+	 * xfs_reclaim_inode() uses the ILOCK to ensure an inode
+	 * doesn't get freed while it's being referenced during a
+	 * radix tree traversal here.  It assumes this function
+	 * aqcuires only the ILOCK (and therefore it has no need to
+	 * involve the IOLOCK in this synchronization).
+	 */
+	ASSERT((lock_flags & (XFS_IOLOCK_EXCL | XFS_IOLOCK_SHARED)) == 0);
+
+	/* reject inode numbers outside existing AGs */
+	if (!ino || XFS_INO_TO_AGNO(mp, ino) >= mp->m_sb.sb_agcount)
 		return EINVAL;
 
 	/* get the perag structure and ensure that it's inode capable */
@@ -375,15 +446,15 @@ xfs_iget(
 
 again:
 	error = 0;
-	read_lock(&pag->pag_ici_lock);
+	rcu_read_lock();
 	ip = radix_tree_lookup(&pag->pag_ici_root, agino);
 
 	if (ip) {
-		error = xfs_iget_cache_hit(pag, ip, flags, lock_flags);
+		error = xfs_iget_cache_hit(pag, ip, ino, flags, lock_flags);
 		if (error)
 			goto out_error_or_again;
 	} else {
-		read_unlock(&pag->pag_ici_lock);
+		rcu_read_unlock();
 		XFS_STATS_INC(xs_ig_missed);
 
 		error = xfs_iget_cache_miss(mp, pag, tp, ino, &ip,
@@ -395,8 +466,6 @@ again:
 
 	*ipp = ip;
 
-	ASSERT(ip->i_df.if_ext_max ==
-	       XFS_IFORK_DSIZE(ip) / sizeof(xfs_bmbt_rec_t));
 	/*
 	 * If we have a real type for an on-disk inode, we can set ops(&unlock)
 	 * now.	 If it's a new inode being created, xfs_ialloc will handle it.
@@ -591,8 +660,7 @@ xfs_iunlock(
 	       (XFS_IOLOCK_SHARED | XFS_IOLOCK_EXCL));
 	ASSERT((lock_flags & (XFS_ILOCK_SHARED | XFS_ILOCK_EXCL)) !=
 	       (XFS_ILOCK_SHARED | XFS_ILOCK_EXCL));
-	ASSERT((lock_flags & ~(XFS_LOCK_MASK | XFS_IUNLOCK_NONOTIFY |
-			XFS_LOCK_DEP_MASK)) == 0);
+	ASSERT((lock_flags & ~(XFS_LOCK_MASK | XFS_LOCK_DEP_MASK)) == 0);
 	ASSERT(lock_flags != 0);
 
 	if (lock_flags & XFS_IOLOCK_EXCL)
@@ -605,16 +673,6 @@ xfs_iunlock(
 	else if (lock_flags & XFS_ILOCK_SHARED)
 		mrunlock_shared(&ip->i_lock);
 
-	if ((lock_flags & (XFS_ILOCK_SHARED | XFS_ILOCK_EXCL)) &&
-	    !(lock_flags & XFS_IUNLOCK_NONOTIFY) && ip->i_itemp) {
-		/*
-		 * Let the AIL know that this item has been unlocked in case
-		 * it is in the AIL and anyone is waiting on it.  Don't do
-		 * this if the caller has asked us not to.
-		 */
-		xfs_trans_unlocked_item(ip->i_itemp->ili_item.li_ailp,
-					(xfs_log_item_t*)(ip->i_itemp));
-	}
 	trace_xfs_iunlock(ip, lock_flags, _RET_IP_);
 }
 
@@ -660,3 +718,19 @@ xfs_isilocked(
 	return 0;
 }
 #endif
+
+void
+__xfs_iflock(
+	struct xfs_inode	*ip)
+{
+	wait_queue_head_t *wq = bit_waitqueue(&ip->i_flags, __XFS_IFLOCK_BIT);
+	DEFINE_WAIT_BIT(wait, &ip->i_flags, __XFS_IFLOCK_BIT);
+
+	do {
+		prepare_to_wait_exclusive(wq, &wait.wait, TASK_UNINTERRUPTIBLE);
+		if (xfs_isiflocked(ip))
+			io_schedule();
+	} while (!xfs_iflock_nowait(ip));
+
+	finish_wait(wq, &wait.wait);
+}

@@ -50,7 +50,8 @@ config SND_PCSP
 	  before the other sound driver of yours, making the
 	  pc-speaker a default sound device. Which is likely not
 	  what you want. To make this driver play nicely with other
-	  sound driver, you can add this into your /etc/modprobe.conf:
+	  sound driver, you can add this in a configuration file under
+	  /etc/modprobe.d/ directory:
 	  options snd-pcsp index=2
 
 	  You don't need this driver if you only want your pc-speaker to beep.
@@ -73,6 +74,25 @@ config SND_DUMMY
 
 	  To compile this driver as a module, choose M here: the module
 	  will be called snd-dummy.
+
+config SND_ALOOP
+        tristate "Generic loopback driver (PCM)"
+        select SND_PCM
+        help
+          Say 'Y' or 'M' to include support for the PCM loopback device.
+	  This module returns played samples back to the user space using
+	  the standard ALSA PCM device. The devices are routed 0->1 and
+          1->0, where first number is the playback PCM device and second
+	  number is the capture device. Module creates two PCM devices and
+	  configured number of substreams (see the pcm_substreams module
+          parameter).
+
+	  The looback device allow time sychronization with an external
+	  timing source using the time shift universal control (+-20%
+	  of system time).
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called snd-aloop.
 
 config SND_VIRMIDI
 	tristate "Virtual MIDI soundcard"

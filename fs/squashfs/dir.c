@@ -2,7 +2,7 @@
  * Squashfs - a compressed read only filesystem for Linux
  *
  * Copyright (c) 2002, 2003, 2004, 2005, 2006, 2007, 2008
- * Phillip Lougher <phillip@lougher.demon.co.uk>
+ * Phillip Lougher <phillip@squashfs.org.uk>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -64,7 +64,7 @@ static int get_dir_index_using_offset(struct super_block *sb,
 	 * is offset by 3 because we invent "." and ".." entries which are
 	 * not actually stored in the directory.
 	 */
-	if (f_pos < 3)
+	if (f_pos <= 3)
 		return f_pos;
 	f_pos -= 3;
 
@@ -105,7 +105,7 @@ static int squashfs_readdir(struct file *file, void *dirent, filldir_t filldir)
 	struct inode *inode = file->f_dentry->d_inode;
 	struct squashfs_sb_info *msblk = inode->i_sb->s_fs_info;
 	u64 block = squashfs_i(inode)->start + msblk->directory_table;
-	int offset = squashfs_i(inode)->offset, length = 0, dir_count, size,
+	int offset = squashfs_i(inode)->offset, length, dir_count, size,
 				type, err;
 	unsigned int inode_number;
 	struct squashfs_dir_header dirh;
@@ -172,6 +172,10 @@ static int squashfs_readdir(struct file *file, void *dirent, filldir_t filldir)
 		length += sizeof(dirh);
 
 		dir_count = le32_to_cpu(dirh.count) + 1;
+
+		if (dir_count > SQUASHFS_DIR_COUNT)
+			goto failed_read;
+
 		while (dir_count--) {
 			/*
 			 * Read directory entry.
@@ -182,6 +186,10 @@ static int squashfs_readdir(struct file *file, void *dirent, filldir_t filldir)
 				goto failed_read;
 
 			size = le16_to_cpu(dire->size) + 1;
+
+			/* size should never be larger than SQUASHFS_NAME_LEN */
+			if (size > SQUASHFS_NAME_LEN)
+				goto failed_read;
 
 			err = squashfs_read_metadata(inode->i_sb, dire->name,
 					&block, &offset, size);
@@ -230,5 +238,6 @@ failed_read:
 
 const struct file_operations squashfs_dir_ops = {
 	.read = generic_read_dir,
-	.readdir = squashfs_readdir
+	.readdir = squashfs_readdir,
+	.llseek = default_llseek,
 };

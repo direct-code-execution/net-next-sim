@@ -24,6 +24,7 @@
 #include <asm/sections.h>
 #include <asm/exceptions.h>
 #include <asm/unwind.h>
+#include <asm/switch_to.h>
 
 struct stack_trace;
 
@@ -183,7 +184,7 @@ static inline void unwind_trap(struct task_struct *task, unsigned long pc,
  * @trace : Where to store stack backtrace (PC values).
  *	    NULL == print backtrace to kernel log
  */
-void microblaze_unwind_inner(struct task_struct *task,
+static void microblaze_unwind_inner(struct task_struct *task,
 			     unsigned long pc, unsigned long fp,
 			     unsigned long leaf_return,
 			     struct stack_trace *trace)

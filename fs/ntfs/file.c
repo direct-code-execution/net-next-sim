@@ -1,7 +1,7 @@
 /*
  * file.c - NTFS kernel file operations.  Part of the Linux-NTFS project.
  *
- * Copyright (c) 2001-2007 Anton Altaparmakov
+ * Copyright (c) 2001-2011 Anton Altaparmakov and Tuxera Inc.
  *
  * This program/include file is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as published
@@ -704,7 +704,7 @@ map_buffer_cached:
 				u8 *kaddr;
 				unsigned pofs;
 					
-				kaddr = kmap_atomic(page, KM_USER0);
+				kaddr = kmap_atomic(page);
 				if (bh_pos < pos) {
 					pofs = bh_pos & ~PAGE_CACHE_MASK;
 					memset(kaddr + pofs, 0, pos - bh_pos);
@@ -713,7 +713,7 @@ map_buffer_cached:
 					pofs = end & ~PAGE_CACHE_MASK;
 					memset(kaddr + pofs, 0, bh_end - end);
 				}
-				kunmap_atomic(kaddr, KM_USER0);
+				kunmap_atomic(kaddr);
 				flush_dcache_page(page);
 			}
 			continue;
@@ -1287,9 +1287,9 @@ static inline size_t ntfs_copy_from_user(struct page **pages,
 		len = PAGE_CACHE_SIZE - ofs;
 		if (len > bytes)
 			len = bytes;
-		addr = kmap_atomic(*pages, KM_USER0);
+		addr = kmap_atomic(*pages);
 		left = __copy_from_user_inatomic(addr + ofs, buf, len);
-		kunmap_atomic(addr, KM_USER0);
+		kunmap_atomic(addr);
 		if (unlikely(left)) {
 			/* Do it the slow way. */
 			addr = kmap(*pages);
@@ -1380,15 +1380,14 @@ static inline void ntfs_set_next_iovec(const struct iovec **iovp,
  * pages (out to offset + bytes), to emulate ntfs_copy_from_user()'s
  * single-segment behaviour.
  *
- * We call the same helper (__ntfs_copy_from_user_iovec_inatomic()) both
- * when atomic and when not atomic.  This is ok because
- * __ntfs_copy_from_user_iovec_inatomic() calls __copy_from_user_inatomic()
- * and it is ok to call this when non-atomic.
- * Infact, the only difference between __copy_from_user_inatomic() and
+ * We call the same helper (__ntfs_copy_from_user_iovec_inatomic()) both when
+ * atomic and when not atomic.  This is ok because it calls
+ * __copy_from_user_inatomic() and it is ok to call this when non-atomic.  In
+ * fact, the only difference between __copy_from_user_inatomic() and
  * __copy_from_user() is that the latter calls might_sleep() and the former
- * should not zero the tail of the buffer on error.  And on many
- * architectures __copy_from_user_inatomic() is just defined to
- * __copy_from_user() so it makes no difference at all on those architectures.
+ * should not zero the tail of the buffer on error.  And on many architectures
+ * __copy_from_user_inatomic() is just defined to __copy_from_user() so it
+ * makes no difference at all on those architectures.
  */
 static inline size_t ntfs_copy_from_user_iovec(struct page **pages,
 		unsigned nr_pages, unsigned ofs, const struct iovec **iov,
@@ -1402,35 +1401,35 @@ static inline size_t ntfs_copy_from_user_iovec(struct page **pages,
 		len = PAGE_CACHE_SIZE - ofs;
 		if (len > bytes)
 			len = bytes;
-		addr = kmap_atomic(*pages, KM_USER0);
+		addr = kmap_atomic(*pages);
 		copied = __ntfs_copy_from_user_iovec_inatomic(addr + ofs,
 				*iov, *iov_ofs, len);
-		kunmap_atomic(addr, KM_USER0);
+		kunmap_atomic(addr);
 		if (unlikely(copied != len)) {
 			/* Do it the slow way. */
 			addr = kmap(*pages);
-			copied = __ntfs_copy_from_user_iovec_inatomic(addr + ofs,
-					*iov, *iov_ofs, len);
-			/*
-			 * Zero the rest of the target like __copy_from_user().
-			 */
-			memset(addr + ofs + copied, 0, len - copied);
-			kunmap(*pages);
+			copied = __ntfs_copy_from_user_iovec_inatomic(addr +
+					ofs, *iov, *iov_ofs, len);
 			if (unlikely(copied != len))
 				goto err_out;
+			kunmap(*pages);
 		}
 		total += len;
+		ntfs_set_next_iovec(iov, iov_ofs, len);
 		bytes -= len;
 		if (!bytes)
 			break;
-		ntfs_set_next_iovec(iov, iov_ofs, len);
 		ofs = 0;
 	} while (++pages < last_page);
 out:
 	return total;
 err_out:
-	total += copied;
+	BUG_ON(copied > len);
 	/* Zero the rest of the target like __copy_from_user(). */
+	memset(addr + ofs + copied, 0, len - copied);
+	kunmap(*pages);
+	total += copied;
+	ntfs_set_next_iovec(iov, iov_ofs, copied);
 	while (++pages < last_page) {
 		bytes -= len;
 		if (!bytes)
@@ -1692,7 +1691,7 @@ static int ntfs_commit_pages_after_write(struct page **pages,
 	BUG_ON(end > le32_to_cpu(a->length) -
 			le16_to_cpu(a->data.resident.value_offset));
 	kattr = (u8*)a + le16_to_cpu(a->data.resident.value_offset);
-	kaddr = kmap_atomic(page, KM_USER0);
+	kaddr = kmap_atomic(page);
 	/* Copy the received data from the page to the mft record. */
 	memcpy(kattr + pos, kaddr + pos, bytes);
 	/* Update the attribute length if necessary. */
@@ -1714,7 +1713,7 @@ static int ntfs_commit_pages_after_write(struct page **pages,
 		flush_dcache_page(page);
 		SetPageUptodate(page);
 	}
-	kunmap_atomic(kaddr, KM_USER0);
+	kunmap_atomic(kaddr);
 	/* Update initialized_size/i_size if necessary. */
 	read_lock_irqsave(&ni->size_lock, flags);
 	initialized_size = ni->initialized_size;
@@ -1833,9 +1832,8 @@ static ssize_t ntfs_file_buffered_write(struct kiocb *iocb,
 	 * fails again.
 	 */
 	if (unlikely(NInoTruncateFailed(ni))) {
-		down_write(&vi->i_alloc_sem);
+		inode_dio_wait(vi);
 		err = ntfs_truncate(vi);
-		up_write(&vi->i_alloc_sem);
 		if (err || NInoTruncateFailed(ni)) {
 			if (!err)
 				err = -EIO;
@@ -2154,12 +2152,19 @@ static ssize_t ntfs_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
  * with this inode but since we have no simple way of getting to them we ignore
  * this problem for now.
  */
-static int ntfs_file_fsync(struct file *filp, int datasync)
+static int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
+			   int datasync)
 {
 	struct inode *vi = filp->f_mapping->host;
 	int err, ret = 0;
 
 	ntfs_debug("Entering for inode 0x%lx.", vi->i_ino);
+
+	err = filemap_write_and_wait_range(vi->i_mapping, start, end);
+	if (err)
+		return err;
+	mutex_lock(&vi->i_mutex);
+
 	BUG_ON(S_ISDIR(vi->i_mode));
 	if (!datasync || !NInoNonResident(NTFS_I(vi)))
 		ret = __ntfs_write_inode(vi, 1);
@@ -2177,6 +2182,7 @@ static int ntfs_file_fsync(struct file *filp, int datasync)
 	else
 		ntfs_warning(vi->i_sb, "Failed to f%ssync inode 0x%lx.  Error "
 				"%u.", datasync ? "data" : "", vi->i_ino, -ret);
+	mutex_unlock(&vi->i_mutex);
 	return ret;
 }
 

@@ -229,7 +229,7 @@ static struct resource cpmac_low_res[] = {
 		.name	= "irq",
 		.flags	= IORESOURCE_IRQ,
 		.start	= 27,
-		.end 	= 27,
+		.end	= 27,
 	},
 };
 
@@ -357,6 +357,11 @@ static struct gpio_led default_leds[] = {
 	},
 };
 
+static struct gpio_led titan_leds[] = {
+	{ .name = "status", .gpio = 8, .active_low = 1, },
+	{ .name = "wifi", .gpio = 13, .active_low = 1, },
+};
+
 static struct gpio_led dsl502t_leds[] = {
 	{
 		.name			= "status",
@@ -457,6 +462,40 @@ static struct gpio_led fb_fon_leds[] = {
 	},
 };
 
+static struct gpio_led gt701_leds[] = {
+	{
+		.name			= "inet:green",
+		.gpio			= 13,
+		.active_low		= 1,
+	},
+	{
+		.name			= "usb",
+		.gpio			= 12,
+		.active_low		= 1,
+	},
+	{
+		.name			= "inet:red",
+		.gpio			= 9,
+		.active_low		= 1,
+	},
+	{
+		.name			= "power:red",
+		.gpio			= 7,
+		.active_low		= 1,
+	},
+	{
+		.name			= "power:green",
+		.gpio			= 8,
+		.active_low		= 1,
+		.default_trigger	= "default-on",
+	},
+        {
+                .name                   = "ethernet",
+                .gpio                   = 10,
+                .active_low             = 1,
+        },
+};
+
 static struct gpio_led_platform_data ar7_led_data;
 
 static struct platform_device ar7_gpio_leds = {
@@ -495,6 +534,12 @@ static void __init detect_leds(void)
 	} else if (strstr(prid, "DG834")) {
 		ar7_led_data.num_leds = ARRAY_SIZE(dg834g_leds);
 		ar7_led_data.leds = dg834g_leds;
+	} else if (strstr(prid, "CYWM") || strstr(prid, "CYWL")) {
+		ar7_led_data.num_leds = ARRAY_SIZE(titan_leds);
+		ar7_led_data.leds = titan_leds;
+	} else if (strstr(prid, "GT701")) {
+		ar7_led_data.num_leds = ARRAY_SIZE(gt701_leds);
+		ar7_led_data.leds = gt701_leds;
 	}
 }
 
@@ -528,7 +573,7 @@ static int __init ar7_register_uarts(void)
 
 	bus_clk = clk_get(NULL, "bus");
 	if (IS_ERR(bus_clk))
-		panic("unable to get bus clk\n");
+		panic("unable to get bus clk");
 
 	uart_port.type		= PORT_AR7;
 	uart_port.uartclk	= clk_get_rate(bus_clk) / 2;
@@ -560,6 +605,51 @@ static int __init ar7_register_uarts(void)
 	return 0;
 }
 
+static void __init titan_fixup_devices(void)
+{
+	/* Set vlynq0 data */
+	vlynq_low_data.reset_bit = 15;
+	vlynq_low_data.gpio_bit = 14;
+
+	/* Set vlynq1 data */
+	vlynq_high_data.reset_bit = 16;
+	vlynq_high_data.gpio_bit = 7;
+
+	/* Set vlynq0 resources */
+	vlynq_low_res[0].start = TITAN_REGS_VLYNQ0;
+	vlynq_low_res[0].end = TITAN_REGS_VLYNQ0 + 0xff;
+	vlynq_low_res[1].start = 33;
+	vlynq_low_res[1].end = 33;
+	vlynq_low_res[2].start = 0x0c000000;
+	vlynq_low_res[2].end = 0x0fffffff;
+	vlynq_low_res[3].start = 80;
+	vlynq_low_res[3].end = 111;
+
+	/* Set vlynq1 resources */
+	vlynq_high_res[0].start = TITAN_REGS_VLYNQ1;
+	vlynq_high_res[0].end = TITAN_REGS_VLYNQ1 + 0xff;
+	vlynq_high_res[1].start = 34;
+	vlynq_high_res[1].end = 34;
+	vlynq_high_res[2].start = 0x40000000;
+	vlynq_high_res[2].end = 0x43ffffff;
+	vlynq_high_res[3].start = 112;
+	vlynq_high_res[3].end = 143;
+
+	/* Set cpmac0 data */
+	cpmac_low_data.phy_mask = 0x40000000;
+
+	/* Set cpmac1 data */
+	cpmac_high_data.phy_mask = 0x80000000;
+
+	/* Set cpmac0 resources */
+	cpmac_low_res[0].start = TITAN_REGS_MAC0;
+	cpmac_low_res[0].end = TITAN_REGS_MAC0 + 0x7ff;
+
+	/* Set cpmac1 resources */
+	cpmac_high_res[0].start = TITAN_REGS_MAC1;
+	cpmac_high_res[0].end = TITAN_REGS_MAC1 + 0x7ff;
+}
+
 static int __init ar7_register_devices(void)
 {
 	void __iomem *bootcr;
@@ -573,6 +663,9 @@ static int __init ar7_register_devices(void)
 	res = platform_device_register(&physmap_flash);
 	if (res)
 		pr_warning("unable to register physmap-flash: %d\n", res);
+
+	if (ar7_is_titan())
+		titan_fixup_devices();
 
 	ar7_device_disable(vlynq_low_data.reset_bit);
 	res = platform_device_register(&vlynq_low);

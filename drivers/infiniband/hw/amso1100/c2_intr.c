@@ -62,8 +62,8 @@ void c2_rnic_interrupt(struct c2_dev *c2dev)
 static void handle_mq(struct c2_dev *c2dev, u32 mq_index)
 {
 	if (c2dev->qptr_array[mq_index] == NULL) {
-		pr_debug(KERN_INFO "handle_mq: stray activity for mq_index=%d\n",
-			mq_index);
+		pr_debug("handle_mq: stray activity for mq_index=%d\n",
+			 mq_index);
 		return;
 	}
 
@@ -183,6 +183,11 @@ static void handle_vq(struct c2_dev *c2dev, u32 mq_index)
 	case IW_CM_EVENT_ESTABLISHED:
 		c2_set_qp_state(req->qp,
 				C2_QP_STATE_RTS);
+		/*
+		 * Until ird/ord negotiation via MPAv2 support is added, send
+		 * max supported values
+		 */
+		cm_event.ird = cm_event.ord = 128;
 	case IW_CM_EVENT_CLOSE:
 
 		/*

@@ -8,7 +8,10 @@
 #define _MACH_GPIO_H_
 
 #define MAX_BLACKFIN_GPIOS 16
+#ifdef CONFIG_GPIOLIB
+/* We only use the special logic with GPIOLIB devices */
 #define BFIN_SPECIAL_GPIO_BANKS 3
+#endif
 
 #define GPIO_PF0	0	/* PF */
 #define GPIO_PF1	1
@@ -69,5 +72,10 @@
 #define PORT_C GPIO_PC0
 #define PORT_D GPIO_PD0
 #define PORT_E GPIO_PE0
+
+#include <mach-common/ports-c.h>
+#include <mach-common/ports-d.h>
+#include <mach-common/ports-e.h>
+#include <mach-common/ports-f.h>
 
 #endif /* _MACH_GPIO_H_ */

@@ -36,9 +36,9 @@
 static void
 nv50_cursor_show(struct nouveau_crtc *nv_crtc, bool update)
 {
-	struct drm_nouveau_private *dev_priv = nv_crtc->base.dev->dev_private;
-	struct nouveau_channel *evo = dev_priv->evo;
 	struct drm_device *dev = nv_crtc->base.dev;
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_channel *evo = nv50_display(dev)->master;
 	int ret;
 
 	NV_DEBUG_KMS(dev, "\n");
@@ -71,9 +71,9 @@ nv50_cursor_show(struct nouveau_crtc *nv_crtc, bool update)
 static void
 nv50_cursor_hide(struct nouveau_crtc *nv_crtc, bool update)
 {
-	struct drm_nouveau_private *dev_priv = nv_crtc->base.dev->dev_private;
-	struct nouveau_channel *evo = dev_priv->evo;
 	struct drm_device *dev = nv_crtc->base.dev;
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_channel *evo = nv50_display(dev)->master;
 	int ret;
 
 	NV_DEBUG_KMS(dev, "\n");
@@ -137,21 +137,3 @@ nv50_cursor_init(struct nouveau_crtc *nv_crtc)
 	nv_crtc->cursor.show = nv50_cursor_show;
 	return 0;
 }
-
-void
-nv50_cursor_fini(struct nouveau_crtc *nv_crtc)
-{
-	struct drm_device *dev = nv_crtc->base.dev;
-	int idx = nv_crtc->index;
-
-	NV_DEBUG_KMS(dev, "\n");
-
-	nv_wr32(dev, NV50_PDISPLAY_CURSOR_CURSOR_CTRL2(idx), 0);
-	if (!nv_wait(NV50_PDISPLAY_CURSOR_CURSOR_CTRL2(idx),
-		     NV50_PDISPLAY_CURSOR_CURSOR_CTRL2_STATUS, 0)) {
-		NV_ERROR(dev, "timeout: CURSOR_CTRL2_STATUS == 0\n");
-		NV_ERROR(dev, "CURSOR_CTRL2 = 0x%08x\n",
-			 nv_rd32(dev, NV50_PDISPLAY_CURSOR_CURSOR_CTRL2(idx)));
-	}
-}
-

@@ -6,6 +6,7 @@
 #include <linux/pci.h>
 #include <linux/of_address.h>
 #include <linux/of_device.h>
+#include <linux/serial_reg.h>
 #include <asm/io.h>
 #include <asm/mmu.h>
 #include <asm/prom.h>
@@ -47,19 +48,37 @@ static struct __initdata of_device_id legacy_serial_parents[] = {
 static unsigned int legacy_serial_count;
 static int legacy_serial_console = -1;
 
+static unsigned int tsi_serial_in(struct uart_port *p, int offset)
+{
+	unsigned int tmp;
+	offset = offset << p->regshift;
+	if (offset == UART_IIR) {
+		tmp = readl(p->membase + (UART_IIR & ~3));
+		return (tmp >> 16) & 0xff; /* UART_IIR % 4 == 2 */
+	} else
+		return readb(p->membase + offset);
+}
+
+static void tsi_serial_out(struct uart_port *p, int offset, int value)
+{
+	offset = offset << p->regshift;
+	if (!((offset == UART_IER) && (value & UART_IER_UUE)))
+		writeb(value, p->membase + offset);
+}
+
 static int __init add_legacy_port(struct device_node *np, int want_index,
 				  int iotype, phys_addr_t base,
 				  phys_addr_t taddr, unsigned long irq,
 				  upf_t flags, int irq_check_parent)
 {
-	const u32 *clk, *spd;
+	const __be32 *clk, *spd;
 	u32 clock = BASE_BAUD * 16;
 	int index;
 
 	/* get clock freq. if present */
 	clk = of_get_property(np, "clock-frequency", NULL);
 	if (clk && *clk)
-		clock = *clk;
+		clock = be32_to_cpup(clk);
 
 	/* get default speed if present */
 	spd = of_get_property(np, "current-speed", NULL);
@@ -102,6 +121,7 @@ static int __init add_legacy_port(struct device_node *np, int want_index,
 		legacy_serial_ports[index].iobase = base;
 	else
 		legacy_serial_ports[index].mapbase = base;
+
 	legacy_serial_ports[index].iotype = iotype;
 	legacy_serial_ports[index].uartclk = clock;
 	legacy_serial_ports[index].irq = irq;
@@ -109,8 +129,13 @@ static int __init add_legacy_port(struct device_node *np, int want_index,
 	legacy_serial_infos[index].taddr = taddr;
 	legacy_serial_infos[index].np = of_node_get(np);
 	legacy_serial_infos[index].clock = clock;
-	legacy_serial_infos[index].speed = spd ? *spd : 0;
+	legacy_serial_infos[index].speed = spd ? be32_to_cpup(spd) : 0;
 	legacy_serial_infos[index].irq_check_parent = irq_check_parent;
+
+	if (iotype == UPIO_TSI) {
+		legacy_serial_ports[index].serial_in = tsi_serial_in;
+		legacy_serial_ports[index].serial_out = tsi_serial_out;
+	}
 
 	printk(KERN_DEBUG "Found legacy serial port %d for %s\n",
 	       index, np->full_name);
@@ -168,7 +193,7 @@ static int __init add_legacy_soc_port(struct device_node *np,
 static int __init add_legacy_isa_port(struct device_node *np,
 				      struct device_node *isa_brg)
 {
-	const u32 *reg;
+	const __be32 *reg;
 	const char *typep;
 	int index = -1;
 	u64 taddr;
@@ -181,7 +206,7 @@ static int __init add_legacy_isa_port(struct device_node *np,
 		return -1;
 
 	/* Verify it's an IO port, we don't support anything else */
-	if (!(reg[0] & 0x00000001))
+	if (!(be32_to_cpu(reg[0]) & 0x00000001))
 		return -1;
 
 	/* Now look for an "ibm,aix-loc" property that gives us ordering
@@ -202,7 +227,7 @@ static int __init add_legacy_isa_port(struct device_node *np,
 		taddr = 0;
 
 	/* Add port, irq will be dealt with later */
-	return add_legacy_port(np, index, UPIO_PORT, reg[1], taddr,
+	return add_legacy_port(np, index, UPIO_PORT, be32_to_cpu(reg[1]), taddr,
 			       NO_IRQ, UPF_BOOT_AUTOCONF, 0);
 
 }
@@ -251,9 +276,9 @@ static int __init add_legacy_pci_port(struct device_node *np,
 	 * we get to their "reg" property
 	 */
 	if (np != pci_dev) {
-		const u32 *reg = of_get_property(np, "reg", NULL);
-		if (reg && (*reg < 4))
-			index = lindex = *reg;
+		const __be32 *reg = of_get_property(np, "reg", NULL);
+		if (reg && (be32_to_cpup(reg) < 4))
+			index = lindex = be32_to_cpup(reg);
 	}
 
 	/* Local index means it's the Nth port in the PCI chip. Unfortunately
@@ -330,9 +355,11 @@ void __init find_legacy_serial_ports(void)
 		if (!parent)
 			continue;
 		if (of_match_node(legacy_serial_parents, parent) != NULL) {
-			index = add_legacy_soc_port(np, np);
-			if (index >= 0 && np == stdout)
-				legacy_serial_console = index;
+			if (of_device_is_available(np)) {
+				index = add_legacy_soc_port(np, np);
+				if (index >= 0 && np == stdout)
+					legacy_serial_console = index;
+			}
 		}
 		of_node_put(parent);
 	}
@@ -414,6 +441,11 @@ static void __init fixup_port_irq(int index,
 		return;
 
 	port->irq = virq;
+
+#ifdef CONFIG_SERIAL_8250_FSL
+	if (of_device_is_compatible(np, "fsl,ns16550"))
+		port->handle_irq = fsl8250_handle_irq;
+#endif
 }
 
 static void __init fixup_port_pio(int index,
@@ -507,7 +539,7 @@ static int __init check_legacy_serial_console(void)
 	struct device_node *prom_stdout = NULL;
 	int i, speed = 0, offset = 0;
 	const char *name;
-	const u32 *spd;
+	const __be32 *spd;
 
 	DBG(" -> check_legacy_serial_console()\n");
 
@@ -547,7 +579,7 @@ static int __init check_legacy_serial_console(void)
 	}
 	spd = of_get_property(prom_stdout, "current-speed", NULL);
 	if (spd)
-		speed = *spd;
+		speed = be32_to_cpup(spd);
 
 	if (strcmp(name, "serial") != 0)
 		goto not_found;

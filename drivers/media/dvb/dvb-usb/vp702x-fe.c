@@ -41,14 +41,23 @@ struct vp702x_fe_state {
 
 static int vp702x_fe_refresh_state(struct vp702x_fe_state *st)
 {
-	u8 buf[10];
-	if (time_after(jiffies,st->next_status_check)) {
-		vp702x_usb_in_op(st->d,READ_STATUS,0,0,buf,10);
+	struct vp702x_device_state *dst = st->d->priv;
+	u8 *buf;
 
+	if (time_after(jiffies, st->next_status_check)) {
+		mutex_lock(&dst->buf_mutex);
+		buf = dst->buf;
+
+		vp702x_usb_in_op(st->d, READ_STATUS, 0, 0, buf, 10);
 		st->lock = buf[4];
-		vp702x_usb_in_op(st->d,READ_TUNER_REG_REQ,0x11,0,&st->snr,1);
-		vp702x_usb_in_op(st->d,READ_TUNER_REG_REQ,0x15,0,&st->sig,1);
 
+		vp702x_usb_in_op(st->d, READ_TUNER_REG_REQ, 0x11, 0, buf, 1);
+		st->snr = buf[0];
+
+		vp702x_usb_in_op(st->d, READ_TUNER_REG_REQ, 0x15, 0, buf, 1);
+		st->sig = buf[0];
+
+		mutex_unlock(&dst->buf_mutex);
 		st->next_status_check = jiffies + (st->status_check_interval*HZ)/1000;
 	}
 	return 0;
@@ -126,28 +135,34 @@ static int vp702x_fe_get_tune_settings(struct dvb_frontend* fe, struct dvb_front
 	return 0;
 }
 
-static int vp702x_fe_set_frontend(struct dvb_frontend* fe,
-				  struct dvb_frontend_parameters *fep)
+static int vp702x_fe_set_frontend(struct dvb_frontend *fe)
 {
+	struct dtv_frontend_properties *fep = &fe->dtv_property_cache;
 	struct vp702x_fe_state *st = fe->demodulator_priv;
+	struct vp702x_device_state *dst = st->d->priv;
 	u32 freq = fep->frequency/1000;
 	/*CalFrequency*/
 /*	u16 frequencyRef[16] = { 2, 4, 8, 16, 32, 64, 128, 256, 24, 5, 10, 20, 40, 80, 160, 320 }; */
 	u64 sr;
-	u8 cmd[8] = { 0 },ibuf[10];
+	u8 *cmd;
+
+	mutex_lock(&dst->buf_mutex);
+
+	cmd = dst->buf;
+	memset(cmd, 0, 10);
 
 	cmd[0] = (freq >> 8) & 0x7f;
 	cmd[1] =  freq       & 0xff;
 	cmd[2] = 1; /* divrate == 4 -> frequencyRef[1] -> 1 here */
 
-	sr = (u64) (fep->u.qpsk.symbol_rate/1000) << 20;
+	sr = (u64) (fep->symbol_rate/1000) << 20;
 	do_div(sr,88000);
 	cmd[3] = (sr >> 12) & 0xff;
 	cmd[4] = (sr >> 4)  & 0xff;
 	cmd[5] = (sr << 4)  & 0xf0;
 
 	deb_fe("setting frontend to: %u -> %u (%x) LNB-based GHz, symbolrate: %d -> %lu (%lx)\n",
-			fep->frequency,freq,freq, fep->u.qpsk.symbol_rate,
+			fep->frequency, freq, freq, fep->symbol_rate,
 			(unsigned long) sr, (unsigned long) sr);
 
 /*	if (fep->inversion == INVERSION_ON)
@@ -156,7 +171,7 @@ static int vp702x_fe_set_frontend(struct dvb_frontend* fe,
 	if (st->voltage == SEC_VOLTAGE_18)
 		cmd[6] |= 0x40;
 
-/*	if (fep->u.qpsk.symbol_rate > 8000000)
+/*	if (fep->symbol_rate > 8000000)
 		cmd[6] |= 0x20;
 
 	if (fep->frequency < 1531000)
@@ -170,12 +185,14 @@ static int vp702x_fe_set_frontend(struct dvb_frontend* fe,
 	st->status_check_interval = 250;
 	st->next_status_check = jiffies;
 
-	vp702x_usb_inout_op(st->d,cmd,8,ibuf,10,100);
+	vp702x_usb_inout_op(st->d, cmd, 8, cmd, 10, 100);
 
-	if (ibuf[2] == 0 && ibuf[3] == 0)
+	if (cmd[2] == 0 && cmd[3] == 0)
 		deb_fe("tuning failed.\n");
 	else
 		deb_fe("tuning succeeded.\n");
+
+	mutex_unlock(&dst->buf_mutex);
 
 	return 0;
 }
@@ -194,36 +211,34 @@ static int vp702x_fe_sleep(struct dvb_frontend *fe)
 	return 0;
 }
 
-static int vp702x_fe_get_frontend(struct dvb_frontend* fe,
-				  struct dvb_frontend_parameters *fep)
-{
-	deb_fe("%s\n",__func__);
-	return 0;
-}
-
 static int vp702x_fe_send_diseqc_msg (struct dvb_frontend* fe,
 				    struct dvb_diseqc_master_cmd *m)
 {
+	u8 *cmd;
 	struct vp702x_fe_state *st = fe->demodulator_priv;
-	u8 cmd[8],ibuf[10];
-	memset(cmd,0,8);
+	struct vp702x_device_state *dst = st->d->priv;
 
 	deb_fe("%s\n",__func__);
 
 	if (m->msg_len > 4)
 		return -EINVAL;
 
+	mutex_lock(&dst->buf_mutex);
+
+	cmd = dst->buf;
 	cmd[1] = SET_DISEQC_CMD;
 	cmd[2] = m->msg_len;
 	memcpy(&cmd[3], m->msg, m->msg_len);
-	cmd[7] = vp702x_chksum(cmd,0,7);
+	cmd[7] = vp702x_chksum(cmd, 0, 7);
 
-	vp702x_usb_inout_op(st->d,cmd,8,ibuf,10,100);
+	vp702x_usb_inout_op(st->d, cmd, 8, cmd, 10, 100);
 
-	if (ibuf[2] == 0 && ibuf[3] == 0)
+	if (cmd[2] == 0 && cmd[3] == 0)
 		deb_fe("diseqc cmd failed.\n");
 	else
 		deb_fe("diseqc cmd succeeded.\n");
+
+	mutex_unlock(&dst->buf_mutex);
 
 	return 0;
 }
@@ -237,7 +252,9 @@ static int vp702x_fe_send_diseqc_burst (struct dvb_frontend* fe, fe_sec_mini_cmd
 static int vp702x_fe_set_tone(struct dvb_frontend* fe, fe_sec_tone_mode_t tone)
 {
 	struct vp702x_fe_state *st = fe->demodulator_priv;
-	u8 ibuf[10];
+	struct vp702x_device_state *dst = st->d->priv;
+	u8 *buf;
+
 	deb_fe("%s\n",__func__);
 
 	st->tone_mode = tone;
@@ -247,13 +264,20 @@ static int vp702x_fe_set_tone(struct dvb_frontend* fe, fe_sec_tone_mode_t tone)
 	else
 		st->lnb_buf[2] = 0x00;
 
-	st->lnb_buf[7] = vp702x_chksum(st->lnb_buf,0,7);
+	st->lnb_buf[7] = vp702x_chksum(st->lnb_buf, 0, 7);
 
-	vp702x_usb_inout_op(st->d,st->lnb_buf,8,ibuf,10,100);
-	if (ibuf[2] == 0 && ibuf[3] == 0)
+	mutex_lock(&dst->buf_mutex);
+
+	buf = dst->buf;
+	memcpy(buf, st->lnb_buf, 8);
+
+	vp702x_usb_inout_op(st->d, buf, 8, buf, 10, 100);
+	if (buf[2] == 0 && buf[3] == 0)
 		deb_fe("set_tone cmd failed.\n");
 	else
 		deb_fe("set_tone cmd succeeded.\n");
+
+	mutex_unlock(&dst->buf_mutex);
 
 	return 0;
 }
@@ -262,7 +286,8 @@ static int vp702x_fe_set_voltage (struct dvb_frontend* fe, fe_sec_voltage_t
 		voltage)
 {
 	struct vp702x_fe_state *st = fe->demodulator_priv;
-	u8 ibuf[10];
+	struct vp702x_device_state *dst = st->d->priv;
+	u8 *buf;
 	deb_fe("%s\n",__func__);
 
 	st->voltage = voltage;
@@ -272,14 +297,20 @@ static int vp702x_fe_set_voltage (struct dvb_frontend* fe, fe_sec_voltage_t
 	else
 		st->lnb_buf[4] = 0x00;
 
-	st->lnb_buf[7] = vp702x_chksum(st->lnb_buf,0,7);
+	st->lnb_buf[7] = vp702x_chksum(st->lnb_buf, 0, 7);
 
-	vp702x_usb_inout_op(st->d,st->lnb_buf,8,ibuf,10,100);
-	if (ibuf[2] == 0 && ibuf[3] == 0)
+	mutex_lock(&dst->buf_mutex);
+
+	buf = dst->buf;
+	memcpy(buf, st->lnb_buf, 8);
+
+	vp702x_usb_inout_op(st->d, buf, 8, buf, 10, 100);
+	if (buf[2] == 0 && buf[3] == 0)
 		deb_fe("set_voltage cmd failed.\n");
 	else
 		deb_fe("set_voltage cmd succeeded.\n");
 
+	mutex_unlock(&dst->buf_mutex);
 	return 0;
 }
 
@@ -312,9 +343,9 @@ error:
 
 
 static struct dvb_frontend_ops vp702x_fe_ops = {
+	.delsys = { SYS_DVBS },
 	.info = {
 		.name           = "Twinhan DST-like frontend (VP7021/VP7020) DVB-S",
-		.type           = FE_QPSK,
 		.frequency_min       = 950000,
 		.frequency_max       = 2150000,
 		.frequency_stepsize  = 1000,   /* kHz for QPSK frontends */
@@ -333,7 +364,6 @@ static struct dvb_frontend_ops vp702x_fe_ops = {
 	.sleep = vp702x_fe_sleep,
 
 	.set_frontend = vp702x_fe_set_frontend,
-	.get_frontend = vp702x_fe_get_frontend,
 	.get_tune_settings = vp702x_fe_get_tune_settings,
 
 	.read_status = vp702x_fe_read_status,

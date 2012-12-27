@@ -384,9 +384,9 @@ static int kdb_getphys(void *res, unsigned long addr, size_t size)
 	if (!pfn_valid(pfn))
 		return 1;
 	page = pfn_to_page(pfn);
-	vaddr = kmap_atomic(page, KM_KDB);
+	vaddr = kmap_atomic(page);
 	memcpy(res, vaddr + (addr & (PAGE_SIZE - 1)), size);
-	kunmap_atomic(vaddr, KM_KDB);
+	kunmap_atomic(vaddr);
 
 	return 0;
 }
@@ -545,7 +545,7 @@ int kdb_putword(unsigned long addr, unsigned long word, size_t size)
  *	Mask for process state.
  * Notes:
  *	The mask folds data from several sources into a single long value, so
- *	be carefull not to overlap the bits.  TASK_* bits are in the LSB,
+ *	be careful not to overlap the bits.  TASK_* bits are in the LSB,
  *	special cases like UNRUNNABLE are in the MSB.  As of 2.6.10-rc1 there
  *	is no overlap between TASK_* and EXIT_* but that may not always be
  *	true, so EXIT_* bits are shifted left 16 bits before being stored in
@@ -636,7 +636,7 @@ char kdb_task_state_char (const struct task_struct *p)
 		(p->exit_state & EXIT_ZOMBIE) ? 'Z' :
 		(p->exit_state & EXIT_DEAD) ? 'E' :
 		(p->state & TASK_INTERRUPTIBLE) ? 'S' : '?';
-	if (p->pid == 0) {
+	if (is_idle_task(p)) {
 		/* Idle task.  Is it really idle, apart from the kdb
 		 * interrupt? */
 		if (!kdb_task_has_cpu(p) || kgdb_info[cpu].irq_depth == 1) {

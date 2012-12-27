@@ -11,6 +11,8 @@
  *
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/mtd/mtd.h>
@@ -121,7 +123,7 @@ int jffs2_sum_add_inode_mem(struct jffs2_summary *s, struct jffs2_raw_inode *ri,
 	temp->nodetype = ri->nodetype;
 	temp->inode = ri->ino;
 	temp->version = ri->version;
-	temp->offset = cpu_to_je32(ofs); /* relative offset from the begining of the jeb */
+	temp->offset = cpu_to_je32(ofs); /* relative offset from the beginning of the jeb */
 	temp->totlen = ri->totlen;
 	temp->next = NULL;
 
@@ -139,7 +141,7 @@ int jffs2_sum_add_dirent_mem(struct jffs2_summary *s, struct jffs2_raw_dirent *r
 
 	temp->nodetype = rd->nodetype;
 	temp->totlen = rd->totlen;
-	temp->offset = cpu_to_je32(ofs);	/* relative from the begining of the jeb */
+	temp->offset = cpu_to_je32(ofs);	/* relative from the beginning of the jeb */
 	temp->pino = rd->pino;
 	temp->version = rd->version;
 	temp->ino = rd->ino;
@@ -442,13 +444,16 @@ static int jffs2_sum_process_sum_data(struct jffs2_sb_info *c, struct jffs2_eras
 				/* This should never happen, but https://dev.laptop.org/ticket/4184 */
 				checkedlen = strnlen(spd->name, spd->nsize);
 				if (!checkedlen) {
-					printk(KERN_ERR "Dirent at %08x has zero at start of name. Aborting mount.\n",
-					       jeb->offset + je32_to_cpu(spd->offset));
+					pr_err("Dirent at %08x has zero at start of name. Aborting mount.\n",
+					       jeb->offset +
+					       je32_to_cpu(spd->offset));
 					return -EIO;
 				}
 				if (checkedlen < spd->nsize) {
-					printk(KERN_ERR "Dirent at %08x has zeroes in name. Truncating to %d chars\n",
-					       jeb->offset + je32_to_cpu(spd->offset), checkedlen);
+					pr_err("Dirent at %08x has zeroes in name. Truncating to %d chars\n",
+					       jeb->offset +
+					       je32_to_cpu(spd->offset),
+					       checkedlen);
 				}
 
 
@@ -808,8 +813,7 @@ static int jffs2_sum_write_data(struct jffs2_sb_info *c, struct jffs2_eraseblock
 
 	sum_ofs = jeb->offset + c->sector_size - jeb->free_size;
 
-	dbg_summary("JFFS2: writing out data to flash to pos : 0x%08x\n",
-		    sum_ofs);
+	dbg_summary("writing out data to flash to pos : 0x%08x\n", sum_ofs);
 
 	ret = jffs2_flash_writev(c, vecs, 2, sum_ofs, &retlen, 0);
 

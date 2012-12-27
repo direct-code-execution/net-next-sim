@@ -1,8 +1,8 @@
 /*
  *      uvc_driver.c  --  USB Video Class driver
  *
- *      Copyright (C) 2005-2009
- *          Laurent Pinchart (laurent.pinchart@skynet.be)
+ *      Copyright (C) 2005-2010
+ *          Laurent Pinchart (laurent.pinchart@ideasonboard.com)
  *
  *      This program is free software; you can redistribute it and/or modify
  *      it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
  * codec can't handle MJPEG data.
  */
 
+#include <linux/atomic.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/module.h>
@@ -31,18 +32,16 @@
 #include <linux/videodev2.h>
 #include <linux/vmalloc.h>
 #include <linux/wait.h>
-#include <asm/atomic.h>
+#include <linux/version.h>
 #include <asm/unaligned.h>
 
 #include <media/v4l2-common.h>
 
 #include "uvcvideo.h"
 
-#define DRIVER_AUTHOR		"Laurent Pinchart <laurent.pinchart@skynet.be>"
+#define DRIVER_AUTHOR		"Laurent Pinchart " \
+				"<laurent.pinchart@ideasonboard.com>"
 #define DRIVER_DESC		"USB Video Class driver"
-#ifndef DRIVER_VERSION
-#define DRIVER_VERSION		"v0.1.0"
-#endif
 
 unsigned int uvc_clock_param = CLOCK_MONOTONIC;
 unsigned int uvc_no_drop_param;
@@ -86,6 +85,11 @@ static struct uvc_format_desc uvc_fmts[] = {
 		.fcc		= V4L2_PIX_FMT_YUV420,
 	},
 	{
+		.name		= "YUV 4:2:0 (M420)",
+		.guid		= UVC_GUID_FORMAT_M420,
+		.fcc		= V4L2_PIX_FMT_M420,
+	},
+	{
 		.name		= "YUV 4:2:2 (UYVY)",
 		.guid		= UVC_GUID_FORMAT_UYVY,
 		.fcc		= V4L2_PIX_FMT_UYVY,
@@ -104,6 +108,16 @@ static struct uvc_format_desc uvc_fmts[] = {
 		.name		= "RGB Bayer",
 		.guid		= UVC_GUID_FORMAT_BY8,
 		.fcc		= V4L2_PIX_FMT_SBGGR8,
+	},
+	{
+		.name		= "RGB565",
+		.guid		= UVC_GUID_FORMAT_RGBP,
+		.fcc		= V4L2_PIX_FMT_RGB565,
+	},
+	{
+		.name		= "H.264",
+		.guid		= UVC_GUID_FORMAT_H264,
+		.fcc		= V4L2_PIX_FMT_H264,
 	},
 };
 
@@ -240,7 +254,7 @@ uint32_t uvc_fraction_to_interval(uint32_t numerator, uint32_t denominator)
  * Terminal and unit management
  */
 
-static struct uvc_entity *uvc_entity_by_id(struct uvc_device *dev, int id)
+struct uvc_entity *uvc_entity_by_id(struct uvc_device *dev, int id)
 {
 	struct uvc_entity *entity;
 
@@ -787,9 +801,12 @@ static struct uvc_entity *uvc_alloc_entity(u16 type, u8 id,
 	struct uvc_entity *entity;
 	unsigned int num_inputs;
 	unsigned int size;
+	unsigned int i;
 
+	extra_size = ALIGN(extra_size, sizeof(*entity->pads));
 	num_inputs = (type & UVC_TERM_OUTPUT) ? num_pads : num_pads - 1;
-	size = sizeof(*entity) + extra_size + num_inputs;
+	size = sizeof(*entity) + extra_size + sizeof(*entity->pads) * num_pads
+	     + num_inputs;
 	entity = kzalloc(size, GFP_KERNEL);
 	if (entity == NULL)
 		return NULL;
@@ -797,8 +814,17 @@ static struct uvc_entity *uvc_alloc_entity(u16 type, u8 id,
 	entity->id = id;
 	entity->type = type;
 
+	entity->num_links = 0;
+	entity->num_pads = num_pads;
+	entity->pads = ((void *)(entity + 1)) + extra_size;
+
+	for (i = 0; i < num_inputs; ++i)
+		entity->pads[i].flags = MEDIA_PAD_FL_SINK;
+	if (!UVC_ENTITY_IS_OTERM(entity))
+		entity->pads[num_pads-1].flags = MEDIA_PAD_FL_SOURCE;
+
 	entity->bNrInPins = num_inputs;
-	entity->baSourceID = ((__u8 *)entity) + sizeof(*entity) + extra_size;
+	entity->baSourceID = (__u8 *)(&entity->pads[num_pads]);
 
 	return entity;
 }
@@ -1266,6 +1292,14 @@ static int uvc_scan_chain_entity(struct uvc_video_chain *chain,
 
 		break;
 
+	case UVC_OTT_VENDOR_SPECIFIC:
+	case UVC_OTT_DISPLAY:
+	case UVC_OTT_MEDIA_TRANSPORT_OUTPUT:
+		if (uvc_trace_param & UVC_TRACE_PROBE)
+			printk(" OT %d", entity->id);
+
+		break;
+
 	case UVC_TT_STREAMING:
 		if (UVC_ENTITY_IS_ITERM(entity)) {
 			if (uvc_trace_param & UVC_TRACE_PROBE)
@@ -1569,6 +1603,13 @@ static void uvc_delete(struct uvc_device *dev)
 	uvc_status_cleanup(dev);
 	uvc_ctrl_cleanup_device(dev);
 
+	if (dev->vdev.dev)
+		v4l2_device_unregister(&dev->vdev);
+#ifdef CONFIG_MEDIA_CONTROLLER
+	if (media_devnode_is_registered(&dev->mdev.devnode))
+		media_device_unregister(&dev->mdev);
+#endif
+
 	list_for_each_safe(p, n, &dev->chains) {
 		struct uvc_video_chain *chain;
 		chain = list_entry(p, struct uvc_video_chain, list);
@@ -1578,6 +1619,13 @@ static void uvc_delete(struct uvc_device *dev)
 	list_for_each_safe(p, n, &dev->entities) {
 		struct uvc_entity *entity;
 		entity = list_entry(p, struct uvc_entity, list);
+#ifdef CONFIG_MEDIA_CONTROLLER
+		uvc_mc_cleanup_entity(entity);
+#endif
+		if (entity->vdev) {
+			video_device_release(entity->vdev);
+			entity->vdev = NULL;
+		}
 		kfree(entity);
 	}
 
@@ -1599,8 +1647,6 @@ static void uvc_release(struct video_device *vdev)
 {
 	struct uvc_streaming *stream = video_get_drvdata(vdev);
 	struct uvc_device *dev = stream->dev;
-
-	video_device_release(vdev);
 
 	/* Decrement the registered streams count and delete the device when it
 	 * reaches zero.
@@ -1629,6 +1675,8 @@ static void uvc_unregister_video(struct uvc_device *dev)
 
 		video_unregister_device(stream->vdev);
 		stream->vdev = NULL;
+
+		uvc_debugfs_cleanup_stream(stream);
 	}
 
 	/* Decrement the stream count and call uvc_delete explicitly if there
@@ -1654,6 +1702,8 @@ static int uvc_register_video(struct uvc_device *dev,
 		return ret;
 	}
 
+	uvc_debugfs_init_stream(stream);
+
 	/* Register the device with V4L. */
 	vdev = video_device_alloc();
 	if (vdev == NULL) {
@@ -1666,7 +1716,7 @@ static int uvc_register_video(struct uvc_device *dev,
 	 * unregistered before the reference is released, so we don't need to
 	 * get another one.
 	 */
-	vdev->parent = &dev->intf->dev;
+	vdev->v4l2_dev = &dev->vdev;
 	vdev->fops = &uvc_fops;
 	vdev->release = uvc_release;
 	strlcpy(vdev->name, dev->name, sizeof vdev->name);
@@ -1715,6 +1765,8 @@ static int uvc_register_terms(struct uvc_device *dev,
 		ret = uvc_register_video(dev, stream);
 		if (ret < 0)
 			return ret;
+
+		term->vdev = stream->vdev;
 	}
 
 	return 0;
@@ -1729,6 +1781,14 @@ static int uvc_register_chains(struct uvc_device *dev)
 		ret = uvc_register_terms(dev, chain);
 		if (ret < 0)
 			return ret;
+
+#ifdef CONFIG_MEDIA_CONTROLLER
+		ret = uvc_mc_register_entities(chain);
+		if (ret < 0) {
+			uvc_printk(KERN_INFO, "Failed to register entites "
+				"(%d).\n", ret);
+		}
+#endif
 	}
 
 	return 0;
@@ -1762,6 +1822,7 @@ static int uvc_probe(struct usb_interface *intf,
 	INIT_LIST_HEAD(&dev->streams);
 	atomic_set(&dev->nstreams, 0);
 	atomic_set(&dev->users, 0);
+	atomic_set(&dev->nmappings, 0);
 
 	dev->udev = usb_get_dev(udev);
 	dev->intf = usb_get_intf(intf);
@@ -1797,6 +1858,24 @@ static int uvc_probe(struct usb_interface *intf,
 			"linux-uvc-devel mailing list.\n");
 	}
 
+	/* Register the media and V4L2 devices. */
+#ifdef CONFIG_MEDIA_CONTROLLER
+	dev->mdev.dev = &intf->dev;
+	strlcpy(dev->mdev.model, dev->name, sizeof(dev->mdev.model));
+	if (udev->serial)
+		strlcpy(dev->mdev.serial, udev->serial,
+			sizeof(dev->mdev.serial));
+	strcpy(dev->mdev.bus_info, udev->devpath);
+	dev->mdev.hw_revision = le16_to_cpu(udev->descriptor.bcdDevice);
+	dev->mdev.driver_version = LINUX_VERSION_CODE;
+	if (media_device_register(&dev->mdev) < 0)
+		goto error;
+
+	dev->vdev.mdev = &dev->mdev;
+#endif
+	if (v4l2_device_register(&intf->dev, &dev->vdev) < 0)
+		goto error;
+
 	/* Initialize controls. */
 	if (uvc_ctrl_init_device(dev) < 0)
 		goto error;
@@ -1805,7 +1884,7 @@ static int uvc_probe(struct usb_interface *intf,
 	if (uvc_scan_device(dev) < 0)
 		goto error;
 
-	/* Register video devices. */
+	/* Register video device nodes. */
 	if (uvc_register_chains(dev) < 0)
 		goto error;
 
@@ -1820,6 +1899,7 @@ static int uvc_probe(struct usb_interface *intf,
 	}
 
 	uvc_trace(UVC_TRACE_PROBE, "UVC device initialized.\n");
+	usb_enable_autosuspend(udev);
 	return 0;
 
 error:
@@ -1890,7 +1970,7 @@ static int __uvc_resume(struct usb_interface *intf, int reset)
 
 	list_for_each_entry(stream, &dev->streams, list) {
 		if (stream->intf == intf)
-			return uvc_video_resume(stream);
+			return uvc_video_resume(stream, reset);
 	}
 
 	uvc_trace(UVC_TRACE_SUSPEND, "Resume: video streaming USB interface "
@@ -1957,6 +2037,15 @@ MODULE_PARM_DESC(timeout, "Streaming control requests timeout");
  * though they are compliant.
  */
 static struct usb_device_id uvc_ids[] = {
+	/* LogiLink Wireless Webcam */
+	{ .match_flags		= USB_DEVICE_ID_MATCH_DEVICE
+				| USB_DEVICE_ID_MATCH_INT_INFO,
+	  .idVendor		= 0x0416,
+	  .idProduct		= 0xa91a,
+	  .bInterfaceClass	= USB_CLASS_VIDEO,
+	  .bInterfaceSubClass	= 1,
+	  .bInterfaceProtocol	= 0,
+	  .driver_info		= UVC_QUIRK_PROBE_MINMAX },
 	/* Genius eFace 2025 */
 	{ .match_flags		= USB_DEVICE_ID_MATCH_DEVICE
 				| USB_DEVICE_ID_MATCH_INT_INFO,
@@ -2050,6 +2139,15 @@ static struct usb_device_id uvc_ids[] = {
 	  .bInterfaceSubClass	= 1,
 	  .bInterfaceProtocol	= 0,
 	  .driver_info		= UVC_QUIRK_PROBE_MINMAX },
+	/* Dell XPS m1530 */
+	{ .match_flags		= USB_DEVICE_ID_MATCH_DEVICE
+				| USB_DEVICE_ID_MATCH_INT_INFO,
+	  .idVendor		= 0x05a9,
+	  .idProduct		= 0x2640,
+	  .bInterfaceClass	= USB_CLASS_VIDEO,
+	  .bInterfaceSubClass	= 1,
+	  .bInterfaceProtocol	= 0,
+	  .driver_info 		= UVC_QUIRK_PROBE_DEF },
 	/* Apple Built-In iSight */
 	{ .match_flags		= USB_DEVICE_ID_MATCH_DEVICE
 				| USB_DEVICE_ID_MATCH_INT_INFO,
@@ -2060,6 +2158,15 @@ static struct usb_device_id uvc_ids[] = {
 	  .bInterfaceProtocol	= 0,
 	  .driver_info 		= UVC_QUIRK_PROBE_MINMAX
 				| UVC_QUIRK_BUILTIN_ISIGHT },
+	/* Foxlink ("HP Webcam" on HP Mini 5103) */
+	{ .match_flags		= USB_DEVICE_ID_MATCH_DEVICE
+				| USB_DEVICE_ID_MATCH_INT_INFO,
+	  .idVendor		= 0x05c8,
+	  .idProduct		= 0x0403,
+	  .bInterfaceClass	= USB_CLASS_VIDEO,
+	  .bInterfaceSubClass	= 1,
+	  .bInterfaceProtocol	= 0,
+	  .driver_info		= UVC_QUIRK_FIX_BANDWIDTH },
 	/* Genesys Logic USB 2.0 PC Camera */
 	{ .match_flags		= USB_DEVICE_ID_MATCH_DEVICE
 				| USB_DEVICE_ID_MATCH_INT_INFO,
@@ -2069,6 +2176,15 @@ static struct usb_device_id uvc_ids[] = {
 	  .bInterfaceSubClass	= 1,
 	  .bInterfaceProtocol	= 0,
 	  .driver_info		= UVC_QUIRK_STREAM_NO_FID },
+	/* Hercules Classic Silver */
+	{ .match_flags		= USB_DEVICE_ID_MATCH_DEVICE
+				| USB_DEVICE_ID_MATCH_INT_INFO,
+	  .idVendor		= 0x06f8,
+	  .idProduct		= 0x300c,
+	  .bInterfaceClass	= USB_CLASS_VIDEO,
+	  .bInterfaceSubClass	= 1,
+	  .bInterfaceProtocol	= 0,
+	  .driver_info		= UVC_QUIRK_FIX_BANDWIDTH },
 	/* ViMicro Vega */
 	{ .match_flags		= USB_DEVICE_ID_MATCH_DEVICE
 				| USB_DEVICE_ID_MATCH_INT_INFO,
@@ -2115,6 +2231,15 @@ static struct usb_device_id uvc_ids[] = {
 	  .bInterfaceSubClass	= 1,
 	  .bInterfaceProtocol	= 0,
 	  .driver_info		= UVC_QUIRK_STREAM_NO_FID },
+	/* JMicron USB2.0 XGA WebCam */
+	{ .match_flags		= USB_DEVICE_ID_MATCH_DEVICE
+				| USB_DEVICE_ID_MATCH_INT_INFO,
+	  .idVendor		= 0x152d,
+	  .idProduct		= 0x0310,
+	  .bInterfaceClass	= USB_CLASS_VIDEO,
+	  .bInterfaceSubClass	= 1,
+	  .bInterfaceProtocol	= 0,
+	  .driver_info		= UVC_QUIRK_PROBE_MINMAX },
 	/* Syntek (HP Spartan) */
 	{ .match_flags		= USB_DEVICE_ID_MATCH_DEVICE
 				| USB_DEVICE_ID_MATCH_INT_INFO,
@@ -2233,6 +2358,14 @@ static struct usb_device_id uvc_ids[] = {
 	  .bInterfaceSubClass	= 1,
 	  .bInterfaceProtocol	= 0,
 	  .driver_info		= UVC_QUIRK_PROBE_DEF },
+	/* The Imaging Source USB CCD cameras */
+	{ .match_flags		= USB_DEVICE_ID_MATCH_DEVICE
+				| USB_DEVICE_ID_MATCH_INT_INFO,
+	  .idVendor		= 0x199e,
+	  .idProduct		= 0x8102,
+	  .bInterfaceClass	= USB_CLASS_VENDOR_SPEC,
+	  .bInterfaceSubClass	= 1,
+	  .bInterfaceProtocol	= 0 },
 	/* Bodelin ProScopeHR */
 	{ .match_flags		= USB_DEVICE_ID_MATCH_DEVICE
 				| USB_DEVICE_ID_MATCH_DEV_HI
@@ -2285,24 +2418,24 @@ struct uvc_driver uvc_driver = {
 
 static int __init uvc_init(void)
 {
-	int result;
+	int ret;
 
-	INIT_LIST_HEAD(&uvc_driver.devices);
-	INIT_LIST_HEAD(&uvc_driver.controls);
-	mutex_init(&uvc_driver.ctrl_mutex);
+	uvc_debugfs_init();
 
-	uvc_ctrl_init();
+	ret = usb_register(&uvc_driver.driver);
+	if (ret < 0) {
+		uvc_debugfs_cleanup();
+		return ret;
+	}
 
-	result = usb_register(&uvc_driver.driver);
-	if (result == 0)
-		printk(KERN_INFO DRIVER_DESC " (" DRIVER_VERSION ")\n");
-	return result;
+	printk(KERN_INFO DRIVER_DESC " (" DRIVER_VERSION ")\n");
+	return 0;
 }
 
 static void __exit uvc_cleanup(void)
 {
 	usb_deregister(&uvc_driver.driver);
-	uvc_ctrl_cleanup();
+	uvc_debugfs_cleanup();
 }
 
 module_init(uvc_init);

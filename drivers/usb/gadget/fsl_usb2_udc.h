@@ -15,7 +15,7 @@ struct usb_dr_device {
 	u8 res1[256];
 	u16 caplength;		/* Capability Register Length */
 	u16 hciversion;		/* Host Controller Interface Version */
-	u32 hcsparams;		/* Host Controller Structual Parameters */
+	u32 hcsparams;		/* Host Controller Structural Parameters */
 	u32 hccparams;		/* Host Controller Capability Parameters */
 	u8 res2[20];
 	u32 dciversion;		/* Device Controller Interface Version */
@@ -52,7 +52,7 @@ struct usb_dr_host {
 	u8 res1[256];
 	u16 caplength;		/* Capability Register Length */
 	u16 hciversion;		/* Host Controller Interface Version */
-	u32 hcsparams;		/* Host Controller Structual Parameters */
+	u32 hcsparams;		/* Host Controller Structural Parameters */
 	u32 hccparams;		/* Host Controller Capability Parameters */
 	u8 res2[20];
 	u32 dciversion;		/* Device Controller Interface Version */
@@ -275,7 +275,9 @@ struct usb_sys_interface {
 #define  USB_MODE_CTRL_MODE_IDLE              0x00000000
 #define  USB_MODE_CTRL_MODE_DEVICE            0x00000002
 #define  USB_MODE_CTRL_MODE_HOST              0x00000003
+#define  USB_MODE_CTRL_MODE_MASK              0x00000003
 #define  USB_MODE_CTRL_MODE_RSV               0x00000001
+#define  USB_MODE_ES                          0x00000004 /* Endian Select */
 #define  USB_MODE_SETUP_LOCK_OFF              0x00000008
 #define  USB_MODE_STREAM_DISABLE              0x00000010
 /* Endpoint Flush Register */
@@ -461,6 +463,7 @@ struct fsl_ep {
 struct fsl_udc {
 	struct usb_gadget gadget;
 	struct usb_gadget_driver *driver;
+	struct fsl_usb2_platform_data *pdata;
 	struct completion *done;	/* to make sure release() is done */
 	struct fsl_ep *eps;
 	unsigned int max_ep;
@@ -468,11 +471,13 @@ struct fsl_udc {
 
 	struct usb_ctrlrequest local_setup_buff;
 	spinlock_t lock;
-	struct otg_transceiver *transceiver;
+	struct usb_phy *transceiver;
 	unsigned softconnect:1;
 	unsigned vbus_active:1;
 	unsigned stopped:1;
 	unsigned remote_wakeup:1;
+	unsigned already_stopped:1;
+	unsigned big_endian_desc:1;
 
 	struct ep_queue_head *ep_qh;	/* Endpoints Queue-Head */
 	struct fsl_req *status_req;	/* ep0 status request */
@@ -483,6 +488,7 @@ struct fsl_udc {
 	dma_addr_t ep_qh_dma;		/* dma address of QH */
 
 	u32 max_pipes;          /* Device max pipes */
+	u32 bus_reset;		/* Device is bus resetting */
 	u32 resume_state;	/* USB state to resume */
 	u32 usb_state;		/* USB current state */
 	u32 ep0_state;		/* Endpoint zero state */
@@ -562,6 +568,16 @@ static void dump_msg(const char *label, const u8 * buf, unsigned int length)
 #define get_pipe_by_windex(windex)	((windex & USB_ENDPOINT_NUMBER_MASK) \
 					* 2 + ((windex & USB_DIR_IN) ? 1 : 0))
 #define get_pipe_by_ep(EP)	(ep_index(EP) * 2 + ep_is_in(EP))
+
+static inline struct ep_queue_head *get_qh_by_ep(struct fsl_ep *ep)
+{
+	/* we only have one ep0 structure but two queue heads */
+	if (ep_index(ep) != 0)
+		return ep->qh;
+	else
+		return &ep->udc->ep_qh[(ep->udc->ep0_dir ==
+				USB_DIR_IN) ? 1 : 0];
+}
 
 struct platform_device;
 #ifdef CONFIG_ARCH_MXC

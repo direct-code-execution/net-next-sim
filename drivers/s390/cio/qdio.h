@@ -14,15 +14,9 @@
 #include "chsc.h"
 
 #define QDIO_BUSY_BIT_PATIENCE		(100 << 12)	/* 100 microseconds */
+#define QDIO_BUSY_BIT_RETRY_DELAY	10		/* 10 milliseconds */
+#define QDIO_BUSY_BIT_RETRIES		1000		/* = 10s retry time */
 #define QDIO_INPUT_THRESHOLD		(500 << 12)	/* 500 microseconds */
-
-/*
- * if an asynchronous HiperSockets queue runs full, the 10 seconds timer wait
- * till next initiative to give transmitted skbs back to the stack is too long.
- * Therefore polling is started in case of multicast queue is filled more
- * than 50 percent.
- */
-#define QDIO_IQDIO_POLL_LVL		65	/* HS multicast queue */
 
 enum qdio_irq_states {
 	QDIO_IRQ_STATE_INACTIVE,
@@ -42,6 +36,7 @@ enum qdio_irq_states {
 #define SLSB_STATE_NOT_INIT	0x0
 #define SLSB_STATE_EMPTY	0x1
 #define SLSB_STATE_PRIMED	0x2
+#define SLSB_STATE_PENDING	0x3
 #define SLSB_STATE_HALTED	0xe
 #define SLSB_STATE_ERROR	0xf
 #define SLSB_TYPE_INPUT		0x0
@@ -65,6 +60,8 @@ enum qdio_irq_states {
 	(SLSB_OWNER_PROG | SLSB_TYPE_OUTPUT | SLSB_STATE_NOT_INIT) /* 0xa0 */
 #define SLSB_P_OUTPUT_EMPTY	\
 	(SLSB_OWNER_PROG | SLSB_TYPE_OUTPUT | SLSB_STATE_EMPTY)	   /* 0xa1 */
+#define SLSB_P_OUTPUT_PENDING \
+	(SLSB_OWNER_PROG | SLSB_TYPE_OUTPUT | SLSB_STATE_PENDING)  /* 0xa3 */
 #define SLSB_CU_OUTPUT_PRIMED	\
 	(SLSB_OWNER_CU | SLSB_TYPE_OUTPUT | SLSB_STATE_PRIMED)	   /* 0x62 */
 #define SLSB_P_OUTPUT_HALTED	\
@@ -82,14 +79,12 @@ enum qdio_irq_states {
 #define CHSC_FLAG_QDIO_CAPABILITY	0x80
 #define CHSC_FLAG_VALIDITY		0x40
 
-/* qdio adapter-characteristics-1 flag */
-#define AC1_SIGA_INPUT_NEEDED		0x40	/* process input queues */
-#define AC1_SIGA_OUTPUT_NEEDED		0x20	/* process output queues */
-#define AC1_SIGA_SYNC_NEEDED		0x10	/* ask hypervisor to sync */
-#define AC1_AUTOMATIC_SYNC_ON_THININT	0x08	/* set by hypervisor */
-#define AC1_AUTOMATIC_SYNC_ON_OUT_PCI	0x04	/* set by hypervisor */
-#define AC1_SC_QEBSM_AVAILABLE		0x02	/* available for subchannel */
-#define AC1_SC_QEBSM_ENABLED		0x01	/* enabled for subchannel */
+/* SIGA flags */
+#define QDIO_SIGA_WRITE		0x00
+#define QDIO_SIGA_READ		0x01
+#define QDIO_SIGA_SYNC		0x02
+#define QDIO_SIGA_WRITEQ	0x04
+#define QDIO_SIGA_QEBSM_FLAG	0x80
 
 #ifdef CONFIG_64BIT
 static inline int do_sqbs(u64 token, unsigned char state, int queue,
@@ -142,10 +137,9 @@ struct siga_flag {
 	u8 input:1;
 	u8 output:1;
 	u8 sync:1;
-	u8 no_sync_ti:1;
-	u8 no_sync_out_ti:1;
-	u8 no_sync_out_pci:1;
-	u8:2;
+	u8 sync_after_ai:1;
+	u8 sync_out_after_pci:1;
+	u8:3;
 } __attribute__ ((packed));
 
 struct chsc_ssqd_area {
@@ -202,12 +196,14 @@ struct qdio_dev_perf_stat {
 	unsigned int inbound_queue_full;
 	unsigned int outbound_call;
 	unsigned int outbound_handler;
+	unsigned int outbound_queue_full;
 	unsigned int fast_requeue;
 	unsigned int target_full;
 	unsigned int eqbs;
 	unsigned int eqbs_partial;
 	unsigned int sqbs;
 	unsigned int sqbs_partial;
+	unsigned int int_discarded;
 } ____cacheline_aligned;
 
 struct qdio_queue_perf_stat {
@@ -222,6 +218,10 @@ struct qdio_queue_perf_stat {
 	unsigned int nr_sbal_total;
 };
 
+enum qdio_queue_irq_states {
+	QDIO_QUEUE_IRQS_DISABLED,
+};
+
 struct qdio_input_q {
 	/* input buffer acknowledgement flag */
 	int polling;
@@ -231,15 +231,25 @@ struct qdio_input_q {
 	int ack_count;
 	/* last time of noticing incoming data */
 	u64 timestamp;
+	/* upper-layer polling flag */
+	unsigned long queue_irq_state;
+	/* callback to start upper-layer polling */
+	void (*queue_start_poll) (struct ccw_device *, int, unsigned long);
 };
 
 struct qdio_output_q {
 	/* PCIs are enabled for the queue */
 	int pci_out_enabled;
-	/* IQDIO: output multiple buffers (enhanced SIGA) */
-	int use_enh_siga;
+	/* cq: use asynchronous output buffers */
+	int use_cq;
+	/* cq: aobs used for particual SBAL */
+	struct qaob **aobs;
+	/* cq: sbal state related to asynchronous operation */
+	struct qdio_outbuf_state *sbal_state;
 	/* timer to check for more outbound work */
 	struct timer_list timer;
+	/* used SBALs before tasklet schedule */
+	int scan_threshold;
 };
 
 /*
@@ -271,6 +281,9 @@ struct qdio_q {
 
 	/* error condition during a data transfer */
 	unsigned int qdio_error;
+
+	/* last scan of the queue */
+	u64 timestamp;
 
 	struct tasklet_struct tasklet;
 	struct qdio_queue_perf_stat q_stats;
@@ -374,12 +387,13 @@ static inline int multicast_outbound(struct qdio_q *q)
 	(q->irq_ptr->qib.ac & QIB_AC_OUTBOUND_PCI_SUPPORTED)
 #define is_qebsm(q)			(q->irq_ptr->sch_token != 0)
 
-#define need_siga_sync_thinint(q)	(!q->irq_ptr->siga_flag.no_sync_ti)
-#define need_siga_sync_out_thinint(q)	(!q->irq_ptr->siga_flag.no_sync_out_ti)
 #define need_siga_in(q)			(q->irq_ptr->siga_flag.input)
 #define need_siga_out(q)		(q->irq_ptr->siga_flag.output)
-#define need_siga_sync(q)		(q->irq_ptr->siga_flag.sync)
-#define siga_syncs_out_pci(q)		(q->irq_ptr->siga_flag.no_sync_out_pci)
+#define need_siga_sync(q)		(unlikely(q->irq_ptr->siga_flag.sync))
+#define need_siga_sync_after_ai(q)	\
+	(unlikely(q->irq_ptr->siga_flag.sync_after_ai))
+#define need_siga_sync_out_after_pci(q)	\
+	(unlikely(q->irq_ptr->siga_flag.sync_out_after_pci))
 
 #define for_each_input_queue(irq_ptr, q, i)	\
 	for (i = 0, q = irq_ptr->input_qs[0];	\
@@ -399,6 +413,13 @@ static inline int multicast_outbound(struct qdio_q *q)
 #define sub_buf(bufnr, dec) \
 	((bufnr - dec) & QDIO_MAX_BUFFERS_MASK)
 
+#define queue_irqs_enabled(q)			\
+	(test_bit(QDIO_QUEUE_IRQS_DISABLED, &q->u.in.queue_irq_state) == 0)
+#define queue_irqs_disabled(q)			\
+	(test_bit(QDIO_QUEUE_IRQS_DISABLED, &q->u.in.queue_irq_state) != 0)
+
+extern u64 last_ai_time;
+
 /* prototypes for thin interrupt */
 void qdio_setup_thinint(struct qdio_irq *irq_ptr);
 int qdio_establish_thinint(struct qdio_irq *irq_ptr);
@@ -410,6 +431,8 @@ int tiqdio_allocate_memory(void);
 void tiqdio_free_memory(void);
 int tiqdio_register_thinints(void);
 void tiqdio_unregister_thinints(void);
+void clear_nonshared_ind(struct qdio_irq *);
+int test_nonshared_ind(struct qdio_irq *);
 
 /* prototypes for setup */
 void qdio_inbound_processing(unsigned long data);
@@ -431,6 +454,9 @@ int qdio_setup_create_sysfs(struct ccw_device *cdev);
 void qdio_setup_destroy_sysfs(struct ccw_device *cdev);
 int qdio_setup_init(void);
 void qdio_setup_exit(void);
+int qdio_enable_async_operation(struct qdio_output_q *q);
+void qdio_disable_async_operation(struct qdio_output_q *q);
+struct qaob *qdio_allocate_aob(void);
 
 int debug_get_buf_state(struct qdio_q *q, unsigned int bufnr,
 			unsigned char *state);

@@ -46,18 +46,18 @@
 #include <linux/init.h>
 #include <linux/wait.h>
 #include <linux/blkdev.h>
-#include <linux/smp_lock.h>
+#include <linux/mutex.h>
 #include <linux/blkpg.h>
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/gfp.h>
 
-#include <asm/system.h>
 #include <asm/uaccess.h>
 #include <asm/dma.h>
 
 #include "xd.h"
 
+static DEFINE_MUTEX(xd_mutex);
 static void __init do_xd_setup (int *integers);
 #ifdef MODULE
 static int xd[5] = { -1,-1,-1,-1, };
@@ -147,7 +147,7 @@ static volatile int xdc_busy;
 static struct timer_list xd_watchdog_int;
 
 static volatile u_char xd_error;
-static int nodma = XD_DONT_USE_DMA;
+static bool nodma = XD_DONT_USE_DMA;
 
 static struct request_queue *xd_queue;
 
@@ -381,9 +381,9 @@ static int xd_ioctl(struct block_device *bdev, fmode_t mode,
 {
 	int ret;
 
-	lock_kernel();
+	mutex_lock(&xd_mutex);
 	ret = xd_locked_ioctl(bdev, mode, cmd, param);
-	unlock_kernel();
+	mutex_unlock(&xd_mutex);
 
 	return ret;
 }

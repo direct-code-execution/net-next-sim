@@ -7,6 +7,7 @@
 #include "util/thread.h"
 #include "util/header.h"
 #include "util/session.h"
+#include "util/tool.h"
 
 #include "util/parse-options.h"
 #include "util/trace-event.h"
@@ -18,7 +19,7 @@
 struct alloc_stat;
 typedef int (*sort_fn_t)(struct alloc_stat *, struct alloc_stat *);
 
-static char const		*input_name = "perf.data";
+static const char		*input_name;
 
 static int			alloc_flag;
 static int			caller_flag;
@@ -107,7 +108,9 @@ static void setup_cpunode_map(void)
 				continue;
 			cpunode_map[cpu] = mem;
 		}
+		closedir(dir2);
 	}
+	closedir(dir1);
 }
 
 static void insert_alloc_stat(unsigned long call_site, unsigned long ptr,
@@ -275,9 +278,8 @@ static void process_free_event(void *data,
 	s_alloc->alloc_cpu = -1;
 }
 
-static void
-process_raw_event(event_t *raw_event __used, void *data,
-		  int cpu, u64 timestamp, struct thread *thread)
+static void process_raw_event(union perf_event *raw_event __used, void *data,
+			      int cpu, u64 timestamp, struct thread *thread)
 {
 	struct event *event;
 	int type;
@@ -304,22 +306,14 @@ process_raw_event(event_t *raw_event __used, void *data,
 	}
 }
 
-static int process_sample_event(event_t *event, struct perf_session *session)
+static int process_sample_event(struct perf_tool *tool __used,
+				union perf_event *event,
+				struct perf_sample *sample,
+				struct perf_evsel *evsel __used,
+				struct machine *machine)
 {
-	struct sample_data data;
-	struct thread *thread;
+	struct thread *thread = machine__findnew_thread(machine, event->ip.pid);
 
-	memset(&data, 0, sizeof(data));
-	data.time = -1;
-	data.cpu = -1;
-	data.period = 1;
-
-	event__parse_sample(event, session->sample_type, &data);
-
-	dump_printf("(IP, %d): %d/%d: %#Lx period: %Ld\n", event->header.misc,
-		    data.pid, data.tid, data.ip, data.period);
-
-	thread = perf_session__findnew(session, event->ip.pid);
 	if (thread == NULL) {
 		pr_debug("problem processing %d event, skipping it.\n",
 			 event->header.type);
@@ -328,15 +322,15 @@ static int process_sample_event(event_t *event, struct perf_session *session)
 
 	dump_printf(" ... thread: %s:%d\n", thread->comm, thread->pid);
 
-	process_raw_event(event, data.raw_data, data.cpu,
-			  data.time, thread);
+	process_raw_event(event, sample->raw_data, sample->cpu,
+			  sample->time, thread);
 
 	return 0;
 }
 
-static struct perf_event_ops event_ops = {
+static struct perf_tool perf_kmem = {
 	.sample			= process_sample_event,
-	.comm			= event__process_comm,
+	.comm			= perf_event__process_comm,
 	.ordered_samples	= true,
 };
 
@@ -382,10 +376,10 @@ static void __print_result(struct rb_root *root, struct perf_session *session,
 			addr = data->ptr;
 
 		if (sym != NULL)
-			snprintf(buf, sizeof(buf), "%s+%Lx", sym->name,
+			snprintf(buf, sizeof(buf), "%s+%" PRIx64 "", sym->name,
 				 addr - map->unmap_ip(map, sym->start));
 		else
-			snprintf(buf, sizeof(buf), "%#Lx", addr);
+			snprintf(buf, sizeof(buf), "%#" PRIx64 "", addr);
 		printf(" %-34s |", buf);
 
 		printf(" %9llu/%-5lu | %9llu/%-5lu | %8lu | %8lu | %6.3f%%\n",
@@ -492,7 +486,8 @@ static void sort_result(void)
 static int __cmd_kmem(void)
 {
 	int err = -EINVAL;
-	struct perf_session *session = perf_session__new(input_name, O_RDONLY, 0, false);
+	struct perf_session *session = perf_session__new(input_name, O_RDONLY,
+							 0, false, &perf_kmem);
 	if (session == NULL)
 		return -ENOMEM;
 
@@ -503,7 +498,7 @@ static int __cmd_kmem(void)
 		goto out_delete;
 
 	setup_pager();
-	err = perf_session__process_events(session, &event_ops);
+	err = perf_session__process_events(session, &perf_kmem);
 	if (err != 0)
 		goto out_delete;
 	sort_result();
@@ -652,6 +647,7 @@ static int setup_sorting(struct list_head *sort_list, const char *arg)
 			break;
 		if (sort_dimension__add(tok, sort_list) < 0) {
 			error("Unknown --sort key: '%s'", tok);
+			free(str);
 			return -1;
 		}
 	}
@@ -746,6 +742,9 @@ static int __cmd_record(int argc, const char **argv)
 
 	rec_argc = ARRAY_SIZE(record_args) + argc - 1;
 	rec_argv = calloc(rec_argc + 1, sizeof(char *));
+
+	if (rec_argv == NULL)
+		return -ENOMEM;
 
 	for (i = 0; i < ARRAY_SIZE(record_args); i++)
 		rec_argv[i] = strdup(record_args[i]);

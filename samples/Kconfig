@@ -54,4 +54,19 @@ config SAMPLE_KFIFO
 
 	  If in doubt, say "N" here.
 
+config SAMPLE_KDB
+	tristate "Build kdb command example -- loadable modules only"
+	depends on KGDB_KDB && m
+	help
+	  Build an example of how to dynamically add the hello
+	  command to the kdb shell.
+
+config SAMPLE_RPMSG_CLIENT
+	tristate "Build rpmsg client sample -- loadable modules only"
+	depends on RPMSG && m
+	help
+	  Build an rpmsg client sample driver, which demonstrates how
+	  to communicate with an AMP-configured remote processor over
+	  the rpmsg bus.
+
 endif # SAMPLES

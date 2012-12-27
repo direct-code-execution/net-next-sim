@@ -158,7 +158,7 @@ static int __devinit ds1390_probe(struct spi_device *spi)
 
 static int __devexit ds1390_remove(struct spi_device *spi)
 {
-	struct ds1390 *chip = platform_get_drvdata(spi);
+	struct ds1390 *chip = spi_get_drvdata(spi);
 
 	rtc_device_unregister(chip->rtc);
 	kfree(chip);
@@ -175,17 +175,7 @@ static struct spi_driver ds1390_driver = {
 	.remove = __devexit_p(ds1390_remove),
 };
 
-static __init int ds1390_init(void)
-{
-	return spi_register_driver(&ds1390_driver);
-}
-module_init(ds1390_init);
-
-static __exit void ds1390_exit(void)
-{
-	spi_unregister_driver(&ds1390_driver);
-}
-module_exit(ds1390_exit);
+module_spi_driver(ds1390_driver);
 
 MODULE_DESCRIPTION("Dallas/Maxim DS1390/93/94 SPI RTC driver");
 MODULE_AUTHOR("Mark Jackson <mpfj@mimc.co.uk>");

@@ -259,7 +259,7 @@ static unsigned short keymap_usbph01(int scancode)
 
 /*
  * Keymap for ATCom AU-100
- * http://www.atcom.cn/En_products_AU100.html
+ * http://www.atcom.cn/products.html 
  * http://www.packetizer.com/products/au100/
  * http://www.voip-info.org/wiki/view/AU-100
  *
@@ -475,7 +475,7 @@ static void cm109_toggle_buzzer_sync(struct cm109_dev *dev, int on)
 				le16_to_cpu(dev->ctl_req->wIndex),
 				dev->ctl_data,
 				USB_PKT_LEN, USB_CTRL_SET_TIMEOUT);
-	if (error && error != EINTR)
+	if (error < 0 && error != -EINTR)
 		err("%s: usb_control_msg() failed %d", __func__, error);
 }
 

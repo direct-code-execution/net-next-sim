@@ -16,7 +16,6 @@
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/soc.h>
-#include <sound/soc-dapm.h>
 
 #include <mach/audio.h>
 #include <mach/eseries-gpio.h>
@@ -24,7 +23,6 @@
 #include <asm/mach-types.h>
 
 #include "../codecs/wm9705.h"
-#include "pxa2xx-pcm.h"
 #include "pxa2xx-ac97.h"
 
 
@@ -90,24 +88,25 @@ static const struct snd_soc_dapm_route audio_map[] = {
 	{"Mic Amp", NULL, "Mic (Internal)"},
 };
 
-static int e740_ac97_init(struct snd_soc_codec *codec)
+static int e740_ac97_init(struct snd_soc_pcm_runtime *rtd)
 {
-	snd_soc_dapm_nc_pin(codec, "HPOUTL");
-	snd_soc_dapm_nc_pin(codec, "HPOUTR");
-	snd_soc_dapm_nc_pin(codec, "PHONE");
-	snd_soc_dapm_nc_pin(codec, "LINEINL");
-	snd_soc_dapm_nc_pin(codec, "LINEINR");
-	snd_soc_dapm_nc_pin(codec, "CDINL");
-	snd_soc_dapm_nc_pin(codec, "CDINR");
-	snd_soc_dapm_nc_pin(codec, "PCBEEP");
-	snd_soc_dapm_nc_pin(codec, "MIC2");
+	struct snd_soc_codec *codec = rtd->codec;
+	struct snd_soc_dapm_context *dapm = &codec->dapm;
 
-	snd_soc_dapm_new_controls(codec, e740_dapm_widgets,
+	snd_soc_dapm_nc_pin(dapm, "HPOUTL");
+	snd_soc_dapm_nc_pin(dapm, "HPOUTR");
+	snd_soc_dapm_nc_pin(dapm, "PHONE");
+	snd_soc_dapm_nc_pin(dapm, "LINEINL");
+	snd_soc_dapm_nc_pin(dapm, "LINEINR");
+	snd_soc_dapm_nc_pin(dapm, "CDINL");
+	snd_soc_dapm_nc_pin(dapm, "CDINR");
+	snd_soc_dapm_nc_pin(dapm, "PCBEEP");
+	snd_soc_dapm_nc_pin(dapm, "MIC2");
+
+	snd_soc_dapm_new_controls(dapm, e740_dapm_widgets,
 					ARRAY_SIZE(e740_dapm_widgets));
 
-	snd_soc_dapm_add_routes(codec, audio_map, ARRAY_SIZE(audio_map));
-
-	snd_soc_dapm_sync(codec);
+	snd_soc_dapm_add_routes(dapm, audio_map, ARRAY_SIZE(audio_map));
 
 	return 0;
 }
@@ -116,96 +115,78 @@ static struct snd_soc_dai_link e740_dai[] = {
 	{
 		.name = "AC97",
 		.stream_name = "AC97 HiFi",
-		.cpu_dai = &pxa_ac97_dai[PXA2XX_DAI_AC97_HIFI],
-		.codec_dai = &wm9705_dai[WM9705_DAI_AC97_HIFI],
+		.cpu_dai_name = "pxa2xx-ac97",
+		.codec_dai_name = "wm9705-hifi",
+		.platform_name = "pxa-pcm-audio",
+		.codec_name = "wm9705-codec",
 		.init = e740_ac97_init,
 	},
 	{
 		.name = "AC97 Aux",
 		.stream_name = "AC97 Aux",
-		.cpu_dai = &pxa_ac97_dai[PXA2XX_DAI_AC97_AUX],
-		.codec_dai = &wm9705_dai[WM9705_DAI_AC97_AUX],
+		.cpu_dai_name = "pxa2xx-ac97-aux",
+		.codec_dai_name = "wm9705-aux",
+		.platform_name = "pxa-pcm-audio",
+		.codec_name = "wm9705-codec",
 	},
 };
 
 static struct snd_soc_card e740 = {
 	.name = "Toshiba e740",
-	.platform = &pxa2xx_soc_platform,
+	.owner = THIS_MODULE,
 	.dai_link = e740_dai,
 	.num_links = ARRAY_SIZE(e740_dai),
 };
 
-static struct snd_soc_device e740_snd_devdata = {
-	.card = &e740,
-	.codec_dev = &soc_codec_dev_wm9705,
+static struct gpio e740_audio_gpios[] = {
+	{ GPIO_E740_MIC_ON, GPIOF_OUT_INIT_LOW, "Mic amp" },
+	{ GPIO_E740_AMP_ON, GPIOF_OUT_INIT_LOW, "Output amp" },
+	{ GPIO_E740_WM9705_nAVDD2, GPIOF_OUT_INIT_HIGH, "Audio power" },
 };
 
-static struct platform_device *e740_snd_device;
-
-static int __init e740_init(void)
+static int __devinit e740_probe(struct platform_device *pdev)
 {
+	struct snd_soc_card *card = &e740;
 	int ret;
 
-	if (!machine_is_e740())
-		return -ENODEV;
-
-	ret = gpio_request(GPIO_E740_MIC_ON,  "Mic amp");
+	ret = gpio_request_array(e740_audio_gpios,
+				 ARRAY_SIZE(e740_audio_gpios));
 	if (ret)
 		return ret;
 
-	ret = gpio_request(GPIO_E740_AMP_ON, "Output amp");
-	if (ret)
-		goto free_mic_amp_gpio;
+	card->dev = &pdev->dev;
 
-	ret = gpio_request(GPIO_E740_WM9705_nAVDD2, "Audio power");
-	if (ret)
-		goto free_op_amp_gpio;
-
-	/* Disable audio */
-	ret = gpio_direction_output(GPIO_E740_MIC_ON, 0);
-	if (ret)
-		goto free_apwr_gpio;
-	ret = gpio_direction_output(GPIO_E740_AMP_ON, 0);
-	if (ret)
-		goto free_apwr_gpio;
-	ret = gpio_direction_output(GPIO_E740_WM9705_nAVDD2, 1);
-	if (ret)
-		goto free_apwr_gpio;
-
-	e740_snd_device = platform_device_alloc("soc-audio", -1);
-	if (!e740_snd_device) {
-		ret = -ENOMEM;
-		goto free_apwr_gpio;
+	ret = snd_soc_register_card(card);
+	if (ret) {
+		dev_err(&pdev->dev, "snd_soc_register_card() failed: %d\n",
+			ret);
+		gpio_free_array(e740_audio_gpios, ARRAY_SIZE(e740_audio_gpios));
 	}
-
-	platform_set_drvdata(e740_snd_device, &e740_snd_devdata);
-	e740_snd_devdata.dev = &e740_snd_device->dev;
-	ret = platform_device_add(e740_snd_device);
-
-	if (!ret)
-		return 0;
-
-/* Fail gracefully */
-	platform_device_put(e740_snd_device);
-free_apwr_gpio:
-	gpio_free(GPIO_E740_WM9705_nAVDD2);
-free_op_amp_gpio:
-	gpio_free(GPIO_E740_AMP_ON);
-free_mic_amp_gpio:
-	gpio_free(GPIO_E740_MIC_ON);
-
 	return ret;
 }
 
-static void __exit e740_exit(void)
+static int __devexit e740_remove(struct platform_device *pdev)
 {
-	platform_device_unregister(e740_snd_device);
+	struct snd_soc_card *card = platform_get_drvdata(pdev);
+
+	gpio_free_array(e740_audio_gpios, ARRAY_SIZE(e740_audio_gpios));
+	snd_soc_unregister_card(card);
+	return 0;
 }
 
-module_init(e740_init);
-module_exit(e740_exit);
+static struct platform_driver e740_driver = {
+	.driver		= {
+		.name	= "e740-audio",
+		.owner	= THIS_MODULE,
+	},
+	.probe		= e740_probe,
+	.remove		= __devexit_p(e740_remove),
+};
+
+module_platform_driver(e740_driver);
 
 /* Module information */
 MODULE_AUTHOR("Ian Molton <spyro@f2s.com>");
 MODULE_DESCRIPTION("ALSA SoC driver for e740");
 MODULE_LICENSE("GPL v2");
+MODULE_ALIAS("platform:e740-audio");

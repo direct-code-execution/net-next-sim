@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2005 - 2010 ServerEngines
+ * Copyright (C) 2005 - 2011 Emulex
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -8,11 +8,11 @@
  * Public License is included in this distribution in the file called COPYING.
  *
  * Contact Information:
- * linux-drivers@serverengines.com
+ * linux-drivers@emulex.com
  *
- * ServerEngines
- * 209 N. Fair Oaks Ave
- * Sunnyvale, CA 94085
+ * Emulex
+ * 3333 Susan Street
+ * Costa Mesa, CA 92626
  */
 
 #include "be.h"
@@ -335,7 +335,7 @@ static int be_mbox_db_ready_wait(struct be_ctrl_info *ctrl)
 		if (ready)
 			break;
 
-		if (cnt > 6000000) {
+		if (cnt > 12000000) {
 			dev_err(&ctrl->pdev->dev, "mbox_db poll timed out\n");
 			return -EBUSY;
 		}
@@ -458,6 +458,7 @@ void be_cmd_hdr_prepare(struct be_cmd_req_hdr *req_hdr,
 	req_hdr->opcode = opcode;
 	req_hdr->subsystem = subsystem;
 	req_hdr->request_length = cpu_to_le32(cmd_len - sizeof(*req_hdr));
+	req_hdr->timeout = 120;
 }
 
 static void be_cmd_page_addrs_prepare(struct phys_addr *pages, u32 max_pages,
@@ -659,6 +660,7 @@ int beiscsi_cmd_mccq_create(struct beiscsi_hba *phba,
 	spin_lock(&phba->ctrl.mbox_lock);
 	ctrl = &phba->ctrl;
 	wrb = wrb_from_mbox(&ctrl->mbox_mem);
+	memset(wrb, 0, sizeof(*wrb));
 	req = embedded_payload(wrb);
 	ctxt = &req->context;
 
@@ -865,5 +867,24 @@ error:
 	spin_unlock(&ctrl->mbox_lock);
 	if (status != 0)
 		beiscsi_cmd_q_destroy(ctrl, NULL, QTYPE_SGL);
+	return status;
+}
+
+int beiscsi_cmd_reset_function(struct beiscsi_hba  *phba)
+{
+	struct be_ctrl_info *ctrl = &phba->ctrl;
+	struct be_mcc_wrb *wrb = wrb_from_mbox(&ctrl->mbox_mem);
+	struct be_post_sgl_pages_req *req = embedded_payload(wrb);
+	int status;
+
+	spin_lock(&ctrl->mbox_lock);
+
+	req = embedded_payload(wrb);
+	be_wrb_hdr_prepare(wrb, sizeof(*req), true, 0);
+	be_cmd_hdr_prepare(&req->hdr, CMD_SUBSYSTEM_COMMON,
+			   OPCODE_COMMON_FUNCTION_RESET, sizeof(*req));
+	status = be_mbox_notify_wait(phba);
+
+	spin_unlock(&ctrl->mbox_lock);
 	return status;
 }

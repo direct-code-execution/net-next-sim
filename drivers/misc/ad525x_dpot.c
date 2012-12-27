@@ -29,9 +29,9 @@
  * AD5262		2		256		20, 50, 200
  * AD5263		4		256		20, 50, 200
  * AD5290		1		256		10, 50, 100
- * AD5291		1		256		20
- * AD5292		1		1024		20
- * AD5293		1		1024		20
+ * AD5291		1		256		20, 50, 100  (20-TP)
+ * AD5292		1		1024		20, 50, 100  (20-TP)
+ * AD5293		1		1024		20, 50, 100
  * AD7376		1		128		10, 50, 100, 1M
  * AD8400		1		256		1, 10, 50, 100
  * AD8402		2		256		1, 10, 50, 100
@@ -52,6 +52,10 @@
  * AD5170		1		256		2.5, 10, 50, 100 (OTP)
  * AD5172		2		256		2.5, 10, 50, 100 (OTP)
  * AD5173		2		256		2.5, 10, 50, 100 (OTP)
+ * AD5270		1		1024		20, 50, 100 (50-TP)
+ * AD5271		1		256		20, 50, 100 (50-TP)
+ * AD5272		1		1024		20, 50, 100 (50-TP)
+ * AD5274		1		256		20, 50, 100 (50-TP)
  *
  * See Documentation/misc-devices/ad525x_dpot.txt for more info.
  *
@@ -60,7 +64,7 @@
  * Author: Chris Verges <chrisv@cyberswitching.com>
  *
  * derived from ad5252.c
- * Copyright (c) 2006 Michael Hennerich <hennerich@blackfin.uclinux.org>
+ * Copyright (c) 2006-2011 Michael Hennerich <hennerich@blackfin.uclinux.org>
  *
  * Licensed under the GPL-2 or later.
  */
@@ -71,8 +75,6 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
-
-#define DRIVER_VERSION			"0.2"
 
 #include "ad525x_dpot.h"
 
@@ -126,17 +128,37 @@ static inline int dpot_write_r8d16(struct dpot_data *dpot, u8 reg, u16 val)
 static s32 dpot_read_spi(struct dpot_data *dpot, u8 reg)
 {
 	unsigned ctrl = 0;
+	int value;
 
 	if (!(reg & (DPOT_ADDR_EEPROM | DPOT_ADDR_CMD))) {
 
 		if (dpot->feat & F_RDACS_WONLY)
 			return dpot->rdac_cache[reg & DPOT_RDAC_MASK];
-
 		if (dpot->uid == DPOT_UID(AD5291_ID) ||
 			dpot->uid == DPOT_UID(AD5292_ID) ||
-			dpot->uid == DPOT_UID(AD5293_ID))
-			return dpot_read_r8d8(dpot,
+			dpot->uid == DPOT_UID(AD5293_ID)) {
+
+			value = dpot_read_r8d8(dpot,
 				DPOT_AD5291_READ_RDAC << 2);
+
+			if (dpot->uid == DPOT_UID(AD5291_ID))
+				value = value >> 2;
+
+			return value;
+		} else if (dpot->uid == DPOT_UID(AD5270_ID) ||
+			dpot->uid == DPOT_UID(AD5271_ID)) {
+
+			value = dpot_read_r8d8(dpot,
+				DPOT_AD5270_1_2_4_READ_RDAC << 2);
+
+			if (value < 0)
+				return value;
+
+			if (dpot->uid == DPOT_UID(AD5271_ID))
+				value = value >> 2;
+
+			return value;
+		}
 
 		ctrl = DPOT_SPI_READ_RDAC;
 	} else if (reg & DPOT_ADDR_EEPROM) {
@@ -153,6 +175,7 @@ static s32 dpot_read_spi(struct dpot_data *dpot, u8 reg)
 
 static s32 dpot_read_i2c(struct dpot_data *dpot, u8 reg)
 {
+	int value;
 	unsigned ctrl = 0;
 	switch (dpot->uid) {
 	case DPOT_UID(AD5246_ID):
@@ -166,7 +189,7 @@ static s32 dpot_read_i2c(struct dpot_data *dpot, u8 reg)
 	case DPOT_UID(AD5280_ID):
 	case DPOT_UID(AD5282_ID):
 		ctrl = ((reg & DPOT_RDAC_MASK) == DPOT_RDAC0) ?
-			0 : DPOT_AD5291_RDAC_AB;
+			0 : DPOT_AD5282_RDAC_AB;
 		return dpot_read_r8d8(dpot, ctrl);
 	case DPOT_UID(AD5170_ID):
 	case DPOT_UID(AD5171_ID):
@@ -175,8 +198,27 @@ static s32 dpot_read_i2c(struct dpot_data *dpot, u8 reg)
 	case DPOT_UID(AD5172_ID):
 	case DPOT_UID(AD5173_ID):
 		ctrl = ((reg & DPOT_RDAC_MASK) == DPOT_RDAC0) ?
-			0 : DPOT_AD5272_3_A0;
+			0 : DPOT_AD5172_3_A0;
 		return dpot_read_r8d8(dpot, ctrl);
+	case DPOT_UID(AD5272_ID):
+	case DPOT_UID(AD5274_ID):
+			dpot_write_r8d8(dpot,
+				(DPOT_AD5270_1_2_4_READ_RDAC << 2), 0);
+
+			value = dpot_read_r8d16(dpot,
+				DPOT_AD5270_1_2_4_RDAC << 2);
+
+			if (value < 0)
+				return value;
+			/*
+			 * AD5272/AD5274 returns high byte first, however
+			 * underling smbus expects low byte first.
+			 */
+			value = swab16(value);
+
+			if (dpot->uid == DPOT_UID(AD5271_ID))
+				value = value >> 2;
+		return value;
 	default:
 		if ((reg & DPOT_REG_TOL) || (dpot->max_pos > 256))
 			return dpot_read_r8d16(dpot, (reg & 0xF8) |
@@ -198,7 +240,7 @@ static s32 dpot_write_spi(struct dpot_data *dpot, u8 reg, u16 value)
 {
 	unsigned val = 0;
 
-	if (!(reg & (DPOT_ADDR_EEPROM | DPOT_ADDR_CMD))) {
+	if (!(reg & (DPOT_ADDR_EEPROM | DPOT_ADDR_CMD | DPOT_ADDR_OTP))) {
 		if (dpot->feat & F_RDACS_WONLY)
 			dpot->rdac_cache[reg & DPOT_RDAC_MASK] = value;
 
@@ -219,11 +261,30 @@ static s32 dpot_write_spi(struct dpot_data *dpot, u8 reg, u16 value)
 		} else {
 			if (dpot->uid == DPOT_UID(AD5291_ID) ||
 				dpot->uid == DPOT_UID(AD5292_ID) ||
-				dpot->uid == DPOT_UID(AD5293_ID))
+				dpot->uid == DPOT_UID(AD5293_ID)) {
+
+				dpot_write_r8d8(dpot, DPOT_AD5291_CTRLREG << 2,
+						DPOT_AD5291_UNLOCK_CMD);
+
+				if (dpot->uid == DPOT_UID(AD5291_ID))
+					value = value << 2;
+
 				return dpot_write_r8d8(dpot,
 					(DPOT_AD5291_RDAC << 2) |
 					(value >> 8), value & 0xFF);
+			} else if (dpot->uid == DPOT_UID(AD5270_ID) ||
+				dpot->uid == DPOT_UID(AD5271_ID)) {
+				dpot_write_r8d8(dpot,
+						DPOT_AD5270_1_2_4_CTRLREG << 2,
+						DPOT_AD5270_1_2_4_UNLOCK_CMD);
 
+				if (dpot->uid == DPOT_UID(AD5271_ID))
+					value = value << 2;
+
+				return dpot_write_r8d8(dpot,
+					(DPOT_AD5270_1_2_4_RDAC << 2) |
+					(value >> 8), value & 0xFF);
+			}
 			val = DPOT_SPI_RDAC | (reg & DPOT_RDAC_MASK);
 		}
 	} else if (reg & DPOT_ADDR_EEPROM) {
@@ -242,6 +303,16 @@ static s32 dpot_write_spi(struct dpot_data *dpot, u8 reg, u16 value)
 		case DPOT_INC_ALL:
 			val = DPOT_SPI_INC_ALL;
 			break;
+		}
+	} else if (reg & DPOT_ADDR_OTP) {
+		if (dpot->uid == DPOT_UID(AD5291_ID) ||
+			dpot->uid == DPOT_UID(AD5292_ID)) {
+			return dpot_write_r8d8(dpot,
+				DPOT_AD5291_STORE_XTPM << 2, 0);
+		} else if (dpot->uid == DPOT_UID(AD5270_ID) ||
+			dpot->uid == DPOT_UID(AD5271_ID)) {
+			return dpot_write_r8d8(dpot,
+				DPOT_AD5270_1_2_4_STORE_XTPM << 2, 0);
 		}
 	} else
 		BUG();
@@ -273,7 +344,7 @@ static s32 dpot_write_i2c(struct dpot_data *dpot, u8 reg, u16 value)
 	case DPOT_UID(AD5280_ID):
 	case DPOT_UID(AD5282_ID):
 		ctrl = ((reg & DPOT_RDAC_MASK) == DPOT_RDAC0) ?
-			0 : DPOT_AD5291_RDAC_AB;
+			0 : DPOT_AD5282_RDAC_AB;
 		return dpot_write_r8d8(dpot, ctrl, value);
 		break;
 	case DPOT_UID(AD5171_ID):
@@ -289,12 +360,12 @@ static s32 dpot_write_i2c(struct dpot_data *dpot, u8 reg, u16 value)
 	case DPOT_UID(AD5172_ID):
 	case DPOT_UID(AD5173_ID):
 		ctrl = ((reg & DPOT_RDAC_MASK) == DPOT_RDAC0) ?
-			0 : DPOT_AD5272_3_A0;
+			0 : DPOT_AD5172_3_A0;
 		if (reg & DPOT_ADDR_OTP) {
 			tmp = dpot_read_r8d16(dpot, ctrl);
 			if (tmp >> 14) /* Ready to Program? */
 				return -EFAULT;
-			ctrl |= DPOT_AD5270_2_3_FUSE;
+			ctrl |= DPOT_AD5170_2_3_FUSE;
 		}
 		return dpot_write_r8d8(dpot, ctrl, value);
 		break;
@@ -303,9 +374,24 @@ static s32 dpot_write_i2c(struct dpot_data *dpot, u8 reg, u16 value)
 			tmp = dpot_read_r8d16(dpot, tmp);
 			if (tmp >> 14) /* Ready to Program? */
 				return -EFAULT;
-			ctrl = DPOT_AD5270_2_3_FUSE;
+			ctrl = DPOT_AD5170_2_3_FUSE;
 		}
 		return dpot_write_r8d8(dpot, ctrl, value);
+		break;
+	case DPOT_UID(AD5272_ID):
+	case DPOT_UID(AD5274_ID):
+		dpot_write_r8d8(dpot, DPOT_AD5270_1_2_4_CTRLREG << 2,
+				DPOT_AD5270_1_2_4_UNLOCK_CMD);
+
+		if (reg & DPOT_ADDR_OTP)
+			return dpot_write_r8d8(dpot,
+					DPOT_AD5270_1_2_4_STORE_XTPM << 2, 0);
+
+		if (dpot->uid == DPOT_UID(AD5274_ID))
+			value = value << 2;
+
+		return dpot_write_r8d8(dpot, (DPOT_AD5270_1_2_4_RDAC << 2) |
+				       (value >> 8), value & 0xFF);
 		break;
 	default:
 		if (reg & DPOT_ADDR_CMD)
@@ -319,7 +405,6 @@ static s32 dpot_write_i2c(struct dpot_data *dpot, u8 reg, u16 value)
 			return dpot_write_r8d8(dpot, reg, value);
 	}
 }
-
 
 static s32 dpot_write(struct dpot_data *dpot, u8 reg, u16 value)
 {
@@ -600,8 +685,9 @@ inline void ad_dpot_remove_files(struct device *dev,
 	}
 }
 
-__devinit int ad_dpot_probe(struct device *dev,
-		struct ad_dpot_bus_data *bdata, const struct ad_dpot_id *id)
+int __devinit ad_dpot_probe(struct device *dev,
+		struct ad_dpot_bus_data *bdata, unsigned long devid,
+			    const char *name)
 {
 
 	struct dpot_data *data;
@@ -617,13 +703,13 @@ __devinit int ad_dpot_probe(struct device *dev,
 	mutex_init(&data->update_lock);
 
 	data->bdata = *bdata;
-	data->devid = id->devid;
+	data->devid = devid;
 
-	data->max_pos = 1 << DPOT_MAX_POS(data->devid);
+	data->max_pos = 1 << DPOT_MAX_POS(devid);
 	data->rdac_mask = data->max_pos - 1;
-	data->feat = DPOT_FEAT(data->devid);
-	data->uid = DPOT_UID(data->devid);
-	data->wipers = DPOT_WIPERS(data->devid);
+	data->feat = DPOT_FEAT(devid);
+	data->uid = DPOT_UID(devid);
+	data->wipers = DPOT_WIPERS(devid);
 
 	for (i = DPOT_RDAC0; i < MAX_RDACS; i++)
 		if (data->wipers & (1 << i)) {
@@ -644,7 +730,7 @@ __devinit int ad_dpot_probe(struct device *dev,
 	}
 
 	dev_info(dev, "%s %d-Position Digital Potentiometer registered\n",
-		 id->name, data->max_pos);
+		 name, data->max_pos);
 
 	return 0;
 
@@ -658,7 +744,7 @@ exit_free:
 	dev_set_drvdata(dev, NULL);
 exit:
 	dev_err(dev, "failed to create client for %s ID 0x%lX\n",
-			id->name, id->devid);
+		name, devid);
 	return err;
 }
 EXPORT_SYMBOL(ad_dpot_probe);
@@ -683,4 +769,3 @@ MODULE_AUTHOR("Chris Verges <chrisv@cyberswitching.com>, "
 	      "Michael Hennerich <hennerich@blackfin.uclinux.org>");
 MODULE_DESCRIPTION("Digital potentiometer driver");
 MODULE_LICENSE("GPL");
-MODULE_VERSION(DRIVER_VERSION);

@@ -28,7 +28,6 @@
 #include <asm/io.h>
 #include <asm/hardware/iomd.h>
 #include <asm/irq.h>
-#include <asm/system.h>
 
 #include "sound_config.h"
 #include "vidc.h"
@@ -227,7 +226,7 @@ static int vidc_audio_set_speed(int dev, int rate)
 		} else {
 			/*printk("VIDC: internal %d %d %d\n", rate, rate_int, hwrate);*/
 			hwctrl=0x00000003;
-			/* Allow rougly 0.4% tolerance */
+			/* Allow roughly 0.4% tolerance */
 			if (diff_int > (rate/256))
 				rate=rate_int;
 		}

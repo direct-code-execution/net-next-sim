@@ -16,7 +16,7 @@
 #include <linux/edac.h>
 #include "edac_core.h"
 
-#define  I82860_REVISION " Ver: 2.0.2 " __DATE__
+#define  I82860_REVISION " Ver: 2.0.2"
 #define EDAC_MOD_STR	"i82860_edac"
 
 #define i82860_printk(level, fmt, arg...) \
@@ -270,7 +270,7 @@ static void __devexit i82860_remove_one(struct pci_dev *pdev)
 	edac_mc_free(mci);
 }
 
-static const struct pci_device_id i82860_pci_tbl[] __devinitdata = {
+static DEFINE_PCI_DEVICE_TABLE(i82860_pci_tbl) = {
 	{
 	 PCI_VEND_DEV(INTEL, 82860_0), PCI_ANY_ID, PCI_ANY_ID, 0, 0,
 	 I82860},

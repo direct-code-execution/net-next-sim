@@ -1,7 +1,7 @@
 /******************************************************************************
 
     AudioScience HPI driver
-    Copyright (C) 1997-2010  AudioScience Inc. <support@audioscience.com>
+    Copyright (C) 1997-2011  AudioScience Inc. <support@audioscience.com>
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of version 2 of the GNU General Public License as
@@ -21,10 +21,14 @@
  (C) Copyright AudioScience Inc. 2007
 *******************************************************************************/
 /* Initialise response headers, or msg/response pairs.
-Note that it is valid to just init a response e.g. when a lower level is preparing
-a response to a message.
-However, when sending a message, a matching response buffer always must be prepared
+Note that it is valid to just init a response e.g. when a lower level is
+preparing a response to a message.
+However, when sending a message, a matching response buffer must always be
+prepared.
 */
+
+#ifndef _HPIMSGINIT_H_
+#define _HPIMSGINIT_H_
 
 void hpi_init_response(struct hpi_response *phr, u16 object, u16 function,
 	u16 error);
@@ -38,3 +42,5 @@ void hpi_init_responseV1(struct hpi_response_header *phr, u16 size,
 void hpi_init_message_responseV1(struct hpi_message_header *phm, u16 msg_size,
 	struct hpi_response_header *phr, u16 res_size, u16 object,
 	u16 function);
+
+#endif				/* _HPIMSGINIT_H_ */

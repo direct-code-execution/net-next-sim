@@ -15,50 +15,68 @@
  *  that causes it to save wrong values...  Be aware!
  */
 
+#include <asm/assembler.h>
 #include <asm/memory.h>
-#include <asm/glue.h>
+#include <asm/glue-df.h>
+#include <asm/glue-pf.h>
 #include <asm/vfpmacros.h>
+#ifndef CONFIG_MULTI_IRQ_HANDLER
 #include <mach/entry-macro.S>
+#endif
 #include <asm/thread_notify.h>
 #include <asm/unwind.h>
 #include <asm/unistd.h>
 #include <asm/tls.h>
+#include <asm/system_info.h>
 
 #include "entry-header.S"
+#include <asm/entry-macro-multi.S>
 
 /*
- * Interrupt handling.  Preserves r7, r8, r9
+ * Interrupt handling.
  */
 	.macro	irq_handler
-	get_irqnr_preamble r5, lr
-1:	get_irqnr_and_base r0, r6, r5, lr
-	movne	r1, sp
-	@
-	@ routine called with r0 = irq number, r1 = struct pt_regs *
-	@
-	adrne	lr, BSYM(1b)
-	bne	asm_do_IRQ
-
-#ifdef CONFIG_SMP
-	/*
-	 * XXX
-	 *
-	 * this macro assumes that irqstat (r6) and base (r5) are
-	 * preserved from get_irqnr_and_base above
-	 */
-	test_for_ipi r0, r6, r5, lr
-	movne	r0, sp
-	adrne	lr, BSYM(1b)
-	bne	do_IPI
-
-#ifdef CONFIG_LOCAL_TIMERS
-	test_for_ltirq r0, r6, r5, lr
-	movne	r0, sp
-	adrne	lr, BSYM(1b)
-	bne	do_local_timer
+#ifdef CONFIG_MULTI_IRQ_HANDLER
+	ldr	r1, =handle_arch_irq
+	mov	r0, sp
+	adr	lr, BSYM(9997f)
+	ldr	pc, [r1]
+#else
+	arch_irq_handler_default
 #endif
-#endif
+9997:
+	.endm
 
+	.macro	pabt_helper
+	@ PABORT handler takes pt_regs in r2, fault address in r4 and psr in r5
+#ifdef MULTI_PABORT
+	ldr	ip, .LCprocfns
+	mov	lr, pc
+	ldr	pc, [ip, #PROCESSOR_PABT_FUNC]
+#else
+	bl	CPU_PABORT_HANDLER
+#endif
+	.endm
+
+	.macro	dabt_helper
+
+	@
+	@ Call the processor-specific abort handler:
+	@
+	@  r2 - pt_regs
+	@  r4 - aborted context pc
+	@  r5 - aborted context psr
+	@
+	@ The abort handler must return the aborted address in r0, and
+	@ the fault status register in r1.  r9 must be preserved.
+	@
+#ifdef MULTI_DABORT
+	ldr	ip, .LCprocfns
+	mov	lr, pc
+	ldr	pc, [ip, #PROCESSOR_DABT_FUNC]
+#else
+	bl	CPU_DABORT_HANDLER
+#endif
 	.endm
 
 #ifdef CONFIG_KPROBES
@@ -143,105 +161,74 @@ ENDPROC(__und_invalid)
  SPFIX(	subeq	sp, sp, #4	)
 	stmia	sp, {r1 - r12}
 
-	ldmia	r0, {r1 - r3}
-	add	r5, sp, #S_SP - 4	@ here for interlock avoidance
-	mov	r4, #-1			@  ""  ""      ""       ""
-	add	r0, sp, #(S_FRAME_SIZE + \stack_hole - 4)
- SPFIX(	addeq	r0, r0, #4	)
-	str	r1, [sp, #-4]!		@ save the "real" r0 copied
+	ldmia	r0, {r3 - r5}
+	add	r7, sp, #S_SP - 4	@ here for interlock avoidance
+	mov	r6, #-1			@  ""  ""      ""       ""
+	add	r2, sp, #(S_FRAME_SIZE + \stack_hole - 4)
+ SPFIX(	addeq	r2, r2, #4	)
+	str	r3, [sp, #-4]!		@ save the "real" r0 copied
 					@ from the exception stack
 
-	mov	r1, lr
+	mov	r3, lr
 
 	@
 	@ We are now ready to fill in the remaining blanks on the stack:
 	@
-	@  r0 - sp_svc
-	@  r1 - lr_svc
-	@  r2 - lr_<exception>, already fixed up for correct return/restart
-	@  r3 - spsr_<exception>
-	@  r4 - orig_r0 (see pt_regs definition in ptrace.h)
+	@  r2 - sp_svc
+	@  r3 - lr_svc
+	@  r4 - lr_<exception>, already fixed up for correct return/restart
+	@  r5 - spsr_<exception>
+	@  r6 - orig_r0 (see pt_regs definition in ptrace.h)
 	@
-	stmia	r5, {r0 - r4}
+	stmia	r7, {r2 - r6}
+
+#ifdef CONFIG_TRACE_IRQFLAGS
+	bl	trace_hardirqs_off
+#endif
 	.endm
 
 	.align	5
 __dabt_svc:
 	svc_entry
-
-	@
-	@ get ready to re-enable interrupts if appropriate
-	@
-	mrs	r9, cpsr
-	tst	r3, #PSR_I_BIT
-	biceq	r9, r9, #PSR_I_BIT
-
-	@
-	@ Call the processor-specific abort handler:
-	@
-	@  r2 - aborted context pc
-	@  r3 - aborted context cpsr
-	@
-	@ The abort handler must return the aborted address in r0, and
-	@ the fault status register in r1.  r9 must be preserved.
-	@
-#ifdef MULTI_DABORT
-	ldr	r4, .LCprocfns
-	mov	lr, pc
-	ldr	pc, [r4, #PROCESSOR_DABT_FUNC]
-#else
-	bl	CPU_DABORT_HANDLER
-#endif
-
-	@
-	@ set desired IRQ state, then call main handler
-	@
-	msr	cpsr_c, r9
 	mov	r2, sp
-	bl	do_DataAbort
+	dabt_helper
 
 	@
 	@ IRQs off again before pulling preserved data off the stack
 	@
 	disable_irq_notrace
 
-	@
-	@ restore SPSR and restart the instruction
-	@
-	ldr	r2, [sp, #S_PSR]
-	svc_exit r2				@ return from exception
+#ifdef CONFIG_TRACE_IRQFLAGS
+	tst	r5, #PSR_I_BIT
+	bleq	trace_hardirqs_on
+	tst	r5, #PSR_I_BIT
+	blne	trace_hardirqs_off
+#endif
+	svc_exit r5				@ return from exception
  UNWIND(.fnend		)
 ENDPROC(__dabt_svc)
 
 	.align	5
 __irq_svc:
 	svc_entry
+	irq_handler
 
-#ifdef CONFIG_TRACE_IRQFLAGS
-	bl	trace_hardirqs_off
-#endif
 #ifdef CONFIG_PREEMPT
 	get_thread_info tsk
 	ldr	r8, [tsk, #TI_PREEMPT]		@ get preempt count
-	add	r7, r8, #1			@ increment it
-	str	r7, [tsk, #TI_PREEMPT]
-#endif
-
-	irq_handler
-#ifdef CONFIG_PREEMPT
-	str	r8, [tsk, #TI_PREEMPT]		@ restore preempt count
 	ldr	r0, [tsk, #TI_FLAGS]		@ get flags
 	teq	r8, #0				@ if preempt count != 0
 	movne	r0, #0				@ force flags to 0
 	tst	r0, #_TIF_NEED_RESCHED
 	blne	svc_preempt
 #endif
-	ldr	r4, [sp, #S_PSR]		@ irqs are already disabled
+
 #ifdef CONFIG_TRACE_IRQFLAGS
-	tst	r4, #PSR_I_BIT
-	bleq	trace_hardirqs_on
+	@ The parent context IRQs must have been enabled to get here in
+	@ the first place, so there's no point checking the PSR I bit.
+	bl	trace_hardirqs_on
 #endif
-	svc_exit r4				@ return from exception
+	svc_exit r5				@ return from exception
  UNWIND(.fnend		)
 ENDPROC(__irq_svc)
 
@@ -267,7 +254,6 @@ __und_svc:
 #else
 	svc_entry
 #endif
-
 	@
 	@ call emulation code, which returns using r9 if it has emulated
 	@ the instruction, or the more conventional lr if we are to treat
@@ -276,15 +262,15 @@ __und_svc:
 	@  r0 - instruction
 	@
 #ifndef	CONFIG_THUMB2_KERNEL
-	ldr	r0, [r2, #-4]
+	ldr	r0, [r4, #-4]
 #else
-	ldrh	r0, [r2, #-2]			@ Thumb instruction at LR - 2
-	and	r9, r0, #0xf800
-	cmp	r9, #0xe800			@ 32-bit instruction if xx >= 0
-	ldrhhs	r9, [r2]			@ bottom 16 bits
+	ldrh	r0, [r4, #-2]			@ Thumb instruction at LR - 2
+	cmp	r0, #0xe800			@ 32-bit instruction if xx >= 0
+	ldrhhs	r9, [r4]			@ bottom 16 bits
 	orrhs	r0, r9, r0, lsl #16
 #endif
 	adr	r9, BSYM(1f)
+	mov	r2, r4
 	bl	call_fpe
 
 	mov	r0, sp				@ struct pt_regs *regs
@@ -298,44 +284,35 @@ __und_svc:
 	@
 	@ restore SPSR and restart the instruction
 	@
-	ldr	r2, [sp, #S_PSR]		@ Get SVC cpsr
-	svc_exit r2				@ return from exception
+	ldr	r5, [sp, #S_PSR]		@ Get SVC cpsr
+#ifdef CONFIG_TRACE_IRQFLAGS
+	tst	r5, #PSR_I_BIT
+	bleq	trace_hardirqs_on
+	tst	r5, #PSR_I_BIT
+	blne	trace_hardirqs_off
+#endif
+	svc_exit r5				@ return from exception
  UNWIND(.fnend		)
 ENDPROC(__und_svc)
 
 	.align	5
 __pabt_svc:
 	svc_entry
-
-	@
-	@ re-enable interrupts if appropriate
-	@
-	mrs	r9, cpsr
-	tst	r3, #PSR_I_BIT
-	biceq	r9, r9, #PSR_I_BIT
-
-	mov	r0, r2			@ pass address of aborted instruction.
-#ifdef MULTI_PABORT
-	ldr	r4, .LCprocfns
-	mov	lr, pc
-	ldr	pc, [r4, #PROCESSOR_PABT_FUNC]
-#else
-	bl	CPU_PABORT_HANDLER
-#endif
-	msr	cpsr_c, r9			@ Maybe enable interrupts
 	mov	r2, sp				@ regs
-	bl	do_PrefetchAbort		@ call abort handler
+	pabt_helper
 
 	@
 	@ IRQs off again before pulling preserved data off the stack
 	@
 	disable_irq_notrace
 
-	@
-	@ restore SPSR and restart the instruction
-	@
-	ldr	r2, [sp, #S_PSR]
-	svc_exit r2				@ return from exception
+#ifdef CONFIG_TRACE_IRQFLAGS
+	tst	r5, #PSR_I_BIT
+	bleq	trace_hardirqs_on
+	tst	r5, #PSR_I_BIT
+	blne	trace_hardirqs_off
+#endif
+	svc_exit r5				@ return from exception
  UNWIND(.fnend		)
 ENDPROC(__pabt_svc)
 
@@ -366,23 +343,23 @@ ENDPROC(__pabt_svc)
  ARM(	stmib	sp, {r1 - r12}	)
  THUMB(	stmia	sp, {r0 - r12}	)
 
-	ldmia	r0, {r1 - r3}
+	ldmia	r0, {r3 - r5}
 	add	r0, sp, #S_PC		@ here for interlock avoidance
-	mov	r4, #-1			@  ""  ""     ""        ""
+	mov	r6, #-1			@  ""  ""     ""        ""
 
-	str	r1, [sp]		@ save the "real" r0 copied
+	str	r3, [sp]		@ save the "real" r0 copied
 					@ from the exception stack
 
 	@
 	@ We are now ready to fill in the remaining blanks on the stack:
 	@
-	@  r2 - lr_<exception>, already fixed up for correct return/restart
-	@  r3 - spsr_<exception>
-	@  r4 - orig_r0 (see pt_regs definition in ptrace.h)
+	@  r4 - lr_<exception>, already fixed up for correct return/restart
+	@  r5 - spsr_<exception>
+	@  r6 - orig_r0 (see pt_regs definition in ptrace.h)
 	@
 	@ Also, separately save sp_usr and lr_usr
 	@
-	stmia	r0, {r2 - r4}
+	stmia	r0, {r4 - r6}
  ARM(	stmdb	r0, {sp, lr}^			)
  THUMB(	store_user_sp_lr r0, r1, S_SP - S_PC	)
 
@@ -395,10 +372,14 @@ ENDPROC(__pabt_svc)
 	@ Clear FP to mark the first stack frame
 	@
 	zero_fp
+
+#ifdef CONFIG_IRQSOFF_TRACER
+	bl	trace_hardirqs_off
+#endif
 	.endm
 
 	.macro	kuser_cmpxchg_check
-#if __LINUX_ARM_ARCH__ < 6 && !defined(CONFIG_NEEDS_SYSCALL_FOR_CMPXCHG)
+#if !defined(CONFIG_CPU_32v6K) && !defined(CONFIG_NEEDS_SYSCALL_FOR_CMPXCHG)
 #ifndef CONFIG_MMU
 #warning "NPTL on non MMU needs fixing"
 #else
@@ -406,8 +387,8 @@ ENDPROC(__pabt_svc)
 	@ if it was interrupted in a critical region.  Here we
 	@ perform a quick test inline since it should be false
 	@ 99.9999% of the time.  The rest is done out of line.
-	cmp	r2, #TASK_SIZE
-	blhs	kuser_cmpxchg_fixup
+	cmp	r4, #TASK_SIZE
+	blhs	kuser_cmpxchg64_fixup
 #endif
 #endif
 	.endm
@@ -416,31 +397,9 @@ ENDPROC(__pabt_svc)
 __dabt_usr:
 	usr_entry
 	kuser_cmpxchg_check
-
-	@
-	@ Call the processor-specific abort handler:
-	@
-	@  r2 - aborted context pc
-	@  r3 - aborted context cpsr
-	@
-	@ The abort handler must return the aborted address in r0, and
-	@ the fault status register in r1.
-	@
-#ifdef MULTI_DABORT
-	ldr	r4, .LCprocfns
-	mov	lr, pc
-	ldr	pc, [r4, #PROCESSOR_DABT_FUNC]
-#else
-	bl	CPU_DABORT_HANDLER
-#endif
-
-	@
-	@ IRQs on, then call the main handler
-	@
-	enable_irq
 	mov	r2, sp
-	adr	lr, BSYM(ret_from_exception)
-	b	do_DataAbort
+	dabt_helper
+	b	ret_from_exception
  UNWIND(.fnend		)
 ENDPROC(__dabt_usr)
 
@@ -448,26 +407,10 @@ ENDPROC(__dabt_usr)
 __irq_usr:
 	usr_entry
 	kuser_cmpxchg_check
-
-	get_thread_info tsk
-#ifdef CONFIG_PREEMPT
-	ldr	r8, [tsk, #TI_PREEMPT]		@ get preempt count
-	add	r7, r8, #1			@ increment it
-	str	r7, [tsk, #TI_PREEMPT]
-#endif
-
 	irq_handler
-#ifdef CONFIG_PREEMPT
-	ldr	r0, [tsk, #TI_PREEMPT]
-	str	r8, [tsk, #TI_PREEMPT]
-	teq	r0, r7
- ARM(	strne	r0, [r0, -r0]	)
- THUMB(	movne	r0, #0		)
- THUMB(	strne	r0, [r0]	)
-#endif
-
+	get_thread_info tsk
 	mov	why, #0
-	b	ret_to_user
+	b	ret_to_user_from_irq
  UNWIND(.fnend		)
 ENDPROC(__irq_usr)
 
@@ -476,6 +419,9 @@ ENDPROC(__irq_usr)
 	.align	5
 __und_usr:
 	usr_entry
+
+	mov	r2, r4
+	mov	r3, r5
 
 	@
 	@ fall through to the emulation code, which returns using r9 if
@@ -496,18 +442,46 @@ __und_usr:
 #endif
 	beq	call_fpe
 	@ Thumb instruction
-#if __LINUX_ARM_ARCH__ >= 7
+#if CONFIG_ARM_THUMB && __LINUX_ARM_ARCH__ >= 6 && CONFIG_CPU_V7
+/*
+ * Thumb-2 instruction handling.  Note that because pre-v6 and >= v6 platforms
+ * can never be supported in a single kernel, this code is not applicable at
+ * all when __LINUX_ARM_ARCH__ < 6.  This allows simplifying assumptions to be
+ * made about .arch directives.
+ */
+#if __LINUX_ARM_ARCH__ < 7
+/* If the target CPU may not be Thumb-2-capable, a run-time check is needed: */
+#define NEED_CPU_ARCHITECTURE
+	ldr	r5, .LCcpu_architecture
+	ldr	r5, [r5]
+	cmp	r5, #CPU_ARCH_ARMv7
+	blo	__und_usr_unknown
+/*
+ * The following code won't get run unless the running CPU really is v7, so
+ * coding round the lack of ldrht on older arches is pointless.  Temporarily
+ * override the assembler target arch with the minimum required instead:
+ */
+	.arch	armv6t2
+#endif
 2:
  ARM(	ldrht	r5, [r4], #2	)
  THUMB(	ldrht	r5, [r4]	)
  THUMB(	add	r4, r4, #2	)
-	and	r0, r5, #0xf800			@ mask bits 111x x... .... ....
-	cmp	r0, #0xe800			@ 32bit instruction if xx != 0
+	cmp	r5, #0xe800			@ 32bit instruction if xx != 0
 	blo	__und_usr_unknown
 3:	ldrht	r0, [r4]
 	add	r2, r2, #2			@ r2 is PC + 2, make it PC + 4
 	orr	r0, r0, r5, lsl #16
+
+#if __LINUX_ARM_ARCH__ < 7
+/* If the target arch was overridden, change it back: */
+#ifdef CONFIG_CPU_32v6K
+	.arch	armv6k
 #else
+	.arch	armv6
+#endif
+#endif /* __LINUX_ARM_ARCH__ < 7 */
+#else /* !(CONFIG_ARM_THUMB && __LINUX_ARM_ARCH__ >= 6 && CONFIG_CPU_V7) */
 	b	__und_usr_unknown
 #endif
  UNWIND(.fnend		)
@@ -525,7 +499,7 @@ ENDPROC(__und_usr)
 	.popsection
 	.pushsection __ex_table,"a"
 	.long	1b, 4b
-#if __LINUX_ARM_ARCH__ >= 7
+#if CONFIG_ARM_THUMB && __LINUX_ARM_ARCH__ >= 6 && CONFIG_CPU_V7
 	.long	2b, 4b
 	.long	3b, 4b
 #endif
@@ -634,6 +608,12 @@ call_fpe:
 	movw_pc	lr				@ CP#14 (Debug)
 	movw_pc	lr				@ CP#15 (Control)
 
+#ifdef NEED_CPU_ARCHITECTURE
+	.align	2
+.LCcpu_architecture:
+	.word	__cpu_architecture
+#endif
+
 #ifdef CONFIG_NEON
 	.align	6
 
@@ -692,18 +672,8 @@ ENDPROC(__und_usr_unknown)
 	.align	5
 __pabt_usr:
 	usr_entry
-
-	mov	r0, r2			@ pass address of aborted instruction.
-#ifdef MULTI_PABORT
-	ldr	r4, .LCprocfns
-	mov	lr, pc
-	ldr	pc, [r4, #PROCESSOR_PABT_FUNC]
-#else
-	bl	CPU_PABORT_HANDLER
-#endif
-	enable_irq				@ Enable interrupts
 	mov	r2, sp				@ regs
-	bl	do_PrefetchAbort		@ call abort handler
+	pabt_helper
  UNWIND(.fnend		)
 	/* fall through */
 /*
@@ -733,7 +703,7 @@ ENTRY(__switch_to)
  THUMB(	stmia	ip!, {r4 - sl, fp}	   )	@ Store most regs on stack
  THUMB(	str	sp, [ip], #4		   )
  THUMB(	str	lr, [ip], #4		   )
-#ifdef CONFIG_MMU
+#ifdef CONFIG_CPU_USE_DOMAINS
 	ldr	r6, [r2, #TI_CPU_DOMAIN]
 #endif
 	set_tls	r3, r4, r5
@@ -742,7 +712,7 @@ ENTRY(__switch_to)
 	ldr	r8, =__stack_chk_guard
 	ldr	r7, [r7, #TSK_STACK_CANARY]
 #endif
-#ifdef CONFIG_MMU
+#ifdef CONFIG_CPU_USE_DOMAINS
 	mcr	p15, 0, r6, c3, c0, 0		@ Set domain register
 #endif
 	mov	r5, r0
@@ -767,31 +737,12 @@ ENDPROC(__switch_to)
 /*
  * User helpers.
  *
- * These are segment of kernel provided user code reachable from user space
- * at a fixed address in kernel memory.  This is used to provide user space
- * with some operations which require kernel help because of unimplemented
- * native feature and/or instructions in many ARM CPUs. The idea is for
- * this code to be executed directly in user mode for best efficiency but
- * which is too intimate with the kernel counter part to be left to user
- * libraries.  In fact this code might even differ from one CPU to another
- * depending on the available  instruction set and restrictions like on
- * SMP systems.  In other words, the kernel reserves the right to change
- * this code as needed without warning. Only the entry points and their
- * results are guaranteed to be stable.
- *
  * Each segment is 32-byte aligned and will be moved to the top of the high
  * vector page.  New segments (if ever needed) must be added in front of
  * existing ones.  This mechanism should be used only for things that are
  * really small and justified, and not be abused freely.
  *
- * User space is expected to implement those things inline when optimizing
- * for a processor that has the necessary native support, but only if such
- * resulting binaries are already to be incompatible with earlier ARM
- * processors due to the use of unsupported instructions other than what
- * is provided here.  In other words don't make binaries unable to run on
- * earlier processors just for the sake of not using these kernel helpers
- * if your compiled code is not going to use the new instructions for other
- * purpose.
+ * See Documentation/arm/kernel_user_helpers.txt for formal definitions.
  */
  THUMB(	.arm	)
 
@@ -808,96 +759,103 @@ ENDPROC(__switch_to)
 __kuser_helper_start:
 
 /*
- * Reference prototype:
- *
- *	void __kernel_memory_barrier(void)
- *
- * Input:
- *
- *	lr = return address
- *
- * Output:
- *
- *	none
- *
- * Clobbered:
- *
- *	none
- *
- * Definition and user space usage example:
- *
- *	typedef void (__kernel_dmb_t)(void);
- *	#define __kernel_dmb (*(__kernel_dmb_t *)0xffff0fa0)
- *
- * Apply any needed memory barrier to preserve consistency with data modified
- * manually and __kuser_cmpxchg usage.
- *
- * This could be used as follows:
- *
- * #define __kernel_dmb() \
- *         asm volatile ( "mov r0, #0xffff0fff; mov lr, pc; sub pc, r0, #95" \
- *	        : : : "r0", "lr","cc" )
+ * Due to the length of some sequences, __kuser_cmpxchg64 spans 2 regular
+ * kuser "slots", therefore 0xffff0f80 is not used as a valid entry point.
  */
 
-__kuser_memory_barrier:				@ 0xffff0fa0
-	smp_dmb
+__kuser_cmpxchg64:				@ 0xffff0f60
+
+#if defined(CONFIG_NEEDS_SYSCALL_FOR_CMPXCHG)
+
+	/*
+	 * Poor you.  No fast solution possible...
+	 * The kernel itself must perform the operation.
+	 * A special ghost syscall is used for that (see traps.c).
+	 */
+	stmfd	sp!, {r7, lr}
+	ldr	r7, 1f			@ it's 20 bits
+	swi	__ARM_NR_cmpxchg64
+	ldmfd	sp!, {r7, pc}
+1:	.word	__ARM_NR_cmpxchg64
+
+#elif defined(CONFIG_CPU_32v6K)
+
+	stmfd	sp!, {r4, r5, r6, r7}
+	ldrd	r4, r5, [r0]			@ load old val
+	ldrd	r6, r7, [r1]			@ load new val
+	smp_dmb	arm
+1:	ldrexd	r0, r1, [r2]			@ load current val
+	eors	r3, r0, r4			@ compare with oldval (1)
+	eoreqs	r3, r1, r5			@ compare with oldval (2)
+	strexdeq r3, r6, r7, [r2]		@ store newval if eq
+	teqeq	r3, #1				@ success?
+	beq	1b				@ if no then retry
+	smp_dmb	arm
+	rsbs	r0, r3, #0			@ set returned val and C flag
+	ldmfd	sp!, {r4, r5, r6, r7}
 	usr_ret	lr
+
+#elif !defined(CONFIG_SMP)
+
+#ifdef CONFIG_MMU
+
+	/*
+	 * The only thing that can break atomicity in this cmpxchg64
+	 * implementation is either an IRQ or a data abort exception
+	 * causing another process/thread to be scheduled in the middle of
+	 * the critical sequence.  The same strategy as for cmpxchg is used.
+	 */
+	stmfd	sp!, {r4, r5, r6, lr}
+	ldmia	r0, {r4, r5}			@ load old val
+	ldmia	r1, {r6, lr}			@ load new val
+1:	ldmia	r2, {r0, r1}			@ load current val
+	eors	r3, r0, r4			@ compare with oldval (1)
+	eoreqs	r3, r1, r5			@ compare with oldval (2)
+2:	stmeqia	r2, {r6, lr}			@ store newval if eq
+	rsbs	r0, r3, #0			@ set return val and C flag
+	ldmfd	sp!, {r4, r5, r6, pc}
+
+	.text
+kuser_cmpxchg64_fixup:
+	@ Called from kuser_cmpxchg_fixup.
+	@ r4 = address of interrupted insn (must be preserved).
+	@ sp = saved regs. r7 and r8 are clobbered.
+	@ 1b = first critical insn, 2b = last critical insn.
+	@ If r4 >= 1b and r4 <= 2b then saved pc_usr is set to 1b.
+	mov	r7, #0xffff0fff
+	sub	r7, r7, #(0xffff0fff - (0xffff0f60 + (1b - __kuser_cmpxchg64)))
+	subs	r8, r4, r7
+	rsbcss	r8, r8, #(2b - 1b)
+	strcs	r7, [sp, #S_PC]
+#if __LINUX_ARM_ARCH__ < 6
+	bcc	kuser_cmpxchg32_fixup
+#endif
+	mov	pc, lr
+	.previous
+
+#else
+#warning "NPTL on non MMU needs fixing"
+	mov	r0, #-1
+	adds	r0, r0, #0
+	usr_ret	lr
+#endif
+
+#else
+#error "incoherent kernel configuration"
+#endif
+
+	/* pad to next slot */
+	.rept	(16 - (. - __kuser_cmpxchg64)/4)
+	.word	0
+	.endr
 
 	.align	5
 
-/*
- * Reference prototype:
- *
- *	int __kernel_cmpxchg(int oldval, int newval, int *ptr)
- *
- * Input:
- *
- *	r0 = oldval
- *	r1 = newval
- *	r2 = ptr
- *	lr = return address
- *
- * Output:
- *
- *	r0 = returned value (zero or non-zero)
- *	C flag = set if r0 == 0, clear if r0 != 0
- *
- * Clobbered:
- *
- *	r3, ip, flags
- *
- * Definition and user space usage example:
- *
- *	typedef int (__kernel_cmpxchg_t)(int oldval, int newval, int *ptr);
- *	#define __kernel_cmpxchg (*(__kernel_cmpxchg_t *)0xffff0fc0)
- *
- * Atomically store newval in *ptr if *ptr is equal to oldval for user space.
- * Return zero if *ptr was changed or non-zero if no exchange happened.
- * The C flag is also set if *ptr was changed to allow for assembly
- * optimization in the calling code.
- *
- * Notes:
- *
- *    - This routine already includes memory barriers as needed.
- *
- * For example, a user space atomic_add implementation could look like this:
- *
- * #define atomic_add(ptr, val) \
- *	({ register unsigned int *__ptr asm("r2") = (ptr); \
- *	   register unsigned int __result asm("r1"); \
- *	   asm volatile ( \
- *	       "1: @ atomic_add\n\t" \
- *	       "ldr	r0, [r2]\n\t" \
- *	       "mov	r3, #0xffff0fff\n\t" \
- *	       "add	lr, pc, #4\n\t" \
- *	       "add	r1, r0, %2\n\t" \
- *	       "add	pc, r3, #(0xffff0fc0 - 0xffff0fff)\n\t" \
- *	       "bcc	1b" \
- *	       : "=&r" (__result) \
- *	       : "r" (__ptr), "rIL" (val) \
- *	       : "r0","r3","ip","lr","cc","memory" ); \
- *	   __result; })
- */
+__kuser_memory_barrier:				@ 0xffff0fa0
+	smp_dmb	arm
+	usr_ret	lr
+
+	.align	5
 
 __kuser_cmpxchg:				@ 0xffff0fc0
 
@@ -909,7 +867,7 @@ __kuser_cmpxchg:				@ 0xffff0fc0
 	 * A special ghost syscall is used for that (see traps.c).
 	 */
 	stmfd	sp!, {r7, lr}
-	ldr	r7, =1f			@ it's 20 bits
+	ldr	r7, 1f			@ it's 20 bits
 	swi	__ARM_NR_cmpxchg
 	ldmfd	sp!, {r7, pc}
 1:	.word	__ARM_NR_cmpxchg
@@ -934,15 +892,15 @@ __kuser_cmpxchg:				@ 0xffff0fc0
 	usr_ret	lr
 
 	.text
-kuser_cmpxchg_fixup:
+kuser_cmpxchg32_fixup:
 	@ Called from kuser_cmpxchg_check macro.
-	@ r2 = address of interrupted insn (must be preserved).
+	@ r4 = address of interrupted insn (must be preserved).
 	@ sp = saved regs. r7 and r8 are clobbered.
 	@ 1b = first critical insn, 2b = last critical insn.
-	@ If r2 >= 1b and r2 <= 2b then saved pc_usr is set to 1b.
+	@ If r4 >= 1b and r4 <= 2b then saved pc_usr is set to 1b.
 	mov	r7, #0xffff0fff
 	sub	r7, r7, #(0xffff0fff - (0xffff0fc0 + (1b - __kuser_cmpxchg)))
-	subs	r8, r2, r7
+	subs	r8, r4, r7
 	rsbcss	r8, r8, #(2b - 1b)
 	strcs	r7, [sp, #S_PC]
 	mov	pc, lr
@@ -957,7 +915,7 @@ kuser_cmpxchg_fixup:
 
 #else
 
-	smp_dmb
+	smp_dmb	arm
 1:	ldrex	r3, [r2]
 	subs	r3, r3, r0
 	strexeq	r3, r1, [r2]
@@ -965,48 +923,12 @@ kuser_cmpxchg_fixup:
 	beq	1b
 	rsbs	r0, r3, #0
 	/* beware -- each __kuser slot must be 8 instructions max */
-#ifdef CONFIG_SMP
-	b	__kuser_memory_barrier
-#else
-	usr_ret	lr
-#endif
+	ALT_SMP(b	__kuser_memory_barrier)
+	ALT_UP(usr_ret	lr)
 
 #endif
 
 	.align	5
-
-/*
- * Reference prototype:
- *
- *	int __kernel_get_tls(void)
- *
- * Input:
- *
- *	lr = return address
- *
- * Output:
- *
- *	r0 = TLS value
- *
- * Clobbered:
- *
- *	none
- *
- * Definition and user space usage example:
- *
- *	typedef int (__kernel_get_tls_t)(void);
- *	#define __kernel_get_tls (*(__kernel_get_tls_t *)0xffff0fe0)
- *
- * Get the TLS value as previously set via the __ARM_NR_set_tls syscall.
- *
- * This could be used as follows:
- *
- * #define __kernel_get_tls() \
- *	({ register unsigned int __val asm("r0"); \
- *         asm( "mov r0, #0xffff0fff; mov lr, pc; sub pc, r0, #31" \
- *	        : "=r" (__val) : : "lr","cc" ); \
- *	   __val; })
- */
 
 __kuser_get_tls:				@ 0xffff0fe0
 	ldr	r0, [pc, #(16 - 8)]	@ read TLS, set in kuser_get_tls_init
@@ -1015,19 +937,6 @@ __kuser_get_tls:				@ 0xffff0fe0
 	.rep	4
 	.word	0			@ 0xffff0ff0 software TLS value, then
 	.endr				@ pad up to __kuser_helper_version
-
-/*
- * Reference declaration:
- *
- *	extern unsigned int __kernel_helper_version;
- *
- * Definition and user space usage example:
- *
- *	#define __kernel_helper_version (*(unsigned int *)0xffff0ffc)
- *
- * User space may read this to determine the curent number of helpers
- * available.
- */
 
 __kuser_helper_version:				@ 0xffff0ffc
 	.word	((__kuser_helper_end - __kuser_helper_start) >> 5)
@@ -1195,7 +1104,6 @@ __stubs_start:
  * get out of that mode without clobbering one register.
  */
 vector_fiq:
-	disable_fiq
 	subs	pc, lr, #4
 
 /*=============================================================================
@@ -1246,3 +1154,9 @@ cr_alignment:
 	.space	4
 cr_no_alignment:
 	.space	4
+
+#ifdef CONFIG_MULTI_IRQ_HANDLER
+	.globl	handle_arch_irq
+handle_arch_irq:
+	.space	4
+#endif

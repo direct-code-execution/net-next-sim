@@ -20,6 +20,9 @@ struct genl_multicast_group {
 	u32			id;
 };
 
+struct genl_ops;
+struct genl_info;
+
 /**
  * struct genl_family - generic netlink family
  * @id: protocol family idenfitier
@@ -29,6 +32,10 @@ struct genl_multicast_group {
  * @maxattr: maximum number of attributes supported
  * @netnsok: set to true if the family can handle network
  *	namespaces and should be presented in all of them
+ * @pre_doit: called before an operation's doit callback, it may
+ *	do additional, common, filtering and return an error
+ * @post_doit: called after an operation's doit callback, it may
+ *	undo operations done by pre_doit, for example release locks
  * @attrbuf: buffer to store parsed attributes
  * @ops_list: list of all assigned operations
  * @family_list: family list
@@ -41,6 +48,12 @@ struct genl_family {
 	unsigned int		version;
 	unsigned int		maxattr;
 	bool			netnsok;
+	int			(*pre_doit)(struct genl_ops *ops,
+					    struct sk_buff *skb,
+					    struct genl_info *info);
+	void			(*post_doit)(struct genl_ops *ops,
+					     struct sk_buff *skb,
+					     struct genl_info *info);
 	struct nlattr **	attrbuf;	/* private */
 	struct list_head	ops_list;	/* private */
 	struct list_head	family_list;	/* private */
@@ -55,6 +68,8 @@ struct genl_family {
  * @genlhdr: generic netlink message header
  * @userhdr: user specific header
  * @attrs: netlink attributes
+ * @_net: network namespace
+ * @user_ptr: user pointers
  */
 struct genl_info {
 	u32			snd_seq;
@@ -66,6 +81,7 @@ struct genl_info {
 #ifdef CONFIG_NET_NS
 	struct net *		_net;
 #endif
+	void *			user_ptr[2];
 };
 
 static inline struct net *genl_info_net(struct genl_info *info)
@@ -81,6 +97,7 @@ static inline void genl_info_net_set(struct genl_info *info, struct net *net)
 /**
  * struct genl_ops - generic netlink operations
  * @cmd: command identifier
+ * @internal_flags: flags used by the family
  * @flags: flags
  * @policy: attribute validation policy
  * @doit: standard command callback
@@ -90,6 +107,7 @@ static inline void genl_info_net_set(struct genl_info *info, struct net *net)
  */
 struct genl_ops {
 	u8			cmd;
+	u8			internal_flags;
 	unsigned int		flags;
 	const struct nla_policy	*policy;
 	int		       (*doit)(struct sk_buff *skb,
@@ -110,35 +128,42 @@ extern int genl_register_mc_group(struct genl_family *family,
 				  struct genl_multicast_group *grp);
 extern void genl_unregister_mc_group(struct genl_family *family,
 				     struct genl_multicast_group *grp);
+extern void genl_notify(struct sk_buff *skb, struct net *net, u32 pid,
+			u32 group, struct nlmsghdr *nlh, gfp_t flags);
+
+void *genlmsg_put(struct sk_buff *skb, u32 pid, u32 seq,
+				struct genl_family *family, int flags, u8 cmd);
 
 /**
- * genlmsg_put - Add generic netlink header to netlink message
- * @skb: socket buffer holding the message
- * @pid: netlink pid the message is addressed to
- * @seq: sequence number (usually the one of the sender)
+ * genlmsg_nlhdr - Obtain netlink header from user specified header
+ * @user_hdr: user header as returned from genlmsg_put()
  * @family: generic netlink family
- * @flags netlink message flags
- * @cmd: generic netlink command
  *
- * Returns pointer to user specific header
+ * Returns pointer to netlink header.
  */
-static inline void *genlmsg_put(struct sk_buff *skb, u32 pid, u32 seq,
-				struct genl_family *family, int flags, u8 cmd)
+static inline struct nlmsghdr *genlmsg_nlhdr(void *user_hdr,
+					     struct genl_family *family)
 {
-	struct nlmsghdr *nlh;
-	struct genlmsghdr *hdr;
+	return (struct nlmsghdr *)((char *)user_hdr -
+				   family->hdrsize -
+				   GENL_HDRLEN -
+				   NLMSG_HDRLEN);
+}
 
-	nlh = nlmsg_put(skb, pid, seq, family->id, GENL_HDRLEN +
-			family->hdrsize, flags);
-	if (nlh == NULL)
-		return NULL;
-
-	hdr = nlmsg_data(nlh);
-	hdr->cmd = cmd;
-	hdr->version = family->version;
-	hdr->reserved = 0;
-
-	return (char *) hdr + GENL_HDRLEN;
+/**
+ * genl_dump_check_consistent - check if sequence is consistent and advertise if not
+ * @cb: netlink callback structure that stores the sequence number
+ * @user_hdr: user header as returned from genlmsg_put()
+ * @family: generic netlink family
+ *
+ * Cf. nl_dump_check_consistent(), this just provides a wrapper to make it
+ * simpler to use with generic netlink.
+ */
+static inline void genl_dump_check_consistent(struct netlink_callback *cb,
+					      void *user_hdr,
+					      struct genl_family *family)
+{
+	nl_dump_check_consistent(cb, genlmsg_nlhdr(user_hdr, family));
 }
 
 /**
@@ -177,7 +202,8 @@ static inline int genlmsg_end(struct sk_buff *skb, void *hdr)
  */
 static inline void genlmsg_cancel(struct sk_buff *skb, void *hdr)
 {
-	nlmsg_cancel(skb, hdr - GENL_HDRLEN - NLMSG_HDRLEN);
+	if (hdr)
+		nlmsg_cancel(skb, hdr - GENL_HDRLEN - NLMSG_HDRLEN);
 }
 
 /**
@@ -241,7 +267,7 @@ static inline int genlmsg_reply(struct sk_buff *skb, struct genl_info *info)
 
 /**
  * gennlmsg_data - head of message payload
- * @gnlh: genetlink messsage header
+ * @gnlh: genetlink message header
  */
 static inline void *genlmsg_data(const struct genlmsghdr *gnlh)
 {

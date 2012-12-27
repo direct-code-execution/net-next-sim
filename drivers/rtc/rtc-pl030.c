@@ -35,11 +35,6 @@ static irqreturn_t pl030_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static int pl030_ioctl(struct device *dev, unsigned int cmd, unsigned long arg)
-{
-	return -ENOIOCTLCMD;
-}
-
 static int pl030_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 {
 	struct pl030_rtc *rtc = dev_get_drvdata(dev);
@@ -96,14 +91,13 @@ static int pl030_set_time(struct device *dev, struct rtc_time *tm)
 }
 
 static const struct rtc_class_ops pl030_ops = {
-	.ioctl		= pl030_ioctl,
 	.read_time	= pl030_read_time,
 	.set_time	= pl030_set_time,
 	.read_alarm	= pl030_read_alarm,
 	.set_alarm	= pl030_set_alarm,
 };
 
-static int pl030_probe(struct amba_device *dev, struct amba_id *id)
+static int pl030_probe(struct amba_device *dev, const struct amba_id *id)
 {
 	struct pl030_rtc *rtc;
 	int ret;
@@ -129,7 +123,7 @@ static int pl030_probe(struct amba_device *dev, struct amba_id *id)
 
 	amba_set_drvdata(dev, rtc);
 
-	ret = request_irq(dev->irq[0], pl030_interrupt, IRQF_DISABLED,
+	ret = request_irq(dev->irq[0], pl030_interrupt, 0,
 			  "rtc-pl030", rtc);
 	if (ret)
 		goto err_irq;
@@ -180,6 +174,8 @@ static struct amba_id pl030_ids[] = {
 	{ 0, 0 },
 };
 
+MODULE_DEVICE_TABLE(amba, pl030_ids);
+
 static struct amba_driver pl030_driver = {
 	.drv		= {
 		.name	= "rtc-pl030",
@@ -189,18 +185,7 @@ static struct amba_driver pl030_driver = {
 	.id_table	= pl030_ids,
 };
 
-static int __init pl030_init(void)
-{
-	return amba_driver_register(&pl030_driver);
-}
-
-static void __exit pl030_exit(void)
-{
-	amba_driver_unregister(&pl030_driver);
-}
-
-module_init(pl030_init);
-module_exit(pl030_exit);
+module_amba_driver(pl030_driver);
 
 MODULE_AUTHOR("Russell King <rmk@arm.linux.org.uk>");
 MODULE_DESCRIPTION("ARM AMBA PL030 RTC Driver");

@@ -22,11 +22,11 @@
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/svcsock.h>
 #include <linux/sunrpc/metrics.h>
-#include <net/net_namespace.h>
+#include <linux/rcupdate.h>
+
+#include "netns.h"
 
 #define RPCDBG_FACILITY	RPCDBG_MISC
-
-struct proc_dir_entry	*proc_net_rpc = NULL;
 
 /*
  * Get RPC client stats
@@ -116,9 +116,7 @@ EXPORT_SYMBOL_GPL(svc_seq_show);
  */
 struct rpc_iostats *rpc_alloc_iostats(struct rpc_clnt *clnt)
 {
-	struct rpc_iostats *new;
-	new = kcalloc(clnt->cl_maxproc, sizeof(struct rpc_iostats), GFP_KERNEL);
-	return new;
+	return kcalloc(clnt->cl_maxproc, sizeof(struct rpc_iostats), GFP_KERNEL);
 }
 EXPORT_SYMBOL_GPL(rpc_alloc_iostats);
 
@@ -136,20 +134,19 @@ EXPORT_SYMBOL_GPL(rpc_free_iostats);
 /**
  * rpc_count_iostats - tally up per-task stats
  * @task: completed rpc_task
+ * @stats: array of stat structures
  *
  * Relies on the caller for serialization.
  */
-void rpc_count_iostats(struct rpc_task *task)
+void rpc_count_iostats(const struct rpc_task *task, struct rpc_iostats *stats)
 {
 	struct rpc_rqst *req = task->tk_rqstp;
-	struct rpc_iostats *stats;
 	struct rpc_iostats *op_metrics;
 	ktime_t delta;
 
-	if (!task->tk_client || !task->tk_client->cl_metrics || !req)
+	if (!stats || !req)
 		return;
 
-	stats = task->tk_client->cl_metrics;
 	op_metrics = &stats[task->tk_msg.rpc_proc->p_statidx];
 
 	op_metrics->om_ops++;
@@ -167,6 +164,7 @@ void rpc_count_iostats(struct rpc_task *task)
 	delta = ktime_sub(ktime_get(), task->tk_start);
 	op_metrics->om_execute = ktime_add(op_metrics->om_execute, delta);
 }
+EXPORT_SYMBOL_GPL(rpc_count_iostats);
 
 static void _print_name(struct seq_file *seq, unsigned int op,
 			struct rpc_procinfo *procs)
@@ -182,7 +180,7 @@ static void _print_name(struct seq_file *seq, unsigned int op,
 void rpc_print_iostats(struct seq_file *seq, struct rpc_clnt *clnt)
 {
 	struct rpc_iostats *stats = clnt->cl_metrics;
-	struct rpc_xprt *xprt = clnt->cl_xprt;
+	struct rpc_xprt *xprt;
 	unsigned int op, maxproc = clnt->cl_maxproc;
 
 	if (!stats)
@@ -192,8 +190,11 @@ void rpc_print_iostats(struct seq_file *seq, struct rpc_clnt *clnt)
 	seq_printf(seq, "p/v: %u/%u (%s)\n",
 			clnt->cl_prog, clnt->cl_vers, clnt->cl_protname);
 
+	rcu_read_lock();
+	xprt = rcu_dereference(clnt->cl_xprt);
 	if (xprt)
 		xprt->ops->print_stats(xprt, seq);
+	rcu_read_unlock();
 
 	seq_printf(seq, "\tper-op statistics\n");
 	for (op = 0; op < maxproc; op++) {
@@ -216,57 +217,66 @@ EXPORT_SYMBOL_GPL(rpc_print_iostats);
  * Register/unregister RPC proc files
  */
 static inline struct proc_dir_entry *
-do_register(const char *name, void *data, const struct file_operations *fops)
+do_register(struct net *net, const char *name, void *data,
+	    const struct file_operations *fops)
 {
-	rpc_proc_init();
-	dprintk("RPC:       registering /proc/net/rpc/%s\n", name);
+	struct sunrpc_net *sn;
 
-	return proc_create_data(name, 0, proc_net_rpc, fops, data);
+	dprintk("RPC:       registering /proc/net/rpc/%s\n", name);
+	sn = net_generic(net, sunrpc_net_id);
+	return proc_create_data(name, 0, sn->proc_net_rpc, fops, data);
 }
 
 struct proc_dir_entry *
-rpc_proc_register(struct rpc_stat *statp)
+rpc_proc_register(struct net *net, struct rpc_stat *statp)
 {
-	return do_register(statp->program->name, statp, &rpc_proc_fops);
+	return do_register(net, statp->program->name, statp, &rpc_proc_fops);
 }
 EXPORT_SYMBOL_GPL(rpc_proc_register);
 
 void
-rpc_proc_unregister(const char *name)
+rpc_proc_unregister(struct net *net, const char *name)
 {
-	remove_proc_entry(name, proc_net_rpc);
+	struct sunrpc_net *sn;
+
+	sn = net_generic(net, sunrpc_net_id);
+	remove_proc_entry(name, sn->proc_net_rpc);
 }
 EXPORT_SYMBOL_GPL(rpc_proc_unregister);
 
 struct proc_dir_entry *
-svc_proc_register(struct svc_stat *statp, const struct file_operations *fops)
+svc_proc_register(struct net *net, struct svc_stat *statp, const struct file_operations *fops)
 {
-	return do_register(statp->program->pg_name, statp, fops);
+	return do_register(net, statp->program->pg_name, statp, fops);
 }
 EXPORT_SYMBOL_GPL(svc_proc_register);
 
 void
-svc_proc_unregister(const char *name)
+svc_proc_unregister(struct net *net, const char *name)
 {
-	remove_proc_entry(name, proc_net_rpc);
+	struct sunrpc_net *sn;
+
+	sn = net_generic(net, sunrpc_net_id);
+	remove_proc_entry(name, sn->proc_net_rpc);
 }
 EXPORT_SYMBOL_GPL(svc_proc_unregister);
 
-void
-rpc_proc_init(void)
+int rpc_proc_init(struct net *net)
 {
+	struct sunrpc_net *sn;
+
 	dprintk("RPC:       registering /proc/net/rpc\n");
-	if (!proc_net_rpc)
-		proc_net_rpc = proc_mkdir("rpc", init_net.proc_net);
+	sn = net_generic(net, sunrpc_net_id);
+	sn->proc_net_rpc = proc_mkdir("rpc", net->proc_net);
+	if (sn->proc_net_rpc == NULL)
+		return -ENOMEM;
+
+	return 0;
 }
 
-void
-rpc_proc_exit(void)
+void rpc_proc_exit(struct net *net)
 {
 	dprintk("RPC:       unregistering /proc/net/rpc\n");
-	if (proc_net_rpc) {
-		proc_net_rpc = NULL;
-		remove_proc_entry("rpc", init_net.proc_net);
-	}
+	remove_proc_entry("rpc", net->proc_net);
 }
 

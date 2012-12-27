@@ -26,6 +26,7 @@
 #include <linux/fb.h>
 #include <linux/spinlock.h>
 
+#include "via_aux.h"
 #include "ioctl.h"
 #include "share.h"
 #include "chip.h"
@@ -40,12 +41,21 @@
 #define VIAFB_NUM_I2C		5
 
 struct viafb_shared {
+	u32 iga1_devices;
+	u32 iga2_devices;
+
 	struct proc_dir_entry *proc_entry;	/*viafb proc entry */
+	struct proc_dir_entry *iga1_proc_entry;
+	struct proc_dir_entry *iga2_proc_entry;
 	struct viafb_dev *vdev;			/* Global dev info */
+
+	/* I2C busses that may have auxiliary devices */
+	struct via_aux_bus *i2c_26;
+	struct via_aux_bus *i2c_31;
+	struct via_aux_bus *i2c_2C;
 
 	/* All the information will be needed to set engine */
 	struct tmds_setting_information tmds_setting_info;
-	struct crt_setting_information crt_setting_info;
 	struct lvds_setting_information lvds_setting_info;
 	struct lvds_setting_information lvds_setting_info2;
 	struct chip_information chip_info;
@@ -74,23 +84,17 @@ struct viafb_par {
 	/* All the information will be needed to set engine */
 	/* depreciated, use the ones in shared directly */
 	struct tmds_setting_information *tmds_setting_info;
-	struct crt_setting_information *crt_setting_info;
 	struct lvds_setting_information *lvds_setting_info;
 	struct lvds_setting_information *lvds_setting_info2;
 	struct chip_information *chip_info;
 };
 
-extern unsigned int viafb_second_virtual_yres;
-extern unsigned int viafb_second_virtual_xres;
 extern int viafb_SAMM_ON;
 extern int viafb_dual_fb;
 extern int viafb_LCD2_ON;
 extern int viafb_LCD_ON;
 extern int viafb_DVI_ON;
 extern int viafb_hotplug;
-
-extern int strict_strtoul(const char *cp, unsigned int base,
-	unsigned long *res);
 
 u8 viafb_gpio_i2c_read_lvds(struct lvds_setting_information
 	*plvds_setting_info, struct lvds_chip_information

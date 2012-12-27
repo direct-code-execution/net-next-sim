@@ -14,6 +14,7 @@
 #include <linux/spi/spi.h>
 #include <linux/irq.h>
 #include <linux/interrupt.h>
+#include <linux/delay.h>
 #include <asm/dma.h>
 #include <asm/bfin5xx_spi.h>
 #include <asm/portmux.h>
@@ -74,7 +75,7 @@ static struct resource isp1362_hcd_resources[] = {
 	}, {
 		.start = IRQ_PF8,
 		.end = IRQ_PF8,
-		.flags = IORESOURCE_IRQ,
+		.flags = IORESOURCE_IRQ | IORESOURCE_IRQ_LOWEDGE,
 	},
 };
 
@@ -106,6 +107,9 @@ static struct resource net2272_bfin_resources[] = {
 		.start = 0x2C000000,
 		.end = 0x2C000000 + 0x7F,
 		.flags = IORESOURCE_MEM,
+	}, {
+		.start = 1,
+		.flags = IORESOURCE_BUS,
 	}, {
 		.start = IRQ_PF10,
 		.end = IRQ_PF10,
@@ -168,8 +172,13 @@ static struct resource bfin_uart0_resources[] = {
 		.flags = IORESOURCE_MEM,
 	},
 	{
+		.start = IRQ_UART_TX,
+		.end = IRQ_UART_TX,
+		.flags = IORESOURCE_IRQ,
+	},
+	{
 		.start = IRQ_UART_RX,
-		.end = IRQ_UART_RX+1,
+		.end = IRQ_UART_RX,
 		.flags = IORESOURCE_IRQ,
 	},
 	{
@@ -189,7 +198,7 @@ static struct resource bfin_uart0_resources[] = {
 	},
 };
 
-unsigned short bfin_uart0_peripherals[] = {
+static unsigned short bfin_uart0_peripherals[] = {
 	P_UART0_TX, P_UART0_RX, 0
 };
 
@@ -246,7 +255,15 @@ static struct mtd_partition ezkit_partitions[] = {
 		.offset     = MTDPART_OFS_APPEND,
 	}, {
 		.name       = "file system(nor)",
-		.size       = MTDPART_SIZ_FULL,
+		.size       = 0x800000 - 0x40000 - 0x1C0000 - 0x2000 * 8,
+		.offset     = MTDPART_OFS_APPEND,
+	}, {
+		.name       = "config(nor)",
+		.size       = 0x2000 * 7,
+		.offset     = MTDPART_OFS_APPEND,
+	}, {
+		.name       = "u-boot env(nor)",
+		.size       = 0x2000,
 		.offset     = MTDPART_OFS_APPEND,
 	}
 };
@@ -274,22 +291,7 @@ static struct platform_device ezkit_flash_device = {
 };
 #endif
 
-#if defined(CONFIG_SND_BLACKFIN_AD183X) \
-	|| defined(CONFIG_SND_BLACKFIN_AD183X_MODULE)
-static struct bfin5xx_spi_chip ad1836_spi_chip_info = {
-	.enable_dma = 0,
-	.bits_per_word = 16,
-};
-#endif
-
-#if defined(CONFIG_SPI_SPIDEV) || defined(CONFIG_SPI_SPIDEV_MODULE)
-static struct bfin5xx_spi_chip spidev_chip_info = {
-	.enable_dma = 0,
-	.bits_per_word = 8,
-};
-#endif
-
-#if defined(CONFIG_SPI_BFIN) || defined(CONFIG_SPI_BFIN_MODULE)
+#if defined(CONFIG_SPI_BFIN5XX) || defined(CONFIG_SPI_BFIN5XX_MODULE)
 /* SPI (0) */
 static struct resource bfin_spi0_resource[] = {
 	[0] = {
@@ -328,14 +330,15 @@ static struct platform_device bfin_spi0_device = {
 #endif
 
 static struct spi_board_info bfin_spi_board_info[] __initdata = {
-#if defined(CONFIG_SND_BLACKFIN_AD183X) \
-	|| defined(CONFIG_SND_BLACKFIN_AD183X_MODULE)
+#if defined(CONFIG_SND_BF5XX_SOC_AD183X) \
+	|| defined(CONFIG_SND_BF5XX_SOC_AD183X_MODULE)
 	{
-		.modalias = "ad1836",
+		.modalias = "ad183x",
 		.max_speed_hz = 3125000,     /* max spi clock (SCK) speed in HZ */
 		.bus_num = 0,
-		.chip_select = CONFIG_SND_BLACKFIN_SPI_PFBIT,
-		.controller_data = &ad1836_spi_chip_info,
+		.chip_select = 4,
+		.platform_data = "ad1836", /* only includes chip name for the moment */
+		.mode = SPI_MODE_3,
 	},
 #endif
 #if defined(CONFIG_SPI_SPIDEV) || defined(CONFIG_SPI_SPIDEV_MODULE)
@@ -344,7 +347,6 @@ static struct spi_board_info bfin_spi_board_info[] __initdata = {
 		.max_speed_hz = 3125000,     /* max spi clock (SCK) speed in HZ */
 		.bus_num = 0,
 		.chip_select = 1,
-		.controller_data = &spidev_chip_info,
 	},
 #endif
 };
@@ -377,11 +379,11 @@ static struct platform_device bfin_device_gpiokeys = {
 #include <linux/i2c-gpio.h>
 
 static struct i2c_gpio_platform_data i2c_gpio_data = {
-	.sda_pin		= 1,
-	.scl_pin		= 0,
+	.sda_pin		= GPIO_PF1,
+	.scl_pin		= GPIO_PF0,
 	.sda_is_open_drain	= 0,
 	.scl_is_open_drain	= 0,
-	.udelay			= 40,
+	.udelay			= 10,
 };
 
 static struct platform_device i2c_gpio_device = {
@@ -420,6 +422,120 @@ static struct platform_device bfin_dpmc = {
 	},
 };
 
+#if defined(CONFIG_VIDEO_BLACKFIN_CAPTURE) \
+	|| defined(CONFIG_VIDEO_BLACKFIN_CAPTURE_MODULE)
+#include <linux/videodev2.h>
+#include <media/blackfin/bfin_capture.h>
+#include <media/blackfin/ppi.h>
+
+static const unsigned short ppi_req[] = {
+	P_PPI0_D0, P_PPI0_D1, P_PPI0_D2, P_PPI0_D3,
+	P_PPI0_D4, P_PPI0_D5, P_PPI0_D6, P_PPI0_D7,
+	P_PPI0_CLK, P_PPI0_FS1, P_PPI0_FS2,
+	0,
+};
+
+static const struct ppi_info ppi_info = {
+	.type = PPI_TYPE_PPI,
+	.dma_ch = CH_PPI0,
+	.irq_err = IRQ_PPI1_ERROR,
+	.base = (void __iomem *)PPI0_CONTROL,
+	.pin_req = ppi_req,
+};
+
+#if defined(CONFIG_VIDEO_ADV7183) \
+	|| defined(CONFIG_VIDEO_ADV7183_MODULE)
+#include <media/adv7183.h>
+static struct v4l2_input adv7183_inputs[] = {
+	{
+		.index = 0,
+		.name = "Composite",
+		.type = V4L2_INPUT_TYPE_CAMERA,
+		.std = V4L2_STD_ALL,
+	},
+	{
+		.index = 1,
+		.name = "S-Video",
+		.type = V4L2_INPUT_TYPE_CAMERA,
+		.std = V4L2_STD_ALL,
+	},
+	{
+		.index = 2,
+		.name = "Component",
+		.type = V4L2_INPUT_TYPE_CAMERA,
+		.std = V4L2_STD_ALL,
+	},
+};
+
+static struct bcap_route adv7183_routes[] = {
+	{
+		.input = ADV7183_COMPOSITE4,
+		.output = ADV7183_8BIT_OUT,
+	},
+	{
+		.input = ADV7183_SVIDEO0,
+		.output = ADV7183_8BIT_OUT,
+	},
+	{
+		.input = ADV7183_COMPONENT0,
+		.output = ADV7183_8BIT_OUT,
+	},
+};
+
+
+static const unsigned adv7183_gpio[] = {
+	GPIO_PF13, /* reset pin */
+	GPIO_PF2,  /* output enable pin */
+};
+
+static struct bfin_capture_config bfin_capture_data = {
+	.card_name = "BF561",
+	.inputs = adv7183_inputs,
+	.num_inputs = ARRAY_SIZE(adv7183_inputs),
+	.routes = adv7183_routes,
+	.i2c_adapter_id = 0,
+	.board_info = {
+		.type = "adv7183",
+		.addr = 0x20,
+		.platform_data = (void *)adv7183_gpio,
+	},
+	.ppi_info = &ppi_info,
+	.ppi_control = (PACK_EN | DLEN_8 | DMA32 | FLD_SEL),
+};
+#endif
+
+static struct platform_device bfin_capture_device = {
+	.name = "bfin_capture",
+	.dev = {
+		.platform_data = &bfin_capture_data,
+	},
+};
+#endif
+
+#if defined(CONFIG_SND_BF5XX_I2S) || defined(CONFIG_SND_BF5XX_I2S_MODULE)
+static struct platform_device bfin_i2s = {
+	.name = "bfin-i2s",
+	.id = CONFIG_SND_BF5XX_SPORT_NUM,
+	/* TODO: add platform data here */
+};
+#endif
+
+#if defined(CONFIG_SND_BF5XX_TDM) || defined(CONFIG_SND_BF5XX_TDM_MODULE)
+static struct platform_device bfin_tdm = {
+	.name = "bfin-tdm",
+	.id = CONFIG_SND_BF5XX_SPORT_NUM,
+	/* TODO: add platform data here */
+};
+#endif
+
+#if defined(CONFIG_SND_BF5XX_AC97) || defined(CONFIG_SND_BF5XX_AC97_MODULE)
+static struct platform_device bfin_ac97 = {
+	.name = "bfin-ac97",
+	.id = CONFIG_SND_BF5XX_SPORT_NUM,
+	/* TODO: add platform data here */
+};
+#endif
+
 static struct platform_device *ezkit_devices[] __initdata = {
 
 	&bfin_dpmc,
@@ -436,7 +552,7 @@ static struct platform_device *ezkit_devices[] __initdata = {
 	&bfin_isp1760_device,
 #endif
 
-#if defined(CONFIG_SPI_BFIN) || defined(CONFIG_SPI_BFIN_MODULE)
+#if defined(CONFIG_SPI_BFIN5XX) || defined(CONFIG_SPI_BFIN5XX_MODULE)
 	&bfin_spi0_device,
 #endif
 
@@ -467,7 +583,42 @@ static struct platform_device *ezkit_devices[] __initdata = {
 #if defined(CONFIG_MTD_PHYSMAP) || defined(CONFIG_MTD_PHYSMAP_MODULE)
 	&ezkit_flash_device,
 #endif
+
+#if defined(CONFIG_VIDEO_BLACKFIN_CAPTURE) \
+	|| defined(CONFIG_VIDEO_BLACKFIN_CAPTURE_MODULE)
+	&bfin_capture_device,
+#endif
+
+#if defined(CONFIG_SND_BF5XX_I2S) || defined(CONFIG_SND_BF5XX_I2S_MODULE)
+	&bfin_i2s,
+#endif
+
+#if defined(CONFIG_SND_BF5XX_TDM) || defined(CONFIG_SND_BF5XX_TDM_MODULE)
+	&bfin_tdm,
+#endif
+
+#if defined(CONFIG_SND_BF5XX_AC97) || defined(CONFIG_SND_BF5XX_AC97_MODULE)
+	&bfin_ac97,
+#endif
 };
+
+static int __init net2272_init(void)
+{
+#if defined(CONFIG_USB_NET2272) || defined(CONFIG_USB_NET2272_MODULE)
+	int ret;
+
+	ret = gpio_request(GPIO_PF11, "net2272");
+	if (ret)
+		return ret;
+
+	/* Reset the USB chip */
+	gpio_direction_output(GPIO_PF11, 0);
+	mdelay(2);
+	gpio_set_value(GPIO_PF11, 1);
+#endif
+
+	return 0;
+}
 
 static int __init ezkit_init(void)
 {
@@ -483,6 +634,20 @@ static int __init ezkit_init(void)
 	bfin_write_FIO0_DIR(bfin_read_FIO0_DIR() | (1 << 12));
 	SSYNC();
 #endif
+
+#if defined(CONFIG_SND_BF5XX_SOC_AD183X) || defined(CONFIG_SND_BF5XX_SOC_AD183X_MODULE)
+	bfin_write_FIO0_DIR(bfin_read_FIO0_DIR() | (1 << 15));
+	bfin_write_FIO0_FLAG_S(1 << 15);
+	SSYNC();
+	/*
+	 * This initialization lasts for approximately 4500 MCLKs.
+	 * MCLK = 12.288MHz
+	 */
+	udelay(400);
+#endif
+
+	if (net2272_init())
+		pr_warning("unable to configure net2272; it probably won't work\n");
 
 	spi_register_board_info(bfin_spi_board_info, ARRAY_SIZE(bfin_spi_board_info));
 	return 0;

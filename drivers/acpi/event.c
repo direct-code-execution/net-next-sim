@@ -7,6 +7,7 @@
  */
 
 #include <linux/spinlock.h>
+#include <linux/export.h>
 #include <linux/proc_fs.h>
 #include <linux/init.h>
 #include <linux/poll.h>
@@ -110,6 +111,7 @@ static const struct file_operations acpi_system_event_ops = {
 	.read = acpi_system_read_event,
 	.release = acpi_system_close_event,
 	.poll = acpi_system_poll_event,
+	.llseek = default_llseek,
 };
 #endif	/* CONFIG_ACPI_PROC_EVENT */
 

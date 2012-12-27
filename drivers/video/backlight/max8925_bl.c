@@ -17,6 +17,7 @@
 #include <linux/backlight.h>
 #include <linux/mfd/max8925.h>
 #include <linux/slab.h>
+#include <linux/module.h>
 
 #define MAX_BRIGHTNESS		(0xff)
 #define MIN_BRIGHTNESS		(0)
@@ -92,7 +93,7 @@ static int max8925_backlight_get_brightness(struct backlight_device *bl)
 	return ret;
 }
 
-static struct backlight_ops max8925_backlight_ops = {
+static const struct backlight_ops max8925_backlight_ops = {
 	.options	= BL_CORE_SUSPENDRESUME,
 	.update_status	= max8925_backlight_update_status,
 	.get_brightness	= max8925_backlight_get_brightness,
@@ -128,7 +129,8 @@ static int __devinit max8925_backlight_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	data = kzalloc(sizeof(struct max8925_backlight_data), GFP_KERNEL);
+	data = devm_kzalloc(&pdev->dev, sizeof(struct max8925_backlight_data),
+			    GFP_KERNEL);
 	if (data == NULL)
 		return -ENOMEM;
 	strncpy(name, res->name, MAX8925_NAME_SIZE);
@@ -136,12 +138,12 @@ static int __devinit max8925_backlight_probe(struct platform_device *pdev)
 	data->current_brightness = 0;
 
 	memset(&props, 0, sizeof(struct backlight_properties));
+	props.type = BACKLIGHT_RAW;
 	props.max_brightness = MAX_BRIGHTNESS;
 	bl = backlight_device_register(name, &pdev->dev, data,
 					&max8925_backlight_ops, &props);
 	if (IS_ERR(bl)) {
 		dev_err(&pdev->dev, "failed to register backlight\n");
-		kfree(data);
 		return PTR_ERR(bl);
 	}
 	bl->props.brightness = MAX_BRIGHTNESS;
@@ -163,17 +165,14 @@ static int __devinit max8925_backlight_probe(struct platform_device *pdev)
 	return 0;
 out:
 	backlight_device_unregister(bl);
-	kfree(data);
 	return ret;
 }
 
 static int __devexit max8925_backlight_remove(struct platform_device *pdev)
 {
 	struct backlight_device *bl = platform_get_drvdata(pdev);
-	struct max8925_backlight_data *data = bl_get_data(bl);
 
 	backlight_device_unregister(bl);
-	kfree(data);
 	return 0;
 }
 
@@ -186,17 +185,7 @@ static struct platform_driver max8925_backlight_driver = {
 	.remove		= __devexit_p(max8925_backlight_remove),
 };
 
-static int __init max8925_backlight_init(void)
-{
-	return platform_driver_register(&max8925_backlight_driver);
-}
-module_init(max8925_backlight_init);
-
-static void __exit max8925_backlight_exit(void)
-{
-	platform_driver_unregister(&max8925_backlight_driver);
-};
-module_exit(max8925_backlight_exit);
+module_platform_driver(max8925_backlight_driver);
 
 MODULE_DESCRIPTION("Backlight Driver for Maxim MAX8925");
 MODULE_AUTHOR("Haojian Zhuang <haojian.zhuang@marvell.com>");

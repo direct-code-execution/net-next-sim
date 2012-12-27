@@ -21,7 +21,7 @@
  */
 
 #include <linux/init.h>
-#include <linux/moduleparam.h>
+#include <linux/module.h>
 #include <linux/mutex.h>
 #include <sound/core.h>
 #include <sound/minors.h>
@@ -220,6 +220,7 @@ static const struct file_operations seq_oss_f_ops =
 	.poll =		odev_poll,
 	.unlocked_ioctl =	odev_ioctl,
 	.compat_ioctl =	odev_ioctl_compat,
+	.llseek =	noop_llseek,
 };
 
 static int __init

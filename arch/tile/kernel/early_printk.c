@@ -16,6 +16,7 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/string.h>
+#include <linux/irqflags.h>
 #include <asm/setup.h>
 #include <hv/hypervisor.h>
 
@@ -54,7 +55,7 @@ void early_printk(const char *fmt, ...)
 void early_panic(const char *fmt, ...)
 {
 	va_list ap;
-	raw_local_irq_disable_all();
+	arch_local_irq_disable_all();
 	va_start(ap, fmt);
 	early_printk("Kernel panic - not syncing: ");
 	early_vprintk(fmt, ap);

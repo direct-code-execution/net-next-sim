@@ -20,6 +20,8 @@
 #ifndef _FC_FCP_H_
 #define	_FC_FCP_H_
 
+#include <scsi/scsi.h>
+
 /*
  * Fibre Channel Protocol for SCSI.
  * From T10 FCP-3, T10 project 1560-D Rev 4, Sept. 13, 2005.
@@ -45,8 +47,8 @@
  * FCP_CMND IU Payload.
  */
 struct fcp_cmnd {
-	__u8		fc_lun[8];	/* logical unit number */
-	__u8		fc_cmdref;	/* commmand reference number */
+	struct scsi_lun	fc_lun;		/* logical unit number */
+	__u8		fc_cmdref;	/* command reference number */
 	__u8		fc_pri_ta;	/* priority and task attribute */
 	__u8		fc_tm_flags;	/* task management flags */
 	__u8		fc_flags;	/* additional len & flags */
@@ -57,8 +59,8 @@ struct fcp_cmnd {
 #define	FCP_CMND_LEN	32	/* expected length of structure */
 
 struct fcp_cmnd32 {
-	__u8		fc_lun[8];	/* logical unit number */
-	__u8		fc_cmdref;	/* commmand reference number */
+	struct scsi_lun	fc_lun;		/* logical unit number */
+	__u8		fc_cmdref;	/* command reference number */
 	__u8		fc_pri_ta;	/* priority and task attribute */
 	__u8		fc_tm_flags;	/* task management flags */
 	__u8		fc_flags;	/* additional len & flags */
@@ -75,7 +77,7 @@ struct fcp_cmnd32 {
 #define	FCP_PTA_SIMPLE	    0	/* simple task attribute */
 #define	FCP_PTA_HEADQ	    1	/* head of queue task attribute */
 #define	FCP_PTA_ORDERED     2	/* ordered task attribute */
-#define	FCP_PTA_ACA	    4	/* auto. contigent allegiance */
+#define	FCP_PTA_ACA	    4	/* auto. contingent allegiance */
 #define	FCP_PTA_MASK	    7	/* mask for task attribute field */
 #define	FCP_PRI_SHIFT	    3	/* priority field starts in bit 3 */
 #define	FCP_PRI_RESVD_MASK  0x80	/* reserved bits in priority field */

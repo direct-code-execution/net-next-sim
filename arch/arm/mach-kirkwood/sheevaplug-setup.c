@@ -58,6 +58,12 @@ static struct mvsdio_platform_data sheeva_esata_mvsdio_data = {
 
 static struct gpio_led sheevaplug_led_pins[] = {
 	{
+		.name			= "plug:red:misc",
+		.default_trigger	= "none",
+		.gpio			= 46,
+		.active_low		= 1,
+	},
+	{
 		.name			= "plug:green:health",
 		.default_trigger	= "default-on",
 		.gpio			= 49,
@@ -80,6 +86,7 @@ static struct platform_device sheevaplug_leds = {
 
 static unsigned int sheevaplug_mpp_config[] __initdata = {
 	MPP29_GPIO,	/* USB Power Enable */
+	MPP46_GPIO,	/* LED Red */
 	MPP49_GPIO,	/* LED */
 	0
 };
@@ -100,7 +107,7 @@ static void __init sheevaplug_init(void)
 	kirkwood_init();
 
 	/* setup gpio pin select */
-	if (machine_is_sheeva_esata())
+	if (machine_is_esata_sheevaplug())
 		kirkwood_mpp_conf(sheeva_esata_mpp_config);
 	else
 		kirkwood_mpp_conf(sheevaplug_mpp_config);
@@ -116,11 +123,11 @@ static void __init sheevaplug_init(void)
 	kirkwood_ge00_init(&sheevaplug_ge00_data);
 
 	/* honor lower power consumption for plugs with out eSATA */
-	if (machine_is_sheeva_esata())
+	if (machine_is_esata_sheevaplug())
 		kirkwood_sata_init(&sheeva_esata_sata_data);
 
 	/* enable sd wp and sd cd on plugs with esata */
-	if (machine_is_sheeva_esata())
+	if (machine_is_esata_sheevaplug())
 		kirkwood_sdio_init(&sheeva_esata_mvsdio_data);
 	else
 		kirkwood_sdio_init(&sheevaplug_mvsdio_data);
@@ -131,24 +138,24 @@ static void __init sheevaplug_init(void)
 #ifdef CONFIG_MACH_SHEEVAPLUG
 MACHINE_START(SHEEVAPLUG, "Marvell SheevaPlug Reference Board")
 	/* Maintainer: shadi Ammouri <shadi@marvell.com> */
-	.phys_io	= KIRKWOOD_REGS_PHYS_BASE,
-	.io_pg_offst	= ((KIRKWOOD_REGS_VIRT_BASE) >> 18) & 0xfffc,
-	.boot_params	= 0x00000100,
+	.atag_offset	= 0x100,
 	.init_machine	= sheevaplug_init,
 	.map_io		= kirkwood_map_io,
+	.init_early	= kirkwood_init_early,
 	.init_irq	= kirkwood_init_irq,
 	.timer		= &kirkwood_timer,
+	.restart	= kirkwood_restart,
 MACHINE_END
 #endif
 
 #ifdef CONFIG_MACH_ESATA_SHEEVAPLUG
 MACHINE_START(ESATA_SHEEVAPLUG, "Marvell eSATA SheevaPlug Reference Board")
-	.phys_io	= KIRKWOOD_REGS_PHYS_BASE,
-	.io_pg_offst	= ((KIRKWOOD_REGS_VIRT_BASE) >> 18) & 0xfffc,
-	.boot_params	= 0x00000100,
+	.atag_offset	= 0x100,
 	.init_machine	= sheevaplug_init,
 	.map_io		= kirkwood_map_io,
+	.init_early	= kirkwood_init_early,
 	.init_irq	= kirkwood_init_irq,
 	.timer		= &kirkwood_timer,
+	.restart	= kirkwood_restart,
 MACHINE_END
 #endif

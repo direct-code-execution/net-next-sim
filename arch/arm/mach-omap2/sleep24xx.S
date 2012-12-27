@@ -27,7 +27,6 @@
 
 #include <linux/linkage.h>
 #include <asm/assembler.h>
-#include <mach/io.h>
 
 #include <plat/omap24xx.h>
 
@@ -47,6 +46,7 @@
  * Note: This code get's copied to internal SRAM at boot. When the OMAP
  *	 wakes up it continues execution at the point it went to sleep.
  */
+	.align	3
 ENTRY(omap24xx_idle_loop_suspend)
 	stmfd	sp!, {r0, lr}		@ save registers on stack
 	mov	r0, #0			@ clear for mcr setup
@@ -82,6 +82,7 @@ ENTRY(omap24xx_idle_loop_suspend_sz)
  * The DLL load value is not kept in RETENTION or OFF.	It needs to be restored
  * at wake
  */
+	.align	3
 ENTRY(omap24xx_cpu_suspend)
 	stmfd	sp!, {r0 - r12, lr}	@ save registers on stack
 	mov	r3, #0x0		@ clear for mcr call

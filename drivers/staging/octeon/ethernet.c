@@ -31,6 +31,7 @@
 #include <linux/etherdevice.h>
 #include <linux/phy.h>
 #include <linux/slab.h>
+#include <linux/interrupt.h>
 
 #include <net/dst.h>
 
@@ -44,14 +45,14 @@
 #include "ethernet-mdio.h"
 #include "ethernet-util.h"
 
-#include "cvmx-pip.h"
-#include "cvmx-pko.h"
-#include "cvmx-fau.h"
-#include "cvmx-ipd.h"
-#include "cvmx-helper.h"
+#include <asm/octeon/cvmx-pip.h>
+#include <asm/octeon/cvmx-pko.h>
+#include <asm/octeon/cvmx-fau.h>
+#include <asm/octeon/cvmx-ipd.h>
+#include <asm/octeon/cvmx-helper.h>
 
-#include "cvmx-gmxx-defs.h"
-#include "cvmx-smix-defs.h"
+#include <asm/octeon/cvmx-gmxx-defs.h>
+#include <asm/octeon/cvmx-smix-defs.h>
 
 #if defined(CONFIG_CAVIUM_OCTEON_NUM_PACKET_BUFFERS) \
 	&& CONFIG_CAVIUM_OCTEON_NUM_PACKET_BUFFERS
@@ -465,10 +466,7 @@ int cvm_oct_common_init(struct net_device *dev)
 
 	if (cvm_oct_mac_addr_offset >= octeon_bootinfo->mac_addr_count)
 		printk(KERN_DEBUG "%s: Using MAC outside of the assigned range:"
-			" %02x:%02x:%02x:%02x:%02x:%02x\n", dev->name,
-			sa.sa_data[0] & 0xff, sa.sa_data[1] & 0xff,
-			sa.sa_data[2] & 0xff, sa.sa_data[3] & 0xff,
-			sa.sa_data[4] & 0xff, sa.sa_data[5] & 0xff);
+			" %pM\n", dev->name, sa.sa_data);
 	cvm_oct_mac_addr_offset++;
 
 	/*
@@ -515,7 +513,7 @@ static const struct net_device_ops cvm_oct_npi_netdev_ops = {
 	.ndo_init		= cvm_oct_common_init,
 	.ndo_uninit		= cvm_oct_common_uninit,
 	.ndo_start_xmit		= cvm_oct_xmit,
-	.ndo_set_multicast_list	= cvm_oct_common_set_multicast_list,
+	.ndo_set_rx_mode	= cvm_oct_common_set_multicast_list,
 	.ndo_set_mac_address	= cvm_oct_common_set_mac_address,
 	.ndo_do_ioctl		= cvm_oct_ioctl,
 	.ndo_change_mtu		= cvm_oct_common_change_mtu,
@@ -530,7 +528,7 @@ static const struct net_device_ops cvm_oct_xaui_netdev_ops = {
 	.ndo_open		= cvm_oct_xaui_open,
 	.ndo_stop		= cvm_oct_xaui_stop,
 	.ndo_start_xmit		= cvm_oct_xmit,
-	.ndo_set_multicast_list	= cvm_oct_common_set_multicast_list,
+	.ndo_set_rx_mode	= cvm_oct_common_set_multicast_list,
 	.ndo_set_mac_address	= cvm_oct_common_set_mac_address,
 	.ndo_do_ioctl		= cvm_oct_ioctl,
 	.ndo_change_mtu		= cvm_oct_common_change_mtu,
@@ -545,7 +543,7 @@ static const struct net_device_ops cvm_oct_sgmii_netdev_ops = {
 	.ndo_open		= cvm_oct_sgmii_open,
 	.ndo_stop		= cvm_oct_sgmii_stop,
 	.ndo_start_xmit		= cvm_oct_xmit,
-	.ndo_set_multicast_list	= cvm_oct_common_set_multicast_list,
+	.ndo_set_rx_mode	= cvm_oct_common_set_multicast_list,
 	.ndo_set_mac_address	= cvm_oct_common_set_mac_address,
 	.ndo_do_ioctl		= cvm_oct_ioctl,
 	.ndo_change_mtu		= cvm_oct_common_change_mtu,
@@ -558,7 +556,7 @@ static const struct net_device_ops cvm_oct_spi_netdev_ops = {
 	.ndo_init		= cvm_oct_spi_init,
 	.ndo_uninit		= cvm_oct_spi_uninit,
 	.ndo_start_xmit		= cvm_oct_xmit,
-	.ndo_set_multicast_list	= cvm_oct_common_set_multicast_list,
+	.ndo_set_rx_mode	= cvm_oct_common_set_multicast_list,
 	.ndo_set_mac_address	= cvm_oct_common_set_mac_address,
 	.ndo_do_ioctl		= cvm_oct_ioctl,
 	.ndo_change_mtu		= cvm_oct_common_change_mtu,
@@ -573,7 +571,7 @@ static const struct net_device_ops cvm_oct_rgmii_netdev_ops = {
 	.ndo_open		= cvm_oct_rgmii_open,
 	.ndo_stop		= cvm_oct_rgmii_stop,
 	.ndo_start_xmit		= cvm_oct_xmit,
-	.ndo_set_multicast_list	= cvm_oct_common_set_multicast_list,
+	.ndo_set_rx_mode	= cvm_oct_common_set_multicast_list,
 	.ndo_set_mac_address	= cvm_oct_common_set_mac_address,
 	.ndo_do_ioctl		= cvm_oct_ioctl,
 	.ndo_change_mtu		= cvm_oct_common_change_mtu,
@@ -585,7 +583,7 @@ static const struct net_device_ops cvm_oct_rgmii_netdev_ops = {
 static const struct net_device_ops cvm_oct_pow_netdev_ops = {
 	.ndo_init		= cvm_oct_common_init,
 	.ndo_start_xmit		= cvm_oct_xmit_pow,
-	.ndo_set_multicast_list	= cvm_oct_common_set_multicast_list,
+	.ndo_set_rx_mode	= cvm_oct_common_set_multicast_list,
 	.ndo_set_mac_address	= cvm_oct_common_set_mac_address,
 	.ndo_do_ioctl		= cvm_oct_ioctl,
 	.ndo_change_mtu		= cvm_oct_common_change_mtu,
@@ -673,7 +671,7 @@ static int __init cvm_oct_init_module(void)
 
 			if (register_netdev(dev) < 0) {
 				pr_err("Failed to register ethernet device for POW\n");
-				kfree(dev);
+				free_netdev(dev);
 			} else {
 				cvm_oct_device[CVMX_PIP_NUM_INPUT_PORTS] = dev;
 				pr_info("%s: POW send group %d, receive group %d\n",
@@ -759,12 +757,12 @@ static int __init cvm_oct_init_module(void)
 			}
 
 			if (!dev->netdev_ops) {
-				kfree(dev);
+				free_netdev(dev);
 			} else if (register_netdev(dev) < 0) {
 				pr_err("Failed to register ethernet device "
 					 "for interface %d, port %d\n",
 					 interface, priv->port);
-				kfree(dev);
+				free_netdev(dev);
 			} else {
 				cvm_oct_device[priv->port] = dev;
 				fau -=
@@ -818,7 +816,7 @@ static void __exit cvm_oct_cleanup_module(void)
 
 			cvm_oct_tx_shutdown_dev(dev);
 			unregister_netdev(dev);
-			kfree(dev);
+			free_netdev(dev);
 			cvm_oct_device[port] = NULL;
 		}
 	}

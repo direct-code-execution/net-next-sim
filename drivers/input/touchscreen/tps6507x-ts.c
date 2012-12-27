@@ -1,6 +1,4 @@
 /*
- * drivers/input/touchscreen/tps6507x_ts.c
- *
  * Touchscreen driver for the tps6507x chip.
  *
  * Copyright (c) 2009 RidgeRun (todd.fischer@ridgerun.com)
@@ -43,7 +41,6 @@ struct tps6507x_ts {
 	struct input_dev	*input_dev;
 	struct device		*dev;
 	char			phys[32];
-	struct workqueue_struct *wq;
 	struct delayed_work	work;
 	unsigned		polling;	/* polling is active */
 	struct ts_event		tc;
@@ -220,8 +217,8 @@ done:
 	poll = 1;
 
 	if (poll) {
-		schd = queue_delayed_work(tsc->wq, &tsc->work,
-					  msecs_to_jiffies(tsc->poll_period));
+		schd = schedule_delayed_work(&tsc->work,
+					msecs_to_jiffies(tsc->poll_period));
 		if (schd)
 			tsc->polling = 1;
 		else {
@@ -303,7 +300,6 @@ static int tps6507x_ts_probe(struct platform_device *pdev)
 	tsc->input_dev = input_dev;
 
 	INIT_DELAYED_WORK(&tsc->work, tps6507x_ts_handler);
-	tsc->wq = create_workqueue("TPS6507x Touchscreen");
 
 	if (init_data) {
 		tsc->poll_period = init_data->poll_period;
@@ -325,8 +321,8 @@ static int tps6507x_ts_probe(struct platform_device *pdev)
 	if (error)
 		goto err2;
 
-	schd = queue_delayed_work(tsc->wq, &tsc->work,
-				  msecs_to_jiffies(tsc->poll_period));
+	schd = schedule_delayed_work(&tsc->work,
+				     msecs_to_jiffies(tsc->poll_period));
 
 	if (schd)
 		tsc->polling = 1;
@@ -335,12 +331,12 @@ static int tps6507x_ts_probe(struct platform_device *pdev)
 		dev_err(tsc->dev, "schedule failed");
 		goto err2;
 	 }
+	platform_set_drvdata(pdev, tps6507x_dev);
 
 	return 0;
 
 err2:
 	cancel_delayed_work_sync(&tsc->work);
-	destroy_workqueue(tsc->wq);
 	input_free_device(input_dev);
 err1:
 	kfree(tsc);
@@ -356,9 +352,8 @@ static int __devexit tps6507x_ts_remove(struct platform_device *pdev)
 	struct input_dev *input_dev = tsc->input_dev;
 
 	cancel_delayed_work_sync(&tsc->work);
-	destroy_workqueue(tsc->wq);
 
-	input_free_device(input_dev);
+	input_unregister_device(input_dev);
 
 	tps6507x_dev->ts = NULL;
 	kfree(tsc);
@@ -374,20 +369,9 @@ static struct platform_driver tps6507x_ts_driver = {
 	.probe = tps6507x_ts_probe,
 	.remove = __devexit_p(tps6507x_ts_remove),
 };
-
-static int __init tps6507x_ts_init(void)
-{
-	return platform_driver_register(&tps6507x_ts_driver);
-}
-module_init(tps6507x_ts_init);
-
-static void __exit tps6507x_ts_exit(void)
-{
-	platform_driver_unregister(&tps6507x_ts_driver);
-}
-module_exit(tps6507x_ts_exit);
+module_platform_driver(tps6507x_ts_driver);
 
 MODULE_AUTHOR("Todd Fischer <todd.fischer@ridgerun.com>");
 MODULE_DESCRIPTION("TPS6507x - TouchScreen driver");
 MODULE_LICENSE("GPL v2");
-MODULE_ALIAS("platform:tps6507x-tsc");
+MODULE_ALIAS("platform:tps6507x-ts");

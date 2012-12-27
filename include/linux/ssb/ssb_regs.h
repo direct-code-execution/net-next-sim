@@ -85,6 +85,8 @@
 #define  SSB_IMSTATE_AP_RSV	0x00000030 /* Reserved */
 #define  SSB_IMSTATE_IBE	0x00020000 /* In Band Error */
 #define  SSB_IMSTATE_TO		0x00040000 /* Timeout */
+#define  SSB_IMSTATE_BUSY	0x01800000 /* Busy (Backplane rev >= 2.3 only) */
+#define  SSB_IMSTATE_REJECT	0x02000000 /* Reject (Backplane rev >= 2.3 only) */
 #define SSB_INTVEC		0x0F94     /* SB Interrupt Mask */
 #define  SSB_INTVEC_PCI		0x00000001 /* Enable interrupts for PCI */
 #define  SSB_INTVEC_ENET0	0x00000002 /* Enable interrupts for enet 0 */
@@ -95,7 +97,7 @@
 #define  SSB_INTVEC_ENET1	0x00000040 /* Enable interrupts for enet 1 */
 #define SSB_TMSLOW		0x0F98     /* SB Target State Low */
 #define  SSB_TMSLOW_RESET	0x00000001 /* Reset */
-#define  SSB_TMSLOW_REJECT_22	0x00000002 /* Reject (Backplane rev 2.2) */
+#define  SSB_TMSLOW_REJECT	0x00000002 /* Reject (Standard Backplane) */
 #define  SSB_TMSLOW_REJECT_23	0x00000004 /* Reject (Backplane rev 2.3) */
 #define  SSB_TMSLOW_CLOCK	0x00010000 /* Clock Enable */
 #define  SSB_TMSLOW_FGC		0x00020000 /* Force Gated Clocks On */
@@ -267,6 +269,8 @@
 /* SPROM Revision 4 */
 #define SSB_SPROM4_BFLLO		0x0044	/* Boardflags (low 16 bits) */
 #define SSB_SPROM4_BFLHI		0x0046  /* Board Flags Hi */
+#define SSB_SPROM4_BFL2LO		0x0048	/* Board flags 2 (low 16 bits) */
+#define SSB_SPROM4_BFL2HI		0x004A	/* Board flags 2 Hi */
 #define SSB_SPROM4_IL0MAC		0x004C	/* 6 byte MAC address for a/b/g/n */
 #define SSB_SPROM4_CCODE		0x0052	/* Country Code (2 bytes) */
 #define SSB_SPROM4_GPIOA		0x0056	/* Gen. Purpose IO # 0 and 1 */
@@ -298,6 +302,46 @@
 #define  SSB_SPROM4_AGAIN2_SHIFT	0
 #define  SSB_SPROM4_AGAIN3		0xFF00	/* Antenna 3 */
 #define  SSB_SPROM4_AGAIN3_SHIFT	8
+#define SSB_SPROM4_TXPID2G01		0x0062 	/* TX Power Index 2GHz */
+#define  SSB_SPROM4_TXPID2G0		0x00FF
+#define  SSB_SPROM4_TXPID2G0_SHIFT	0
+#define  SSB_SPROM4_TXPID2G1		0xFF00
+#define  SSB_SPROM4_TXPID2G1_SHIFT	8
+#define SSB_SPROM4_TXPID2G23		0x0064 	/* TX Power Index 2GHz */
+#define  SSB_SPROM4_TXPID2G2		0x00FF
+#define  SSB_SPROM4_TXPID2G2_SHIFT	0
+#define  SSB_SPROM4_TXPID2G3		0xFF00
+#define  SSB_SPROM4_TXPID2G3_SHIFT	8
+#define SSB_SPROM4_TXPID5G01		0x0066 	/* TX Power Index 5GHz middle subband */
+#define  SSB_SPROM4_TXPID5G0		0x00FF
+#define  SSB_SPROM4_TXPID5G0_SHIFT	0
+#define  SSB_SPROM4_TXPID5G1		0xFF00
+#define  SSB_SPROM4_TXPID5G1_SHIFT	8
+#define SSB_SPROM4_TXPID5G23		0x0068 	/* TX Power Index 5GHz middle subband */
+#define  SSB_SPROM4_TXPID5G2		0x00FF
+#define  SSB_SPROM4_TXPID5G2_SHIFT	0
+#define  SSB_SPROM4_TXPID5G3		0xFF00
+#define  SSB_SPROM4_TXPID5G3_SHIFT	8
+#define SSB_SPROM4_TXPID5GL01		0x006A 	/* TX Power Index 5GHz low subband */
+#define  SSB_SPROM4_TXPID5GL0		0x00FF
+#define  SSB_SPROM4_TXPID5GL0_SHIFT	0
+#define  SSB_SPROM4_TXPID5GL1		0xFF00
+#define  SSB_SPROM4_TXPID5GL1_SHIFT	8
+#define SSB_SPROM4_TXPID5GL23		0x006C 	/* TX Power Index 5GHz low subband */
+#define  SSB_SPROM4_TXPID5GL2		0x00FF
+#define  SSB_SPROM4_TXPID5GL2_SHIFT	0
+#define  SSB_SPROM4_TXPID5GL3		0xFF00
+#define  SSB_SPROM4_TXPID5GL3_SHIFT	8
+#define SSB_SPROM4_TXPID5GH01		0x006E 	/* TX Power Index 5GHz high subband */
+#define  SSB_SPROM4_TXPID5GH0		0x00FF
+#define  SSB_SPROM4_TXPID5GH0_SHIFT	0
+#define  SSB_SPROM4_TXPID5GH1		0xFF00
+#define  SSB_SPROM4_TXPID5GH1_SHIFT	8
+#define SSB_SPROM4_TXPID5GH23		0x0070 	/* TX Power Index 5GHz high subband */
+#define  SSB_SPROM4_TXPID5GH2		0x00FF
+#define  SSB_SPROM4_TXPID5GH2_SHIFT	0
+#define  SSB_SPROM4_TXPID5GH3		0xFF00
+#define  SSB_SPROM4_TXPID5GH3_SHIFT	8
 #define SSB_SPROM4_MAXP_BG		0x0080  /* Max Power BG in path 1 */
 #define  SSB_SPROM4_MAXP_BG_MASK	0x00FF  /* Mask for Max Power BG */
 #define  SSB_SPROM4_ITSSI_BG		0xFF00	/* Mask for path 1 itssi_bg */
@@ -317,6 +361,8 @@
 #define SSB_SPROM5_CCODE		0x0044	/* Country Code (2 bytes) */
 #define SSB_SPROM5_BFLLO		0x004A	/* Boardflags (low 16 bits) */
 #define SSB_SPROM5_BFLHI		0x004C  /* Board Flags Hi */
+#define SSB_SPROM5_BFL2LO		0x004E	/* Board flags 2 (low 16 bits) */
+#define SSB_SPROM5_BFL2HI		0x0050	/* Board flags 2 Hi */
 #define SSB_SPROM5_IL0MAC		0x0052	/* 6 byte MAC address for a/b/g/n */
 #define SSB_SPROM5_GPIOA		0x0076	/* Gen. Purpose IO # 0 and 1 */
 #define  SSB_SPROM5_GPIOA_P0		0x00FF	/* Pin 0 */
@@ -386,6 +432,56 @@
 #define  SSB_SPROM8_RXPO2G		0x00FF	/* 2GHz RX power offset */
 #define  SSB_SPROM8_RXPO5G		0xFF00	/* 5GHz RX power offset */
 #define  SSB_SPROM8_RXPO5G_SHIFT	8
+#define SSB_SPROM8_FEM2G		0x00AE
+#define SSB_SPROM8_FEM5G		0x00B0
+#define  SSB_SROM8_FEM_TSSIPOS		0x0001
+#define  SSB_SROM8_FEM_TSSIPOS_SHIFT	0
+#define  SSB_SROM8_FEM_EXTPA_GAIN	0x0006
+#define  SSB_SROM8_FEM_EXTPA_GAIN_SHIFT	1
+#define  SSB_SROM8_FEM_PDET_RANGE	0x00F8
+#define  SSB_SROM8_FEM_PDET_RANGE_SHIFT	3
+#define  SSB_SROM8_FEM_TR_ISO		0x0700
+#define  SSB_SROM8_FEM_TR_ISO_SHIFT	8
+#define  SSB_SROM8_FEM_ANTSWLUT		0xF800
+#define  SSB_SROM8_FEM_ANTSWLUT_SHIFT	11
+#define SSB_SPROM8_THERMAL		0x00B2
+#define SSB_SPROM8_MPWR_RAWTS		0x00B4
+#define SSB_SPROM8_TS_SLP_OPT_CORRX	0x00B6
+#define SSB_SPROM8_FOC_HWIQ_IQSWP	0x00B8
+#define SSB_SPROM8_PHYCAL_TEMPDELTA	0x00BA
+
+/* There are 4 blocks with power info sharing the same layout */
+#define SSB_SROM8_PWR_INFO_CORE0	0x00C0
+#define SSB_SROM8_PWR_INFO_CORE1	0x00E0
+#define SSB_SROM8_PWR_INFO_CORE2	0x0100
+#define SSB_SROM8_PWR_INFO_CORE3	0x0120
+
+#define SSB_SROM8_2G_MAXP_ITSSI		0x00
+#define  SSB_SPROM8_2G_MAXP		0x00FF
+#define  SSB_SPROM8_2G_ITSSI		0xFF00
+#define  SSB_SPROM8_2G_ITSSI_SHIFT	8
+#define SSB_SROM8_2G_PA_0		0x02	/* 2GHz power amp settings */
+#define SSB_SROM8_2G_PA_1		0x04
+#define SSB_SROM8_2G_PA_2		0x06
+#define SSB_SROM8_5G_MAXP_ITSSI		0x08	/* 5GHz ITSSI and 5.3GHz Max Power */
+#define  SSB_SPROM8_5G_MAXP		0x00FF
+#define  SSB_SPROM8_5G_ITSSI		0xFF00
+#define  SSB_SPROM8_5G_ITSSI_SHIFT	8
+#define SSB_SPROM8_5GHL_MAXP		0x0A	/* 5.2GHz and 5.8GHz Max Power */
+#define  SSB_SPROM8_5GH_MAXP		0x00FF
+#define  SSB_SPROM8_5GL_MAXP		0xFF00
+#define  SSB_SPROM8_5GL_MAXP_SHIFT	8
+#define SSB_SROM8_5G_PA_0		0x0C	/* 5.3GHz power amp settings */
+#define SSB_SROM8_5G_PA_1		0x0E
+#define SSB_SROM8_5G_PA_2		0x10
+#define SSB_SROM8_5GL_PA_0		0x12	/* 5.2GHz power amp settings */
+#define SSB_SROM8_5GL_PA_1		0x14
+#define SSB_SROM8_5GL_PA_2		0x16
+#define SSB_SROM8_5GH_PA_0		0x18	/* 5.8GHz power amp settings */
+#define SSB_SROM8_5GH_PA_1		0x1A
+#define SSB_SROM8_5GH_PA_2		0x1C
+
+/* TODO: Make it deprecated */
 #define SSB_SPROM8_MAXP_BG		0x00C0  /* Max Power 2GHz in path 1 */
 #define  SSB_SPROM8_MAXP_BG_MASK	0x00FF  /* Mask for Max Power 2GHz */
 #define  SSB_SPROM8_ITSSI_BG		0xFF00	/* Mask for path 1 itssi_bg */
@@ -410,11 +506,52 @@
 #define SSB_SPROM8_PA1HIB0		0x00D8	/* 5.8GHz power amp settings */
 #define SSB_SPROM8_PA1HIB1		0x00DA
 #define SSB_SPROM8_PA1HIB2		0x00DC
+
 #define SSB_SPROM8_CCK2GPO		0x0140	/* CCK power offset */
 #define SSB_SPROM8_OFDM2GPO		0x0142	/* 2.4GHz OFDM power offset */
 #define SSB_SPROM8_OFDM5GPO		0x0146	/* 5.3GHz OFDM power offset */
 #define SSB_SPROM8_OFDM5GLPO		0x014A	/* 5.2GHz OFDM power offset */
 #define SSB_SPROM8_OFDM5GHPO		0x014E	/* 5.8GHz OFDM power offset */
+
+/* Values for boardflags_lo read from SPROM */
+#define SSB_BFL_BTCOEXIST		0x0001	/* implements Bluetooth coexistance */
+#define SSB_BFL_PACTRL			0x0002	/* GPIO 9 controlling the PA */
+#define SSB_BFL_AIRLINEMODE		0x0004	/* implements GPIO 13 radio disable indication */
+#define SSB_BFL_RSSI			0x0008	/* software calculates nrssi slope. */
+#define SSB_BFL_ENETSPI			0x0010	/* has ephy roboswitch spi */
+#define SSB_BFL_XTAL_NOSLOW		0x0020	/* no slow clock available */
+#define SSB_BFL_CCKHIPWR		0x0040	/* can do high power CCK transmission */
+#define SSB_BFL_ENETADM			0x0080	/* has ADMtek switch */
+#define SSB_BFL_ENETVLAN		0x0100	/* can do vlan */
+#define SSB_BFL_AFTERBURNER		0x0200	/* supports Afterburner mode */
+#define SSB_BFL_NOPCI			0x0400	/* board leaves PCI floating */
+#define SSB_BFL_FEM			0x0800	/* supports the Front End Module */
+#define SSB_BFL_EXTLNA			0x1000	/* has an external LNA */
+#define SSB_BFL_HGPA			0x2000	/* had high gain PA */
+#define SSB_BFL_BTCMOD			0x4000	/* BFL_BTCOEXIST is given in alternate GPIOs */
+#define SSB_BFL_ALTIQ			0x8000	/* alternate I/Q settings */
+
+/* Values for boardflags_hi read from SPROM */
+#define SSB_BFH_NOPA			0x0001	/* has no PA */
+#define SSB_BFH_RSSIINV			0x0002	/* RSSI uses positive slope (not TSSI) */
+#define SSB_BFH_PAREF			0x0004	/* uses the PARef LDO */
+#define SSB_BFH_3TSWITCH		0x0008	/* uses a triple throw switch shared with bluetooth */
+#define SSB_BFH_PHASESHIFT		0x0010	/* can support phase shifter */
+#define SSB_BFH_BUCKBOOST		0x0020	/* has buck/booster */
+#define SSB_BFH_FEM_BT			0x0040	/* has FEM and switch to share antenna with bluetooth */
+
+/* Values for boardflags2_lo read from SPROM */
+#define SSB_BFL2_RXBB_INT_REG_DIS	0x0001	/* external RX BB regulator present */
+#define SSB_BFL2_APLL_WAR		0x0002	/* alternative A-band PLL settings implemented */
+#define SSB_BFL2_TXPWRCTRL_EN 		0x0004	/* permits enabling TX Power Control */
+#define SSB_BFL2_2X4_DIV		0x0008	/* 2x4 diversity switch */
+#define SSB_BFL2_5G_PWRGAIN		0x0010	/* supports 5G band power gain */
+#define SSB_BFL2_PCIEWAR_OVR		0x0020	/* overrides ASPM and Clkreq settings */
+#define SSB_BFL2_CAESERS_BRD		0x0040	/* is Caesers board (unused) */
+#define SSB_BFL2_BTC3WIRE		0x0080	/* used 3-wire bluetooth coexist */
+#define SSB_BFL2_SKWRKFEM_BRD		0x0100	/* 4321mcm93 uses Skyworks FEM */
+#define SSB_BFL2_SPUR_WAR		0x0200	/* has a workaround for clock-harmonic spurs */
+#define SSB_BFL2_GPLL_WAR		0x0400	/* altenative G-band PLL settings implemented */
 
 /* Values for SSB_SPROM1_BINF_CCODE */
 enum {

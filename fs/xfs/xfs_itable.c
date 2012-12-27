@@ -62,7 +62,6 @@ xfs_bulkstat_one_int(
 {
 	struct xfs_icdinode	*dic;		/* dinode core info pointer */
 	struct xfs_inode	*ip;		/* incore inode pointer */
-	struct inode		*inode;
 	struct xfs_bstat	*buf;		/* return buffer */
 	int			error = 0;	/* error value */
 
@@ -76,7 +75,8 @@ xfs_bulkstat_one_int(
 		return XFS_ERROR(ENOMEM);
 
 	error = xfs_iget(mp, NULL, ino,
-			 XFS_IGET_UNTRUSTED, XFS_ILOCK_SHARED, &ip);
+			 (XFS_IGET_DONTCACHE | XFS_IGET_UNTRUSTED),
+			 XFS_ILOCK_SHARED, &ip);
 	if (error) {
 		*stat = BULKSTAT_RV_NOTHING;
 		goto out_free;
@@ -86,31 +86,24 @@ xfs_bulkstat_one_int(
 	ASSERT(ip->i_imap.im_blkno != 0);
 
 	dic = &ip->i_d;
-	inode = VFS_I(ip);
 
 	/* xfs_iget returns the following without needing
 	 * further change.
 	 */
 	buf->bs_nlink = dic->di_nlink;
-	buf->bs_projid = dic->di_projid;
+	buf->bs_projid_lo = dic->di_projid_lo;
+	buf->bs_projid_hi = dic->di_projid_hi;
 	buf->bs_ino = ino;
 	buf->bs_mode = dic->di_mode;
 	buf->bs_uid = dic->di_uid;
 	buf->bs_gid = dic->di_gid;
 	buf->bs_size = dic->di_size;
-
-	/*
-	 * We need to read the timestamps from the Linux inode because
-	 * the VFS keeps writing directly into the inode structure instead
-	 * of telling us about the updates.
-	 */
-	buf->bs_atime.tv_sec = inode->i_atime.tv_sec;
-	buf->bs_atime.tv_nsec = inode->i_atime.tv_nsec;
-	buf->bs_mtime.tv_sec = inode->i_mtime.tv_sec;
-	buf->bs_mtime.tv_nsec = inode->i_mtime.tv_nsec;
-	buf->bs_ctime.tv_sec = inode->i_ctime.tv_sec;
-	buf->bs_ctime.tv_nsec = inode->i_ctime.tv_nsec;
-
+	buf->bs_atime.tv_sec = dic->di_atime.t_sec;
+	buf->bs_atime.tv_nsec = dic->di_atime.t_nsec;
+	buf->bs_mtime.tv_sec = dic->di_mtime.t_sec;
+	buf->bs_mtime.tv_nsec = dic->di_mtime.t_nsec;
+	buf->bs_ctime.tv_sec = dic->di_ctime.t_sec;
+	buf->bs_ctime.tv_nsec = dic->di_ctime.t_nsec;
 	buf->bs_xflags = xfs_ip2xflags(ip);
 	buf->bs_extsize = dic->di_extsize << mp->m_sb.sb_blocklog;
 	buf->bs_extents = dic->di_nextents;
@@ -203,7 +196,6 @@ xfs_bulkstat(
 	xfs_agi_t		*agi;	/* agi header data */
 	xfs_agino_t		agino;	/* inode # in allocation group */
 	xfs_agnumber_t		agno;	/* allocation group number */
-	xfs_daddr_t		bno;	/* inode cluster start daddr */
 	int			chunkidx; /* current index into inode chunk */
 	int			clustidx; /* current index into inode cluster */
 	xfs_btree_cur_t		*cur;	/* btree cursor for ialloc btree */
@@ -462,7 +454,6 @@ xfs_bulkstat(
 						 mp->m_sb.sb_inopblog);
 				}
 				ino = XFS_AGINO_TO_INO(mp, agno, agino);
-				bno = XFS_AGB_TO_DADDR(mp, agno, agbno);
 				/*
 				 * Skip if this inode is free.
 				 */

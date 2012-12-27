@@ -10,56 +10,74 @@
  */
 
 #include <linux/platform_device.h>
+#include <linux/module.h>
 #include <sound/sh_fsi.h>
-#include <../sound/soc/codecs/ak4642.h>
 
-static int fsi_ak4642_dai_init(struct snd_soc_codec *codec)
+struct fsi_ak4642_data {
+	const char *name;
+	const char *card;
+	const char *cpu_dai;
+	const char *codec;
+	const char *platform;
+	int id;
+};
+
+static int fsi_ak4642_dai_init(struct snd_soc_pcm_runtime *rtd)
 {
+	struct snd_soc_dai *codec = rtd->codec_dai;
+	struct snd_soc_dai *cpu = rtd->cpu_dai;
 	int ret;
 
-	ret = snd_soc_dai_set_fmt(&ak4642_dai, SND_SOC_DAIFMT_CBM_CFM);
+	ret = snd_soc_dai_set_fmt(codec, SND_SOC_DAIFMT_LEFT_J |
+					 SND_SOC_DAIFMT_CBM_CFM);
 	if (ret < 0)
 		return ret;
 
-	ret = snd_soc_dai_set_sysclk(&ak4642_dai, 0, 11289600, 0);
+	ret = snd_soc_dai_set_sysclk(codec, 0, 11289600, 0);
+	if (ret < 0)
+		return ret;
+
+	ret = snd_soc_dai_set_fmt(cpu, SND_SOC_DAIFMT_LEFT_J |
+				       SND_SOC_DAIFMT_CBS_CFS);
 
 	return ret;
 }
 
 static struct snd_soc_dai_link fsi_dai_link = {
-	.name		= "AK4642",
-	.stream_name	= "AK4642",
-	.cpu_dai	= &fsi_soc_dai[FSI_PORT_A],
-	.codec_dai	= &ak4642_dai,
+	.codec_dai_name	= "ak4642-hifi",
 	.init		= fsi_ak4642_dai_init,
-	.ops		= NULL,
 };
 
 static struct snd_soc_card fsi_soc_card  = {
-	.name		= "FSI",
-	.platform	= &fsi_soc_platform,
+	.owner		= THIS_MODULE,
 	.dai_link	= &fsi_dai_link,
 	.num_links	= 1,
 };
 
-static struct snd_soc_device fsi_snd_devdata = {
-	.card		= &fsi_soc_card,
-	.codec_dev	= &soc_codec_dev_ak4642,
-};
-
 static struct platform_device *fsi_snd_device;
 
-static int __init fsi_ak4642_init(void)
+static int fsi_ak4642_probe(struct platform_device *pdev)
 {
 	int ret = -ENOMEM;
+	struct fsi_ak4642_info *pinfo = pdev->dev.platform_data;
 
-	fsi_snd_device = platform_device_alloc("soc-audio", FSI_PORT_A);
+	if (!pinfo) {
+		dev_err(&pdev->dev, "no info for fsi ak4642\n");
+		goto out;
+	}
+
+	fsi_snd_device = platform_device_alloc("soc-audio", pinfo->id);
 	if (!fsi_snd_device)
 		goto out;
 
-	platform_set_drvdata(fsi_snd_device,
-			     &fsi_snd_devdata);
-	fsi_snd_devdata.dev = &fsi_snd_device->dev;
+	fsi_dai_link.name		= pinfo->name;
+	fsi_dai_link.stream_name	= pinfo->name;
+	fsi_dai_link.cpu_dai_name	= pinfo->cpu_dai;
+	fsi_dai_link.platform_name	= pinfo->platform;
+	fsi_dai_link.codec_name		= pinfo->codec;
+	fsi_soc_card.name		= pinfo->card;
+
+	platform_set_drvdata(fsi_snd_device, &fsi_soc_card);
 	ret = platform_device_add(fsi_snd_device);
 
 	if (ret)
@@ -69,13 +87,21 @@ out:
 	return ret;
 }
 
-static void __exit fsi_ak4642_exit(void)
+static int fsi_ak4642_remove(struct platform_device *pdev)
 {
 	platform_device_unregister(fsi_snd_device);
+	return 0;
 }
 
-module_init(fsi_ak4642_init);
-module_exit(fsi_ak4642_exit);
+static struct platform_driver fsi_ak4642 = {
+	.driver = {
+		.name	= "fsi-ak4642-audio",
+	},
+	.probe		= fsi_ak4642_probe,
+	.remove		= fsi_ak4642_remove,
+};
+
+module_platform_driver(fsi_ak4642);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Generic SH4 FSI-AK4642 sound card");

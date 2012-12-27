@@ -17,6 +17,7 @@
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
+#include <linux/export.h>
 #include <linux/delay.h>
 #include <linux/irq.h>
 #include <linux/console.h>
@@ -42,7 +43,6 @@
 #include "interrupt.h"
 #include "pervasive.h"
 #include "ras.h"
-#include "io-workarounds.h"
 
 static void qpace_show_cpuinfo(struct seq_file *m)
 {
@@ -61,7 +61,7 @@ static void qpace_progress(char *s, unsigned short hex)
 	printk("*** %04x : %s\n", hex, s ? s : "");
 }
 
-static const struct of_device_id qpace_bus_ids[] __initdata = {
+static const struct of_device_id qpace_bus_ids[] __initconst = {
 	{ .type = "soc", },
 	{ .compatible = "soc", },
 	{ .type = "spider", },
@@ -145,9 +145,4 @@ define_machine(qpace) {
 	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= qpace_progress,
 	.init_IRQ		= iic_init_IRQ,
-#ifdef CONFIG_KEXEC
-	.machine_kexec		= default_machine_kexec,
-	.machine_kexec_prepare	= default_machine_kexec_prepare,
-	.machine_crash_shutdown	= default_machine_crash_shutdown,
-#endif
 };

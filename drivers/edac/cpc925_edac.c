@@ -30,7 +30,7 @@
 #include "edac_core.h"
 #include "edac_module.h"
 
-#define CPC925_EDAC_REVISION	" Ver: 1.0.0 " __DATE__
+#define CPC925_EDAC_REVISION	" Ver: 1.0.0"
 #define CPC925_EDAC_MOD_STR	"cpc925_edac"
 
 #define cpc925_printk(level, fmt, arg...) \
@@ -90,6 +90,7 @@ enum apimask_bits {
 	ECC_MASK_ENABLE = (APIMASK_ECC_UE_H | APIMASK_ECC_CE_H |
 			   APIMASK_ECC_UE_L | APIMASK_ECC_CE_L),
 };
+#define APIMASK_ADI(n)		CPC925_BIT(((n)+1))
 
 /************************************************************
  *	Processor Interface Exception Register (APIEXCP)
@@ -581,16 +582,73 @@ static void cpc925_mc_check(struct mem_ctl_info *mci)
 }
 
 /******************** CPU err device********************************/
+static u32 cpc925_cpu_mask_disabled(void)
+{
+	struct device_node *cpus;
+	struct device_node *cpunode = NULL;
+	static u32 mask = 0;
+
+	/* use cached value if available */
+	if (mask != 0)
+		return mask;
+
+	mask = APIMASK_ADI0 | APIMASK_ADI1;
+
+	cpus = of_find_node_by_path("/cpus");
+	if (cpus == NULL) {
+		cpc925_printk(KERN_DEBUG, "No /cpus node !\n");
+		return 0;
+	}
+
+	while ((cpunode = of_get_next_child(cpus, cpunode)) != NULL) {
+		const u32 *reg = of_get_property(cpunode, "reg", NULL);
+
+		if (strcmp(cpunode->type, "cpu")) {
+			cpc925_printk(KERN_ERR, "Not a cpu node in /cpus: %s\n", cpunode->name);
+			continue;
+		}
+
+		if (reg == NULL || *reg > 2) {
+			cpc925_printk(KERN_ERR, "Bad reg value at %s\n", cpunode->full_name);
+			continue;
+		}
+
+		mask &= ~APIMASK_ADI(*reg);
+	}
+
+	if (mask != (APIMASK_ADI0 | APIMASK_ADI1)) {
+		/* We assume that each CPU sits on it's own PI and that
+		 * for present CPUs the reg property equals to the PI
+		 * interface id */
+		cpc925_printk(KERN_WARNING,
+				"Assuming PI id is equal to CPU MPIC id!\n");
+	}
+
+	of_node_put(cpunode);
+	of_node_put(cpus);
+
+	return mask;
+}
+
 /* Enable CPU Errors detection */
 static void cpc925_cpu_init(struct cpc925_dev_info *dev_info)
 {
 	u32 apimask;
+	u32 cpumask;
 
 	apimask = __raw_readl(dev_info->vbase + REG_APIMASK_OFFSET);
-	if ((apimask & CPU_MASK_ENABLE) == 0) {
-		apimask |= CPU_MASK_ENABLE;
-		__raw_writel(apimask, dev_info->vbase + REG_APIMASK_OFFSET);
+
+	cpumask = cpc925_cpu_mask_disabled();
+	if (apimask & cpumask) {
+		cpc925_printk(KERN_WARNING, "CPU(s) not present, "
+				"but enabled in APIMASK, disabling\n");
+		apimask &= ~cpumask;
 	}
+
+	if ((apimask & CPU_MASK_ENABLE) == 0)
+		apimask |= CPU_MASK_ENABLE;
+
+	__raw_writel(apimask, dev_info->vbase + REG_APIMASK_OFFSET);
 }
 
 /* Disable CPU Errors detection */
@@ -620,6 +678,9 @@ static void cpc925_cpu_check(struct edac_device_ctl_info *edac_dev)
 	/* APIEXCP is cleared when read */
 	apiexcp = __raw_readl(dev_info->vbase + REG_APIEXCP_OFFSET);
 	if ((apiexcp & CPU_EXCP_DETECTED) == 0)
+		return;
+
+	if ((apiexcp & ~cpc925_cpu_mask_disabled()) == 0)
 		return;
 
 	apimask = __raw_readl(dev_info->vbase + REG_APIMASK_OFFSET);
@@ -817,10 +878,11 @@ static void cpc925_del_edac_devices(void)
 	}
 }
 
-/* Convert current back-ground scrub rate into byte/sec bandwith */
-static int cpc925_get_sdram_scrub_rate(struct mem_ctl_info *mci, u32 *bw)
+/* Convert current back-ground scrub rate into byte/sec bandwidth */
+static int cpc925_get_sdram_scrub_rate(struct mem_ctl_info *mci)
 {
 	struct cpc925_mc_pdata *pdata = mci->pvt_info;
+	int bw;
 	u32 mscr;
 	u8 si;
 
@@ -832,11 +894,11 @@ static int cpc925_get_sdram_scrub_rate(struct mem_ctl_info *mci, u32 *bw)
 	if (((mscr & MSCR_SCRUB_MOD_MASK) != MSCR_BACKGR_SCRUB) ||
 	    (si == 0)) {
 		cpc925_mc_printk(mci, KERN_INFO, "Scrub mode not enabled\n");
-		*bw = 0;
+		bw = 0;
 	} else
-		*bw = CPC925_SCRUB_BLOCK_SIZE * 0xFA67 / si;
+		bw = CPC925_SCRUB_BLOCK_SIZE * 0xFA67 / si;
 
-	return 0;
+	return bw;
 }
 
 /* Return 0 for single channel; 1 for dual channel */

@@ -23,6 +23,7 @@
 #define _CIFSPDU_H
 
 #include <net/sock.h>
+#include <asm/unaligned.h>
 #include "smbfsctl.h"
 
 #ifdef CONFIG_CIFS_WEAK_PW_HASH
@@ -50,6 +51,7 @@
 #define SMB_COM_SETATTR               0x09 /* trivial response */
 #define SMB_COM_LOCKING_ANDX          0x24 /* trivial response */
 #define SMB_COM_COPY                  0x29 /* trivial rsp, fail filename ignrd*/
+#define SMB_COM_ECHO                  0x2B /* echo request */
 #define SMB_COM_OPEN_ANDX             0x2D /* Legacy open for old servers */
 #define SMB_COM_READ_ANDX             0x2E
 #define SMB_COM_WRITE_ANDX            0x2F
@@ -131,9 +133,20 @@
 #define CIFS_CRYPTO_KEY_SIZE (8)
 
 /*
+ * Size of the ntlm client response
+ */
+#define CIFS_AUTH_RESP_SIZE (24)
+
+/*
  * Size of the session key (crypto key encrypted with the password
  */
-#define CIFS_SESS_KEY_SIZE (24)
+#define CIFS_SESS_KEY_SIZE (16)
+
+#define CIFS_CLIENT_CHALLENGE_SIZE (8)
+#define CIFS_SERVER_CHALLENGE_SIZE (8)
+#define CIFS_HMAC_MD5_HASH_SIZE (16)
+#define CIFS_CPHTXT_SIZE (16)
+#define CIFS_NTHASH_SIZE (16)
 
 /*
  * Maximum user name length
@@ -384,9 +397,9 @@
 #define GETU32(var)  (*((__u32 *)var))	/* BB check for endian issues */
 
 struct smb_hdr {
-	__u32 smb_buf_length;	/* big endian on wire *//* BB length is only two
-		or three bytes - with one or two byte type preceding it that are
-		zero - we could mask the type byte off just in case BB */
+	__be32 smb_buf_length;	/* BB length is only two (rarely three) bytes,
+		with one or two byte "type" preceding it that will be
+		zero - we could mask the type byte off */
 	__u8 Protocol[4];
 	__u8 Command;
 	union {
@@ -414,11 +427,34 @@ struct smb_hdr {
 	__u16 Mid;
 	__u8 WordCount;
 } __attribute__((packed));
-/* given a pointer to an smb_hdr retrieve the value of byte count */
-#define BCC(smb_var) (*(__u16 *)((char *)(smb_var) + sizeof(struct smb_hdr) + (2 * (smb_var)->WordCount)))
-#define BCC_LE(smb_var) (*(__le16 *)((char *)(smb_var) + sizeof(struct smb_hdr) + (2 * (smb_var)->WordCount)))
+
+/* given a pointer to an smb_hdr, retrieve a void pointer to the ByteCount */
+static inline void *
+BCC(struct smb_hdr *smb)
+{
+	return (void *)smb + sizeof(*smb) + 2 * smb->WordCount;
+}
+
 /* given a pointer to an smb_hdr retrieve the pointer to the byte area */
-#define pByteArea(smb_var) ((unsigned char *)(smb_var) + sizeof(struct smb_hdr) + (2 * (smb_var)->WordCount) + 2)
+#define pByteArea(smb_var) (BCC(smb_var) + 2)
+
+/* get the unconverted ByteCount for a SMB packet and return it */
+static inline __u16
+get_bcc(struct smb_hdr *hdr)
+{
+	__le16 *bc_ptr = (__le16 *)BCC(hdr);
+
+	return get_unaligned_le16(bc_ptr);
+}
+
+/* set the ByteCount for a SMB packet in little-endian */
+static inline void
+put_bcc(__u16 count, struct smb_hdr *hdr)
+{
+	__le16 *bc_ptr = (__le16 *)BCC(hdr);
+
+	put_unaligned_le16(count, bc_ptr);
+}
 
 /*
  * Computer Name Length (since Netbios name was length 16 with last byte 0x20)
@@ -663,7 +699,6 @@ struct ntlmv2_resp {
 	__le64  time;
 	__u64  client_chal; /* random */
 	__u32  reserved2;
-	struct ntlmssp2_name names[2];
 	/* array of name entries could follow ending in minimum 4 byte struct */
 } __attribute__((packed));
 
@@ -749,6 +784,20 @@ typedef struct smb_com_tconx_rsp_ext {
  * ?????    ie any type
  *
  */
+
+typedef struct smb_com_echo_req {
+	struct	smb_hdr hdr;
+	__le16	EchoCount;
+	__le16	ByteCount;
+	char	Data[1];
+} __attribute__((packed)) ECHO_REQ;
+
+typedef struct smb_com_echo_rsp {
+	struct	smb_hdr hdr;
+	__le16	SequenceNumber;
+	__le16	ByteCount;
+	char	Data[1];
+} __attribute__((packed)) ECHO_RSP;
 
 typedef struct smb_com_logoff_andx_req {
 	struct smb_hdr hdr;	/* wct = 2 */
@@ -1040,9 +1089,7 @@ typedef struct smb_com_read_rsp {
 	__le16 DataLengthHigh;
 	__u64 Reserved2;
 	__u16 ByteCount;
-	__u8 Pad;		/* BB check for whether padded to DWORD
-				   boundary and optimum performance here */
-	char Data[1];
+	/* read response data immediately follows */
 } __attribute__((packed)) READ_RSP;
 
 typedef struct locking_andx_range {
@@ -1864,6 +1911,10 @@ typedef struct whoami_rsp_data { /* Query level 0x202 */
 
 /* SETFSInfo Levels */
 #define SMB_SET_CIFS_UNIX_INFO    0x200
+/* level 0x203 is defined above in list of QFS info levels */
+/* #define SMB_REQUEST_TRANSPORT_ENCRYPTION 0x203 */
+
+/* Level 0x200 request structure follows */
 typedef struct smb_com_transaction2_setfsi_req {
 	struct smb_hdr hdr;	/* wct = 15 */
 	__le16 TotalParameterCount;
@@ -1891,12 +1942,38 @@ typedef struct smb_com_transaction2_setfsi_req {
 	__le64 ClientUnixCap;   /* Data end */
 } __attribute__((packed)) TRANSACTION2_SETFSI_REQ;
 
+/* level 0x203 request structure follows */
+typedef struct smb_com_transaction2_setfs_enc_req {
+	struct smb_hdr hdr;	/* wct = 15 */
+	__le16 TotalParameterCount;
+	__le16 TotalDataCount;
+	__le16 MaxParameterCount;
+	__le16 MaxDataCount;
+	__u8 MaxSetupCount;
+	__u8 Reserved;
+	__le16 Flags;
+	__le32 Timeout;
+	__u16 Reserved2;
+	__le16 ParameterCount;	/* 4 */
+	__le16 ParameterOffset;
+	__le16 DataCount;	/* 12 */
+	__le16 DataOffset;
+	__u8 SetupCount;	/* one */
+	__u8 Reserved3;
+	__le16 SubCommand;	/* TRANS2_SET_FS_INFORMATION */
+	__le16 ByteCount;
+	__u8 Pad;
+	__u16  Reserved4;	/* Parameters start. */
+	__le16 InformationLevel;/* Parameters end. */
+	/* NTLMSSP Blob, Data start. */
+} __attribute__((packed)) TRANSACTION2_SETFSI_ENC_REQ;
+
+/* response for setfsinfo levels 0x200 and 0x203 */
 typedef struct smb_com_transaction2_setfsi_rsp {
 	struct smb_hdr hdr;	/* wct = 10 */
 	struct trans2_resp t2;
 	__u16 ByteCount;
 } __attribute__((packed)) TRANSACTION2_SETFSI_RSP;
-
 
 typedef struct smb_com_transaction2_get_dfs_refer_req {
 	struct smb_hdr hdr;	/* wct = 15 */
@@ -2049,13 +2126,13 @@ typedef struct {
 #define CIFS_UNIX_PROXY_CAP             0x00000400 /* Proxy cap: 0xACE ioctl and
 						      QFS PROXY call */
 #ifdef CONFIG_CIFS_POSIX
-/* Can not set pathnames cap yet until we send new posix create SMB since
-   otherwise server can treat such handles opened with older ntcreatex
-   (by a new client which knows how to send posix path ops)
-   as non-posix handles (can affect write behavior with byte range locks.
-   We can add back in POSIX_PATH_OPS cap when Posix Create/Mkdir finished */
+/* presumably don't need the 0x20 POSIX_PATH_OPS_CAP since we never send
+   LockingX instead of posix locking call on unix sess (and we do not expect
+   LockingX to use different (ie Windows) semantics than posix locking on
+   the same session (if WINE needs to do this later, we can add this cap
+   back in later */
 /* #define CIFS_UNIX_CAP_MASK              0x000000fb */
-#define CIFS_UNIX_CAP_MASK              0x000000db
+#define CIFS_UNIX_CAP_MASK              0x000003db
 #else
 #define CIFS_UNIX_CAP_MASK              0x00000013
 #endif /* CONFIG_CIFS_POSIX */

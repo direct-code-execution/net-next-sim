@@ -140,10 +140,15 @@ extern void wii_memory_fixups(void);
 extern void MMU_init_hw(void);
 extern unsigned long mmu_mapin_ram(unsigned long top);
 
-#elif defined(CONFIG_FSL_BOOKE)
+#elif defined(CONFIG_PPC_FSL_BOOK3E)
+extern unsigned long map_mem_in_cams(unsigned long ram, int max_cam_idx);
+extern unsigned long calc_cam_sz(unsigned long ram, unsigned long virt,
+				 phys_addr_t phys);
+#ifdef CONFIG_PPC32
 extern void MMU_init_hw(void);
 extern unsigned long mmu_mapin_ram(unsigned long top);
 extern void adjust_total_lowmem(void);
+#endif
 extern void loadcam_entry(unsigned int index);
 
 struct tlbcam {

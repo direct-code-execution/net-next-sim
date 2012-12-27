@@ -21,12 +21,10 @@
 #include <mach/hardware.h>
 
 /* Generic stuff */
+#include <asm/sched_clock.h>
 #include <asm/mach/map.h>
 #include <asm/mach/time.h>
 #include <asm/mach/irq.h>
-
-/* Be able to sleep for atleast 4 seconds (usually more) */
-#define APPTIMER_MIN_RANGE 4
 
 /*
  * APP side special timer registers
@@ -307,11 +305,11 @@ static int u300_set_next_event(unsigned long cycles,
 
 /* Use general purpose timer 1 as clock event */
 static struct clock_event_device clockevent_u300_1mhz = {
-	.name           = "GPT1",
-	.rating         = 300, /* Reasonably fast and accurate clock event */
-	.features       = CLOCK_EVT_FEAT_PERIODIC | CLOCK_EVT_FEAT_ONESHOT,
-	.set_next_event = u300_set_next_event,
-	.set_mode       = u300_set_mode,
+	.name		= "GPT1",
+	.rating		= 300, /* Reasonably fast and accurate clock event */
+	.features	= CLOCK_EVT_FEAT_PERIODIC | CLOCK_EVT_FEAT_ONESHOT,
+	.set_next_event	= u300_set_next_event,
+	.set_mode	= u300_set_mode,
 };
 
 /* Clock event timer interrupt handler */
@@ -326,23 +324,9 @@ static irqreturn_t u300_timer_interrupt(int irq, void *dev_id)
 }
 
 static struct irqaction u300_timer_irq = {
-	.name           = "U300 Timer Tick",
-	.flags          = IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
-	.handler        = u300_timer_interrupt,
-};
-
-/* Use general purpose timer 2 as clock source */
-static cycle_t u300_get_cycles(struct clocksource *cs)
-{
-	return (cycles_t) readl(U300_TIMER_APP_VBASE + U300_TIMER_APP_GPT2CC);
-}
-
-static struct clocksource clocksource_u300_1mhz = {
-	.name           = "GPT2",
-	.rating         = 300, /* Reasonably fast and accurate clock source */
-	.read           = u300_get_cycles,
-	.mask           = CLOCKSOURCE_MASK(32), /* 32 bits */
-	.flags          = CLOCK_SOURCE_IS_CONTINUOUS,
+	.name		= "U300 Timer Tick",
+	.flags		= IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
+	.handler	= u300_timer_interrupt,
 };
 
 /*
@@ -352,12 +336,10 @@ static struct clocksource clocksource_u300_1mhz = {
  * this wraps around for now, since it is just a relative time
  * stamp. (Inspired by OMAP implementation.)
  */
-unsigned long long notrace sched_clock(void)
+
+static u32 notrace u300_read_sched_clock(void)
 {
-	return clocksource_cyc2ns(clocksource_u300_1mhz.read(
-				  &clocksource_u300_1mhz),
-				  clocksource_u300_1mhz.mult,
-				  clocksource_u300_1mhz.shift);
+	return readl(U300_TIMER_APP_VBASE + U300_TIMER_APP_GPT2CC);
 }
 
 
@@ -374,6 +356,8 @@ static void __init u300_timer_init(void)
 	BUG_ON(IS_ERR(clk));
 	clk_enable(clk);
 	rate = clk_get_rate(clk);
+
+	setup_sched_clock(u300_read_sched_clock, 32, rate);
 
 	/*
 	 * Disable the "OS" and "DD" timers - these are designed for Symbian!
@@ -412,22 +396,15 @@ static void __init u300_timer_init(void)
 	writel(U300_TIMER_APP_EGPT2_TIMER_ENABLE,
 		U300_TIMER_APP_VBASE + U300_TIMER_APP_EGPT2);
 
-	clocksource_calc_mult_shift(&clocksource_u300_1mhz,
-				    rate, APPTIMER_MIN_RANGE);
-	if (clocksource_register(&clocksource_u300_1mhz))
-		printk(KERN_ERR "timer: failed to initialize clock "
-		       "source %s\n", clocksource_u300_1mhz.name);
+	/* Use general purpose timer 2 as clock source */
+	if (clocksource_mmio_init(U300_TIMER_APP_VBASE + U300_TIMER_APP_GPT2CC,
+			"GPT2", rate, 300, 32, clocksource_mmio_readl_up))
+		pr_err("timer: failed to initialize U300 clock source\n");
 
-	clockevents_calc_mult_shift(&clockevent_u300_1mhz,
-				    rate, APPTIMER_MIN_RANGE);
-	/* 32bit counter, so 32bits delta is max */
-	clockevent_u300_1mhz.max_delta_ns =
-		clockevent_delta2ns(0xffffffff, &clockevent_u300_1mhz);
-	/* This timer is slow enough to set for 1 cycle == 1 MHz */
-	clockevent_u300_1mhz.min_delta_ns =
-		clockevent_delta2ns(1, &clockevent_u300_1mhz);
-	clockevent_u300_1mhz.cpumask = cpumask_of(0);
-	clockevents_register_device(&clockevent_u300_1mhz);
+	/* Configure and register the clockevent */
+	clockevents_config_and_register(&clockevent_u300_1mhz, rate,
+					1, 0xffffffff);
+
 	/*
 	 * TODO: init and register the rest of the timers too, they can be
 	 * used by hrtimers!

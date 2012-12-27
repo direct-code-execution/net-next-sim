@@ -43,7 +43,6 @@
 #include <linux/slab.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-chip-ident.h>
-#include <media/v4l2-i2c-drv.h>
 #include "ks0127.h"
 
 MODULE_DESCRIPTION("KS0127 video decoder driver");
@@ -712,9 +711,14 @@ static const struct i2c_device_id ks0127_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, ks0127_id);
 
-static struct v4l2_i2c_driver_data v4l2_i2c_data = {
-	.name = "ks0127",
-	.probe = ks0127_probe,
-	.remove = ks0127_remove,
-	.id_table = ks0127_id,
+static struct i2c_driver ks0127_driver = {
+	.driver = {
+		.owner	= THIS_MODULE,
+		.name	= "ks0127",
+	},
+	.probe		= ks0127_probe,
+	.remove		= ks0127_remove,
+	.id_table	= ks0127_id,
 };
+
+module_i2c_driver(ks0127_driver);

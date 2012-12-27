@@ -17,16 +17,21 @@
 #include <linux/init.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
+#include <linux/highmem.h>
+#include <linux/slab.h>
 
 #include <asm/memory.h>
 #include <asm/highmem.h>
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
 #include <asm/sizes.h>
+#include <asm/mach/arch.h>
+
+#include "mm.h"
 
 static u64 get_coherent_dma_mask(struct device *dev)
 {
-	u64 mask = ISA_DMA_THRESHOLD;
+	u64 mask = (u64)arm_dma_limit;
 
 	if (dev) {
 		mask = dev->coherent_dma_mask;
@@ -40,10 +45,10 @@ static u64 get_coherent_dma_mask(struct device *dev)
 			return 0;
 		}
 
-		if ((~mask) & ISA_DMA_THRESHOLD) {
+		if ((~mask) & (u64)arm_dma_limit) {
 			dev_warn(dev, "coherent DMA mask %#llx is smaller "
 				 "than system GFP_DMA mask %#llx\n",
-				 mask, (unsigned long long)ISA_DMA_THRESHOLD);
+				 mask, (u64)arm_dma_limit);
 			return 0;
 		}
 	}
@@ -114,26 +119,36 @@ static void __dma_free_buffer(struct page *page, size_t size)
 }
 
 #ifdef CONFIG_MMU
-/* Sanity check size */
-#if (CONSISTENT_DMA_SIZE % SZ_2M)
-#error "CONSISTENT_DMA_SIZE must be multiple of 2MiB"
-#endif
 
-#define CONSISTENT_OFFSET(x)	(((unsigned long)(x) - CONSISTENT_BASE) >> PAGE_SHIFT)
-#define CONSISTENT_PTE_INDEX(x) (((unsigned long)(x) - CONSISTENT_BASE) >> PGDIR_SHIFT)
-#define NUM_CONSISTENT_PTES (CONSISTENT_DMA_SIZE >> PGDIR_SHIFT)
+#define CONSISTENT_OFFSET(x)	(((unsigned long)(x) - consistent_base) >> PAGE_SHIFT)
+#define CONSISTENT_PTE_INDEX(x) (((unsigned long)(x) - consistent_base) >> PMD_SHIFT)
 
 /*
  * These are the page tables (2MB each) covering uncached, DMA consistent allocations
  */
-static pte_t *consistent_pte[NUM_CONSISTENT_PTES];
+static pte_t **consistent_pte;
+
+#define DEFAULT_CONSISTENT_DMA_SIZE SZ_2M
+
+unsigned long consistent_base = CONSISTENT_END - DEFAULT_CONSISTENT_DMA_SIZE;
+
+void __init init_consistent_dma_size(unsigned long size)
+{
+	unsigned long base = CONSISTENT_END - ALIGN(size, SZ_2M);
+
+	BUG_ON(consistent_pte); /* Check we're called before DMA region init */
+	BUG_ON(base < VMALLOC_END);
+
+	/* Grow region to accommodate specified size  */
+	if (base < consistent_base)
+		consistent_base = base;
+}
 
 #include "vmregion.h"
 
 static struct arm_vmregion_head consistent_head = {
 	.vm_lock	= __SPIN_LOCK_UNLOCKED(&consistent_head.vm_lock),
 	.vm_list	= LIST_HEAD_INIT(consistent_head.vm_list),
-	.vm_start	= CONSISTENT_BASE,
 	.vm_end		= CONSISTENT_END,
 };
 
@@ -148,14 +163,33 @@ static int __init consistent_init(void)
 {
 	int ret = 0;
 	pgd_t *pgd;
+	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *pte;
 	int i = 0;
-	u32 base = CONSISTENT_BASE;
+	unsigned long base = consistent_base;
+	unsigned long num_ptes = (CONSISTENT_END - base) >> PMD_SHIFT;
+
+	consistent_pte = kmalloc(num_ptes * sizeof(pte_t), GFP_KERNEL);
+	if (!consistent_pte) {
+		pr_err("%s: no memory\n", __func__);
+		return -ENOMEM;
+	}
+
+	pr_debug("DMA memory: 0x%08lx - 0x%08lx:\n", base, CONSISTENT_END);
+	consistent_head.vm_start = base;
 
 	do {
 		pgd = pgd_offset(&init_mm, base);
-		pmd = pmd_alloc(&init_mm, pgd, base);
+
+		pud = pud_alloc(&init_mm, pgd, base);
+		if (!pud) {
+			printk(KERN_ERR "%s: no pud tables\n", __func__);
+			ret = -ENOMEM;
+			break;
+		}
+
+		pmd = pmd_alloc(&init_mm, pud, base);
 		if (!pmd) {
 			printk(KERN_ERR "%s: no pmd tables\n", __func__);
 			ret = -ENOMEM;
@@ -171,7 +205,7 @@ static int __init consistent_init(void)
 		}
 
 		consistent_pte[i++] = pte;
-		base += (1 << PGDIR_SHIFT);
+		base += PMD_SIZE;
 	} while (base < CONSISTENT_END);
 
 	return ret;
@@ -180,13 +214,14 @@ static int __init consistent_init(void)
 core_initcall(consistent_init);
 
 static void *
-__dma_alloc_remap(struct page *page, size_t size, gfp_t gfp, pgprot_t prot)
+__dma_alloc_remap(struct page *page, size_t size, gfp_t gfp, pgprot_t prot,
+	const void *caller)
 {
 	struct arm_vmregion *c;
 	size_t align;
 	int bit;
 
-	if (!consistent_pte[0]) {
+	if (!consistent_pte) {
 		printk(KERN_ERR "%s: not initialised\n", __func__);
 		dump_stack();
 		return NULL;
@@ -198,7 +233,7 @@ __dma_alloc_remap(struct page *page, size_t size, gfp_t gfp, pgprot_t prot)
 	 * fragmentation of the DMA space, and also prevents allocations
 	 * smaller than a section from crossing a section boundary.
 	 */
-	bit = fls(size - 1) + 1;
+	bit = fls(size - 1);
 	if (bit > SECTION_SHIFT)
 		bit = SECTION_SHIFT;
 	align = 1 << bit;
@@ -207,7 +242,7 @@ __dma_alloc_remap(struct page *page, size_t size, gfp_t gfp, pgprot_t prot)
 	 * Allocate a virtual address in the consistent mapping region.
 	 */
 	c = arm_vmregion_alloc(&consistent_head, align, size,
-			    gfp & ~(__GFP_DMA | __GFP_HIGHMEM));
+			    gfp & ~(__GFP_DMA | __GFP_HIGHMEM), caller);
 	if (c) {
 		pte_t *pte;
 		int idx = CONSISTENT_PTE_INDEX(c->vm_start);
@@ -286,17 +321,26 @@ static void __dma_free_remap(void *cpu_addr, size_t size)
 
 #else	/* !CONFIG_MMU */
 
-#define __dma_alloc_remap(page, size, gfp, prot)	page_address(page)
+#define __dma_alloc_remap(page, size, gfp, prot, c)	page_address(page)
 #define __dma_free_remap(addr, size)			do { } while (0)
 
 #endif	/* CONFIG_MMU */
 
 static void *
 __dma_alloc(struct device *dev, size_t size, dma_addr_t *handle, gfp_t gfp,
-	    pgprot_t prot)
+	    pgprot_t prot, const void *caller)
 {
 	struct page *page;
 	void *addr;
+
+	/*
+	 * Following is a work-around (a.k.a. hack) to prevent pages
+	 * with __GFP_COMP being passed to split_page() which cannot
+	 * handle them.  The real problem is that this flag probably
+	 * should be 0 on ARM as it is not supported on this
+	 * platform; see CONFIG_HUGETLBFS.
+	 */
+	gfp &= ~(__GFP_COMP);
 
 	*handle = ~0;
 	size = PAGE_ALIGN(size);
@@ -306,12 +350,14 @@ __dma_alloc(struct device *dev, size_t size, dma_addr_t *handle, gfp_t gfp,
 		return NULL;
 
 	if (!arch_is_coherent())
-		addr = __dma_alloc_remap(page, size, gfp, prot);
+		addr = __dma_alloc_remap(page, size, gfp, prot, caller);
 	else
 		addr = page_address(page);
 
 	if (addr)
-		*handle = page_to_dma(dev, page);
+		*handle = pfn_to_dma(dev, page_to_pfn(page));
+	else
+		__dma_free_buffer(page, size);
 
 	return addr;
 }
@@ -329,7 +375,8 @@ dma_alloc_coherent(struct device *dev, size_t size, dma_addr_t *handle, gfp_t gf
 		return memory;
 
 	return __dma_alloc(dev, size, handle, gfp,
-			   pgprot_dmacoherent(pgprot_kernel));
+			   pgprot_dmacoherent(pgprot_kernel),
+			   __builtin_return_address(0));
 }
 EXPORT_SYMBOL(dma_alloc_coherent);
 
@@ -341,7 +388,8 @@ void *
 dma_alloc_writecombine(struct device *dev, size_t size, dma_addr_t *handle, gfp_t gfp)
 {
 	return __dma_alloc(dev, size, handle, gfp,
-			   pgprot_writecombine(pgprot_kernel));
+			   pgprot_writecombine(pgprot_kernel),
+			   __builtin_return_address(0));
 }
 EXPORT_SYMBOL(dma_alloc_writecombine);
 
@@ -406,7 +454,7 @@ void dma_free_coherent(struct device *dev, size_t size, void *cpu_addr, dma_addr
 	if (!arch_is_coherent())
 		__dma_free_remap(cpu_addr, size);
 
-	__dma_free_buffer(dma_to_page(dev, handle), size);
+	__dma_free_buffer(pfn_to_page(dma_to_pfn(dev, handle)), size);
 }
 EXPORT_SYMBOL(dma_free_coherent);
 
@@ -480,10 +528,10 @@ static void dma_cache_maint_page(struct page *page, unsigned long offset,
 				op(vaddr, len, dir);
 				kunmap_high(page);
 			} else if (cache_is_vipt()) {
-				pte_t saved_pte;
-				vaddr = kmap_high_l1_vipt(page, &saved_pte);
+				/* unmapped pages might still be cached */
+				vaddr = kmap_atomic(page);
 				op(vaddr + offset, len, dir);
-				kunmap_high_l1_vipt(page, saved_pte);
+				kunmap_atomic(vaddr);
 			}
 		} else {
 			vaddr = page_address(page) + offset;
@@ -523,6 +571,12 @@ void ___dma_page_dev_to_cpu(struct page *page, unsigned long off,
 		outer_inv_range(paddr, paddr + size);
 
 	dma_cache_maint_page(page, off, size, dir, dmac_unmap_area);
+
+	/*
+	 * Mark the D-cache clean for this page to avoid extra flushing.
+	 */
+	if (dir != DMA_TO_DEVICE && off == 0 && size >= PAGE_SIZE)
+		set_bit(PG_dcache_clean, &page->flags);
 }
 EXPORT_SYMBOL(___dma_page_dev_to_cpu);
 
@@ -548,17 +602,20 @@ int dma_map_sg(struct device *dev, struct scatterlist *sg, int nents,
 	struct scatterlist *s;
 	int i, j;
 
+	BUG_ON(!valid_dma_direction(dir));
+
 	for_each_sg(sg, s, nents, i) {
-		s->dma_address = dma_map_page(dev, sg_page(s), s->offset,
+		s->dma_address = __dma_map_page(dev, sg_page(s), s->offset,
 						s->length, dir);
 		if (dma_mapping_error(dev, s->dma_address))
 			goto bad_mapping;
 	}
+	debug_dma_map_sg(dev, sg, nents, nents, dir);
 	return nents;
 
  bad_mapping:
 	for_each_sg(sg, s, i, j)
-		dma_unmap_page(dev, sg_dma_address(s), sg_dma_len(s), dir);
+		__dma_unmap_page(dev, sg_dma_address(s), sg_dma_len(s), dir);
 	return 0;
 }
 EXPORT_SYMBOL(dma_map_sg);
@@ -567,7 +624,7 @@ EXPORT_SYMBOL(dma_map_sg);
  * dma_unmap_sg - unmap a set of SG buffers mapped by dma_map_sg
  * @dev: valid struct device pointer, or NULL for ISA and EISA-like devices
  * @sg: list of buffers
- * @nents: number of buffers to unmap (returned from dma_map_sg)
+ * @nents: number of buffers to unmap (same as was passed to dma_map_sg)
  * @dir: DMA transfer direction (same as was passed to dma_map_sg)
  *
  * Unmap a set of streaming mode DMA translations.  Again, CPU access
@@ -579,8 +636,10 @@ void dma_unmap_sg(struct device *dev, struct scatterlist *sg, int nents,
 	struct scatterlist *s;
 	int i;
 
+	debug_dma_unmap_sg(dev, sg, nents, dir);
+
 	for_each_sg(sg, s, nents, i)
-		dma_unmap_page(dev, sg_dma_address(s), sg_dma_len(s), dir);
+		__dma_unmap_page(dev, sg_dma_address(s), sg_dma_len(s), dir);
 }
 EXPORT_SYMBOL(dma_unmap_sg);
 
@@ -605,6 +664,8 @@ void dma_sync_sg_for_cpu(struct device *dev, struct scatterlist *sg,
 		__dma_page_dev_to_cpu(sg_page(s), s->offset,
 				      s->length, dir);
 	}
+
+	debug_dma_sync_sg_for_cpu(dev, sg, nents, dir);
 }
 EXPORT_SYMBOL(dma_sync_sg_for_cpu);
 
@@ -629,5 +690,46 @@ void dma_sync_sg_for_device(struct device *dev, struct scatterlist *sg,
 		__dma_page_cpu_to_dev(sg_page(s), s->offset,
 				      s->length, dir);
 	}
+
+	debug_dma_sync_sg_for_device(dev, sg, nents, dir);
 }
 EXPORT_SYMBOL(dma_sync_sg_for_device);
+
+/*
+ * Return whether the given device DMA address mask can be supported
+ * properly.  For example, if your device can only drive the low 24-bits
+ * during bus mastering, then you would pass 0x00ffffff as the mask
+ * to this function.
+ */
+int dma_supported(struct device *dev, u64 mask)
+{
+	if (mask < (u64)arm_dma_limit)
+		return 0;
+	return 1;
+}
+EXPORT_SYMBOL(dma_supported);
+
+int dma_set_mask(struct device *dev, u64 dma_mask)
+{
+	if (!dev->dma_mask || !dma_supported(dev, dma_mask))
+		return -EIO;
+
+#ifndef CONFIG_DMABOUNCE
+	*dev->dma_mask = dma_mask;
+#endif
+
+	return 0;
+}
+EXPORT_SYMBOL(dma_set_mask);
+
+#define PREALLOC_DMA_DEBUG_ENTRIES	4096
+
+static int __init dma_debug_do_init(void)
+{
+#ifdef CONFIG_MMU
+	arm_vmregion_create_proc("dma-mappings", &consistent_head);
+#endif
+	dma_debug_init(PREALLOC_DMA_DEBUG_ENTRIES);
+	return 0;
+}
+fs_initcall(dma_debug_do_init);

@@ -9,20 +9,23 @@
  *
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/slab.h>
-#include <linux/smp_lock.h>
 #include <linux/init.h>
 #include <linux/list.h>
 #include <linux/fs.h>
 #include <linux/err.h>
 #include <linux/mount.h>
+#include <linux/parser.h>
 #include <linux/jffs2.h>
 #include <linux/pagemap.h>
 #include <linux/mtd/super.h>
 #include <linux/ctype.h>
 #include <linux/namei.h>
+#include <linux/seq_file.h>
 #include <linux/exportfs.h>
 #include "compr.h"
 #include "nodelist.h"
@@ -41,9 +44,15 @@ static struct inode *jffs2_alloc_inode(struct super_block *sb)
 	return &f->vfs_inode;
 }
 
+static void jffs2_i_callback(struct rcu_head *head)
+{
+	struct inode *inode = container_of(head, struct inode, i_rcu);
+	kmem_cache_free(jffs2_inode_cachep, JFFS2_INODE_INFO(inode));
+}
+
 static void jffs2_destroy_inode(struct inode *inode)
 {
-	kmem_cache_free(jffs2_inode_cachep, JFFS2_INODE_INFO(inode));
+	call_rcu(&inode->i_rcu, jffs2_i_callback);
 }
 
 static void jffs2_i_init_once(void *foo)
@@ -62,11 +71,42 @@ static void jffs2_write_super(struct super_block *sb)
 	sb->s_dirt = 0;
 
 	if (!(sb->s_flags & MS_RDONLY)) {
-		D1(printk(KERN_DEBUG "jffs2_write_super()\n"));
+		jffs2_dbg(1, "%s()\n", __func__);
 		jffs2_flush_wbuf_gc(c, 0);
 	}
 
 	unlock_super(sb);
+}
+
+static const char *jffs2_compr_name(unsigned int compr)
+{
+	switch (compr) {
+	case JFFS2_COMPR_MODE_NONE:
+		return "none";
+#ifdef CONFIG_JFFS2_LZO
+	case JFFS2_COMPR_MODE_FORCELZO:
+		return "lzo";
+#endif
+#ifdef CONFIG_JFFS2_ZLIB
+	case JFFS2_COMPR_MODE_FORCEZLIB:
+		return "zlib";
+#endif
+	default:
+		/* should never happen; programmer error */
+		WARN_ON(1);
+		return "";
+	}
+}
+
+static int jffs2_show_options(struct seq_file *s, struct dentry *root)
+{
+	struct jffs2_sb_info *c = JFFS2_SB_INFO(root->d_sb);
+	struct jffs2_mount_opts *opts = &c->mount_opts;
+
+	if (opts->override_compr)
+		seq_printf(s, ",compr=%s", jffs2_compr_name(opts->compr));
+
+	return 0;
 }
 
 static int jffs2_sync_fs(struct super_block *sb, int wait)
@@ -127,6 +167,85 @@ static const struct export_operations jffs2_export_ops = {
 	.fh_to_parent = jffs2_fh_to_parent,
 };
 
+/*
+ * JFFS2 mount options.
+ *
+ * Opt_override_compr: override default compressor
+ * Opt_err: just end of array marker
+ */
+enum {
+	Opt_override_compr,
+	Opt_err,
+};
+
+static const match_table_t tokens = {
+	{Opt_override_compr, "compr=%s"},
+	{Opt_err, NULL},
+};
+
+static int jffs2_parse_options(struct jffs2_sb_info *c, char *data)
+{
+	substring_t args[MAX_OPT_ARGS];
+	char *p, *name;
+
+	if (!data)
+		return 0;
+
+	while ((p = strsep(&data, ","))) {
+		int token;
+
+		if (!*p)
+			continue;
+
+		token = match_token(p, tokens, args);
+		switch (token) {
+		case Opt_override_compr:
+			name = match_strdup(&args[0]);
+
+			if (!name)
+				return -ENOMEM;
+			if (!strcmp(name, "none"))
+				c->mount_opts.compr = JFFS2_COMPR_MODE_NONE;
+#ifdef CONFIG_JFFS2_LZO
+			else if (!strcmp(name, "lzo"))
+				c->mount_opts.compr = JFFS2_COMPR_MODE_FORCELZO;
+#endif
+#ifdef CONFIG_JFFS2_ZLIB
+			else if (!strcmp(name, "zlib"))
+				c->mount_opts.compr =
+						JFFS2_COMPR_MODE_FORCEZLIB;
+#endif
+			else {
+				pr_err("Error: unknown compressor \"%s\"\n",
+				       name);
+				kfree(name);
+				return -EINVAL;
+			}
+			kfree(name);
+			c->mount_opts.override_compr = true;
+			break;
+		default:
+			pr_err("Error: unrecognized mount option '%s' or missing value\n",
+			       p);
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
+static int jffs2_remount_fs(struct super_block *sb, int *flags, char *data)
+{
+	struct jffs2_sb_info *c = JFFS2_SB_INFO(sb);
+	int err;
+
+	err = jffs2_parse_options(c, data);
+	if (err)
+		return -EINVAL;
+
+	return jffs2_do_remount_fs(sb, flags, data);
+}
+
 static const struct super_operations jffs2_super_operations =
 {
 	.alloc_inode =	jffs2_alloc_inode,
@@ -137,6 +256,7 @@ static const struct super_operations jffs2_super_operations =
 	.remount_fs =	jffs2_remount_fs,
 	.evict_inode =	jffs2_evict_inode,
 	.dirty_inode =	jffs2_dirty_inode,
+	.show_options =	jffs2_show_options,
 	.sync_fs =	jffs2_sync_fs,
 };
 
@@ -146,10 +266,11 @@ static const struct super_operations jffs2_super_operations =
 static int jffs2_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct jffs2_sb_info *c;
+	int ret;
 
-	D1(printk(KERN_DEBUG "jffs2_get_sb_mtd():"
+	jffs2_dbg(1, "jffs2_get_sb_mtd():"
 		  " New superblock for device %d (\"%s\")\n",
-		  sb->s_mtd->index, sb->s_mtd->name));
+		  sb->s_mtd->index, sb->s_mtd->name);
 
 	c = kzalloc(sizeof(*c), GFP_KERNEL);
 	if (!c)
@@ -158,6 +279,12 @@ static int jffs2_fill_super(struct super_block *sb, void *data, int silent)
 	c->mtd = sb->s_mtd;
 	c->os_priv = sb;
 	sb->s_fs_info = c;
+
+	ret = jffs2_parse_options(c, data);
+	if (ret) {
+		kfree(c);
+		return -EINVAL;
+	}
 
 	/* Initialize JFFS2 superblock locks, the further initialization will
 	 * be done later */
@@ -175,24 +302,22 @@ static int jffs2_fill_super(struct super_block *sb, void *data, int silent)
 #ifdef CONFIG_JFFS2_FS_POSIX_ACL
 	sb->s_flags |= MS_POSIXACL;
 #endif
-	return jffs2_do_fill_super(sb, data, silent);
+	ret = jffs2_do_fill_super(sb, data, silent);
+	return ret;
 }
 
-static int jffs2_get_sb(struct file_system_type *fs_type,
+static struct dentry *jffs2_mount(struct file_system_type *fs_type,
 			int flags, const char *dev_name,
-			void *data, struct vfsmount *mnt)
+			void *data)
 {
-	return get_sb_mtd(fs_type, flags, dev_name, data, jffs2_fill_super,
-			  mnt);
+	return mount_mtd(fs_type, flags, dev_name, data, jffs2_fill_super);
 }
 
 static void jffs2_put_super (struct super_block *sb)
 {
 	struct jffs2_sb_info *c = JFFS2_SB_INFO(sb);
 
-	D2(printk(KERN_DEBUG "jffs2: jffs2_put_super()\n"));
-
-	lock_kernel();
+	jffs2_dbg(2, "%s()\n", __func__);
 
 	if (sb->s_dirt)
 		jffs2_write_super(sb);
@@ -212,12 +337,8 @@ static void jffs2_put_super (struct super_block *sb)
 	jffs2_flash_cleanup(c);
 	kfree(c->inocache_list);
 	jffs2_clear_xattr_subsystem(c);
-	if (c->mtd->sync)
-		c->mtd->sync(c->mtd);
-
-	unlock_kernel();
-
-	D1(printk(KERN_DEBUG "jffs2_put_super returning\n"));
+	mtd_sync(c->mtd);
+	jffs2_dbg(1, "%s(): returning\n", __func__);
 }
 
 static void jffs2_kill_sb(struct super_block *sb)
@@ -232,7 +353,7 @@ static void jffs2_kill_sb(struct super_block *sb)
 static struct file_system_type jffs2_fs_type = {
 	.owner =	THIS_MODULE,
 	.name =		"jffs2",
-	.get_sb =	jffs2_get_sb,
+	.mount =	jffs2_mount,
 	.kill_sb =	jffs2_kill_sb,
 };
 
@@ -252,7 +373,7 @@ static int __init init_jffs2_fs(void)
 	BUILD_BUG_ON(sizeof(struct jffs2_raw_inode) != 68);
 	BUILD_BUG_ON(sizeof(struct jffs2_raw_summary) != 32);
 
-	printk(KERN_INFO "JFFS2 version 2.2."
+	pr_info("version 2.2."
 #ifdef CONFIG_JFFS2_FS_WRITEBUFFER
 	       " (NAND)"
 #endif
@@ -267,22 +388,22 @@ static int __init init_jffs2_fs(void)
 						SLAB_MEM_SPREAD),
 					     jffs2_i_init_once);
 	if (!jffs2_inode_cachep) {
-		printk(KERN_ERR "JFFS2 error: Failed to initialise inode cache\n");
+		pr_err("error: Failed to initialise inode cache\n");
 		return -ENOMEM;
 	}
 	ret = jffs2_compressors_init();
 	if (ret) {
-		printk(KERN_ERR "JFFS2 error: Failed to initialise compressors\n");
+		pr_err("error: Failed to initialise compressors\n");
 		goto out;
 	}
 	ret = jffs2_create_slab_caches();
 	if (ret) {
-		printk(KERN_ERR "JFFS2 error: Failed to initialise slab caches\n");
+		pr_err("error: Failed to initialise slab caches\n");
 		goto out_compressors;
 	}
 	ret = register_filesystem(&jffs2_fs_type);
 	if (ret) {
-		printk(KERN_ERR "JFFS2 error: Failed to register filesystem\n");
+		pr_err("error: Failed to register filesystem\n");
 		goto out_slab;
 	}
 	return 0;

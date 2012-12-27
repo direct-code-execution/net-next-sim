@@ -35,11 +35,11 @@
 #include <linux/input/eeti_ts.h>
 #include <linux/slab.h>
 
-static int flip_x;
+static bool flip_x;
 module_param(flip_x, bool, 0644);
 MODULE_PARM_DESC(flip_x, "flip x coordinate");
 
-static int flip_y;
+static bool flip_y;
 module_param(flip_y, bool, 0644);
 MODULE_PARM_DESC(flip_y, "flip y coordinate");
 
@@ -261,8 +261,9 @@ static int __devexit eeti_ts_remove(struct i2c_client *client)
 }
 
 #ifdef CONFIG_PM
-static int eeti_ts_suspend(struct i2c_client *client, pm_message_t mesg)
+static int eeti_ts_suspend(struct device *dev)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct eeti_ts_priv *priv = i2c_get_clientdata(client);
 	struct input_dev *input_dev = priv->input;
 
@@ -279,8 +280,9 @@ static int eeti_ts_suspend(struct i2c_client *client, pm_message_t mesg)
 	return 0;
 }
 
-static int eeti_ts_resume(struct i2c_client *client)
+static int eeti_ts_resume(struct device *dev)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct eeti_ts_priv *priv = i2c_get_clientdata(client);
 	struct input_dev *input_dev = priv->input;
 
@@ -296,9 +298,8 @@ static int eeti_ts_resume(struct i2c_client *client)
 
 	return 0;
 }
-#else
-#define eeti_ts_suspend NULL
-#define eeti_ts_resume NULL
+
+static SIMPLE_DEV_PM_OPS(eeti_ts_pm, eeti_ts_suspend, eeti_ts_resume);
 #endif
 
 static const struct i2c_device_id eeti_ts_id[] = {
@@ -310,28 +311,17 @@ MODULE_DEVICE_TABLE(i2c, eeti_ts_id);
 static struct i2c_driver eeti_ts_driver = {
 	.driver = {
 		.name = "eeti_ts",
+#ifdef CONFIG_PM
+		.pm = &eeti_ts_pm,
+#endif
 	},
 	.probe = eeti_ts_probe,
 	.remove = __devexit_p(eeti_ts_remove),
-	.suspend = eeti_ts_suspend,
-	.resume = eeti_ts_resume,
 	.id_table = eeti_ts_id,
 };
 
-static int __init eeti_ts_init(void)
-{
-	return i2c_add_driver(&eeti_ts_driver);
-}
-
-static void __exit eeti_ts_exit(void)
-{
-	i2c_del_driver(&eeti_ts_driver);
-}
+module_i2c_driver(eeti_ts_driver);
 
 MODULE_DESCRIPTION("EETI Touchscreen driver");
 MODULE_AUTHOR("Daniel Mack <daniel@caiaq.de>");
 MODULE_LICENSE("GPL");
-
-module_init(eeti_ts_init);
-module_exit(eeti_ts_exit);
-

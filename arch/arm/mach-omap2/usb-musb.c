@@ -28,23 +28,10 @@
 
 #include <mach/hardware.h>
 #include <mach/irqs.h>
+#include <mach/am35xx.h>
 #include <plat/usb.h>
-
-#ifdef CONFIG_USB_MUSB_SOC
-
-static struct resource musb_resources[] = {
-	[0] = { /* start and end set dynamically */
-		.flags	= IORESOURCE_MEM,
-	},
-	[1] = {	/* general IRQ */
-		.start	= INT_243X_HS_USB_MC,
-		.flags	= IORESOURCE_IRQ,
-	},
-	[2] = {	/* DMA IRQ */
-		.start	= INT_243X_HS_USB_DMA,
-		.flags	= IORESOURCE_IRQ,
-	},
-};
+#include <plat/omap_device.h>
+#include "mux.h"
 
 static struct musb_hdrc_config musb_config = {
 	.multipoint	= 1,
@@ -73,30 +60,25 @@ static struct musb_hdrc_platform_data musb_plat = {
 
 static u64 musb_dmamask = DMA_BIT_MASK(32);
 
-static struct platform_device musb_device = {
-	.name		= "musb_hdrc",
-	.id		= -1,
-	.dev = {
-		.dma_mask		= &musb_dmamask,
-		.coherent_dma_mask	= DMA_BIT_MASK(32),
-		.platform_data		= &musb_plat,
-	},
-	.num_resources	= ARRAY_SIZE(musb_resources),
-	.resource	= musb_resources,
+static struct omap_musb_board_data musb_default_board_data = {
+	.interface_type		= MUSB_INTERFACE_ULPI,
+	.mode			= MUSB_OTG,
+	.power			= 100,
 };
 
-void __init usb_musb_init(struct omap_musb_board_data *board_data)
+void __init usb_musb_init(struct omap_musb_board_data *musb_board_data)
 {
-	if (cpu_is_omap243x()) {
-		musb_resources[0].start = OMAP243X_HS_BASE;
-	} else if (cpu_is_omap34xx()) {
-		musb_resources[0].start = OMAP34XX_HSUSB_OTG_BASE;
-	} else if (cpu_is_omap44xx()) {
-		musb_resources[0].start = OMAP44XX_HSUSB_OTG_BASE;
-		musb_resources[1].start = OMAP44XX_IRQ_HS_USB_MC_N;
-		musb_resources[2].start = OMAP44XX_IRQ_HS_USB_DMA_N;
-	}
-	musb_resources[0].end = musb_resources[0].start + SZ_4K - 1;
+	struct omap_hwmod		*oh;
+	struct platform_device		*pdev;
+	struct device			*dev;
+	int				bus_id = -1;
+	const char			*oh_name, *name;
+	struct omap_musb_board_data	*board_data;
+
+	if (musb_board_data)
+		board_data = musb_board_data;
+	else
+		board_data = &musb_default_board_data;
 
 	/*
 	 * REVISIT: This line can be removed once all the platforms using
@@ -108,12 +90,36 @@ void __init usb_musb_init(struct omap_musb_board_data *board_data)
 	musb_plat.mode = board_data->mode;
 	musb_plat.extvbus = board_data->extvbus;
 
-	if (platform_device_register(&musb_device) < 0)
-		printk(KERN_ERR "Unable to register HS-USB (MUSB) device\n");
-}
+	if (cpu_is_omap3517() || cpu_is_omap3505()) {
+		oh_name = "am35x_otg_hs";
+		name = "musb-am35x";
+	} else if (cpu_is_ti81xx()) {
+		oh_name = "usb_otg_hs";
+		name = "musb-ti81xx";
+	} else {
+		oh_name = "usb_otg_hs";
+		name = "musb-omap2430";
+	}
 
-#else
-void __init usb_musb_init(struct omap_musb_board_data *board_data)
-{
+        oh = omap_hwmod_lookup(oh_name);
+        if (WARN(!oh, "%s: could not find omap_hwmod for %s\n",
+                 __func__, oh_name))
+                return;
+
+	pdev = omap_device_build(name, bus_id, oh, &musb_plat,
+			       sizeof(musb_plat), NULL, 0, false);
+	if (IS_ERR(pdev)) {
+		pr_err("Could not build omap_device for %s %s\n",
+						name, oh_name);
+		return;
+	}
+
+	dev = &pdev->dev;
+	get_device(dev);
+	dev->dma_mask = &musb_dmamask;
+	dev->coherent_dma_mask = musb_dmamask;
+	put_device(dev);
+
+	if (cpu_is_omap44xx())
+		omap4430_phy_init(dev);
 }
-#endif /* CONFIG_USB_MUSB_SOC */

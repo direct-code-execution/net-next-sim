@@ -15,18 +15,19 @@
 #include <linux/string.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/mod_devicetable.h>
 #include <linux/pci.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/of_platform.h>
+#include <linux/atomic.h>
 
 #include <asm/errno.h>
 #include <asm/topology.h>
 #include <asm/pci-bridge.h>
 #include <asm/ppc-pci.h>
-#include <asm/atomic.h>
+#include <asm/eeh.h>
 
 #ifdef CONFIG_PPC_OF_PLATFORM_PCI
 
@@ -36,8 +37,7 @@
  * lacking some bits needed here.
  */
 
-static int __devinit of_pci_phb_probe(struct platform_device *dev,
-				      const struct of_device_id *match)
+static int __devinit of_pci_phb_probe(struct platform_device *dev)
 {
 	struct pci_controller *phb;
 
@@ -67,6 +67,9 @@ static int __devinit of_pci_phb_probe(struct platform_device *dev,
 	/* Init pci_dn data structures */
 	pci_devs_phb_init_dynamic(phb);
 
+	/* Create EEH devices for the PHB */
+	eeh_dev_phb_init_dynamic(phb);
+
 	/* Register devices with EEH */
 #ifdef CONFIG_EEH
 	if (dev->dev.of_node->child)
@@ -74,7 +77,7 @@ static int __devinit of_pci_phb_probe(struct platform_device *dev,
 #endif /* CONFIG_EEH */
 
 	/* Scan the bus */
-	pcibios_scan_phb(phb, dev->dev.of_node);
+	pcibios_scan_phb(phb);
 	if (phb->bus == NULL)
 		return -ENXIO;
 
@@ -104,7 +107,7 @@ static struct of_device_id of_pci_phb_ids[] = {
 	{}
 };
 
-static struct of_platform_driver of_pci_phb_driver = {
+static struct platform_driver of_pci_phb_driver = {
 	.probe = of_pci_phb_probe,
 	.driver = {
 		.name = "of-pci",
@@ -115,7 +118,7 @@ static struct of_platform_driver of_pci_phb_driver = {
 
 static __init int of_pci_phb_init(void)
 {
-	return of_register_platform_driver(&of_pci_phb_driver);
+	return platform_driver_register(&of_pci_phb_driver);
 }
 
 device_initcall(of_pci_phb_init);

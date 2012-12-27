@@ -100,7 +100,6 @@
 #undef NCR5380_STAT_LIMIT
 #endif
 
-#include <asm/system.h>
 #include <asm/io.h>
 #include <linux/signal.h>
 #include <linux/blkdev.h>
@@ -566,7 +565,7 @@ generic_NCR5380_biosparam(struct scsi_device *sdev, struct block_device *bdev,
  *	@dst: buffer to read into
  *	@len: buffer length
  *
- *	Perform a psuedo DMA mode read from an NCR53C400 or equivalent
+ *	Perform a pseudo DMA mode read from an NCR53C400 or equivalent
  *	controller
  */
  
@@ -650,7 +649,7 @@ static inline int NCR5380_pread(struct Scsi_Host *instance, unsigned char *dst, 
  *	@dst: buffer to read into
  *	@len: buffer length
  *
- *	Perform a psuedo DMA mode read from an NCR53C400 or equivalent
+ *	Perform a pseudo DMA mode read from an NCR53C400 or equivalent
  *	controller
  */
 

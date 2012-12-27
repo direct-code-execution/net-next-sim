@@ -8,10 +8,12 @@
 #include <linux/spinlock.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
+#include <linux/export.h>
 #include <asm/oplib.h>
 #include <asm/io.h>
 #include <asm/auxio.h>
 #include <asm/string.h>		/* memset(), Linux has no bzero() */
+#include <asm/cpu_type.h>
 
 /* Probe and map in the Auxiliary I/O register */
 
@@ -23,7 +25,7 @@ static DEFINE_SPINLOCK(auxio_lock);
 
 void __init auxio_probe(void)
 {
-	int node, auxio_nd;
+	phandle node, auxio_nd;
 	struct linux_prom_registers auxregs[1];
 	struct resource r;
 
@@ -101,7 +103,7 @@ void set_auxio(unsigned char bits_on, unsigned char bits_off)
 		break;
 	default:
 		panic("Can't set AUXIO register on this machine.");
-	};
+	}
 	spin_unlock_irqrestore(&auxio_lock, flags);
 }
 EXPORT_SYMBOL(set_auxio);
@@ -113,7 +115,7 @@ volatile unsigned char * auxio_power_register = NULL;
 void __init auxio_power_probe(void)
 {
 	struct linux_prom_registers regs;
-	int node;
+	phandle node;
 	struct resource r;
 
 	/* Attempt to find the sun4m power control node. */
@@ -121,7 +123,7 @@ void __init auxio_power_probe(void)
 	node = prom_searchsiblings(node, "obio");
 	node = prom_getchild(node);
 	node = prom_searchsiblings(node, "power");
-	if (node == 0 || node == -1)
+	if (node == 0 || (s32)node == -1)
 		return;
 
 	/* Map the power control register. */

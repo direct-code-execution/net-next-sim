@@ -69,7 +69,7 @@ static int cinergyt2_frontend_attach(struct dvb_usb_adapter *adap)
 	char state[3];
 	int ret;
 
-	adap->fe = cinergyt2_fe_attach(adap->dev);
+	adap->fe_adap[0].fe = cinergyt2_fe_attach(adap->dev);
 
 	ret = dvb_usb_generic_rw(adap->dev, query, sizeof(query), state,
 				sizeof(state), 0);
@@ -84,7 +84,7 @@ static int cinergyt2_frontend_attach(struct dvb_usb_adapter *adap)
 	return 0;
 }
 
-static struct ir_scancode ir_codes_cinergyt2_table[] = {
+static struct rc_map_table rc_map_cinergyt2_table[] = {
 	{ 0x0401, KEY_POWER },
 	{ 0x0402, KEY_1 },
 	{ 0x0403, KEY_2 },
@@ -198,6 +198,8 @@ static struct dvb_usb_device_properties cinergyt2_properties = {
 	.num_adapters = 1,
 	.adapter = {
 		{
+		.num_frontends = 1,
+		.fe = {{
 			.streaming_ctrl   = cinergyt2_streaming_ctrl,
 			.frontend_attach  = cinergyt2_frontend_attach,
 
@@ -212,6 +214,7 @@ static struct dvb_usb_device_properties cinergyt2_properties = {
 					}
 				}
 			},
+		}},
 		}
 	},
 
@@ -219,8 +222,8 @@ static struct dvb_usb_device_properties cinergyt2_properties = {
 
 	.rc.legacy = {
 		.rc_interval      = 50,
-		.rc_key_map       = ir_codes_cinergyt2_table,
-		.rc_key_map_size  = ARRAY_SIZE(ir_codes_cinergyt2_table),
+		.rc_map_table     = rc_map_cinergyt2_table,
+		.rc_map_size      = ARRAY_SIZE(rc_map_cinergyt2_table),
 		.rc_query         = cinergyt2_rc_query,
 	},
 
@@ -244,25 +247,7 @@ static struct usb_driver cinergyt2_driver = {
 	.id_table	= cinergyt2_usb_table
 };
 
-static int __init cinergyt2_usb_init(void)
-{
-	int err;
-
-	err = usb_register(&cinergyt2_driver);
-	if (err) {
-		err("usb_register() failed! (err %i)\n", err);
-		return err;
-	}
-	return 0;
-}
-
-static void __exit cinergyt2_usb_exit(void)
-{
-	usb_deregister(&cinergyt2_driver);
-}
-
-module_init(cinergyt2_usb_init);
-module_exit(cinergyt2_usb_exit);
+module_usb_driver(cinergyt2_driver);
 
 MODULE_DESCRIPTION("Terratec Cinergy T2 DVB-T driver");
 MODULE_LICENSE("GPL");

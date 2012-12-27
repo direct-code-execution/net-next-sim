@@ -131,14 +131,16 @@ enum {
 	PM8607_ID_LDO8,
 	PM8607_ID_LDO9,
 	PM8607_ID_LDO10,
+	PM8607_ID_LDO11,
 	PM8607_ID_LDO12,
 	PM8607_ID_LDO13,
 	PM8607_ID_LDO14,
+	PM8607_ID_LDO15,
 
 	PM8607_ID_RG_MAX,
 };
 
-#define PM8607_VERSION			(0x40)	/* 8607 chip ID */
+/* 8607 chip ID is 0x40 or 0x50 */
 #define PM8607_VERSION_MASK		(0xF0)	/* 8607 chip ID mask */
 
 /* Interrupt Registers */
@@ -261,6 +263,22 @@ enum {
 #define PM8607_PD_PREBIAS_MASK		(0x1F << 0)
 #define PM8607_PD_PRECHG_MASK		(7 << 5)
 
+#define PM8606_REF_GP_OSC_OFF         0
+#define PM8606_REF_GP_OSC_ON          1
+#define PM8606_REF_GP_OSC_UNKNOWN     2
+
+/* Clients of reference group and 8MHz oscillator in 88PM8606 */
+enum pm8606_ref_gp_and_osc_clients {
+	REF_GP_NO_CLIENTS       = 0,
+	WLED1_DUTY              = (1<<0), /*PF 0x02.7:0*/
+	WLED2_DUTY              = (1<<1), /*PF 0x04.7:0*/
+	WLED3_DUTY              = (1<<2), /*PF 0x06.7:0*/
+	RGB1_ENABLE             = (1<<3), /*PF 0x07.1*/
+	RGB2_ENABLE             = (1<<4), /*PF 0x07.2*/
+	LDO_VBR_EN              = (1<<5), /*PF 0x12.0*/
+	REF_GP_MAX_CLIENT       = 0xFFFF
+};
+
 /* Interrupt Number in 88PM8607 */
 enum {
 	PM8607_IRQ_ONKEY,
@@ -295,22 +313,25 @@ enum {
 
 struct pm860x_chip {
 	struct device		*dev;
-	struct mutex		io_lock;
 	struct mutex		irq_lock;
+	struct mutex		osc_lock;
 	struct i2c_client	*client;
 	struct i2c_client	*companion;	/* companion chip client */
+	struct regmap           *regmap;
+	struct regmap           *regmap_companion;
 
 	int			buck3_double;	/* DVC ramp slope double */
 	unsigned short		companion_addr;
+	unsigned short		osc_vote;
 	int			id;
 	int			irq_mode;
 	int			irq_base;
 	int			core_irq;
 	unsigned char		chip_version;
+	unsigned char		osc_status;
 
+	unsigned int            wakeup_flag;
 };
-
-#define PM8607_MAX_REGULATOR	PM8607_ID_RG_MAX	/* 3 Bucks, 13 LDOs */
 
 enum {
 	GI2C_PORT = 0,
@@ -328,6 +349,11 @@ struct pm860x_led_pdata {
 	int		id;
 	int		iset;
 	unsigned long	flags;
+};
+
+struct pm860x_rtc_pdata {
+	int		(*sync)(unsigned int ticks);
+	int		vrtc;
 };
 
 struct pm860x_touch_pdata {
@@ -349,18 +375,22 @@ struct pm860x_power_pdata {
 struct pm860x_platform_data {
 	struct pm860x_backlight_pdata	*backlight;
 	struct pm860x_led_pdata		*led;
+	struct pm860x_rtc_pdata		*rtc;
 	struct pm860x_touch_pdata	*touch;
 	struct pm860x_power_pdata	*power;
+	struct regulator_init_data	*regulator;
 
 	unsigned short	companion_addr;	/* I2C address of companion chip */
 	int		i2c_port;	/* Controlled by GI2C or PI2C */
 	int		irq_mode;	/* Clear interrupt by read/write(0/1) */
 	int		irq_base;	/* IRQ base number of 88pm860x */
-	struct regulator_init_data *regulator[PM8607_MAX_REGULATOR];
+	int		num_leds;
+	int		num_backlights;
+	int		num_regulators;
 };
 
-extern char pm860x_backlight_name[][MFD_NAME_SIZE];
-extern char pm860x_led_name[][MFD_NAME_SIZE];
+extern int pm8606_osc_enable(struct pm860x_chip *, unsigned short);
+extern int pm8606_osc_disable(struct pm860x_chip *, unsigned short);
 
 extern int pm860x_reg_read(struct i2c_client *, int);
 extern int pm860x_reg_write(struct i2c_client *, int, unsigned char);
@@ -368,6 +398,14 @@ extern int pm860x_bulk_read(struct i2c_client *, int, int, unsigned char *);
 extern int pm860x_bulk_write(struct i2c_client *, int, int, unsigned char *);
 extern int pm860x_set_bits(struct i2c_client *, int, unsigned char,
 			   unsigned char);
+extern int pm860x_page_reg_read(struct i2c_client *, int);
+extern int pm860x_page_reg_write(struct i2c_client *, int, unsigned char);
+extern int pm860x_page_bulk_read(struct i2c_client *, int, int,
+				 unsigned char *);
+extern int pm860x_page_bulk_write(struct i2c_client *, int, int,
+				  unsigned char *);
+extern int pm860x_page_set_bits(struct i2c_client *, int, unsigned char,
+				unsigned char);
 
 extern int pm860x_device_init(struct pm860x_chip *chip,
 			      struct pm860x_platform_data *pdata) __devinit ;

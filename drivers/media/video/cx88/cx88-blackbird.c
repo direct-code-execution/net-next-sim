@@ -9,7 +9,7 @@
  *    (c) 2005-2006 Mauro Carvalho Chehab <mchehab@infradead.org>
  *        - video_ioctl2 conversion
  *
- *  Includes parts from the ivtv driver( http://ivtv.sourceforge.net/),
+ *  Includes parts from the ivtv driver <http://sourceforge.net/projects/ivtv/>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -33,7 +33,6 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/firmware.h>
-#include <linux/smp_lock.h>
 #include <media/v4l2-common.h>
 #include <media/v4l2-ioctl.h>
 #include <media/cx2341x.h>
@@ -43,6 +42,7 @@
 MODULE_DESCRIPTION("driver for cx2388x/cx23416 based mpeg encoder cards");
 MODULE_AUTHOR("Jelle Foks <jelle@foks.us>, Gerd Knorr <kraxel@bytesex.org> [SuSE Labs]");
 MODULE_LICENSE("GPL");
+MODULE_VERSION(CX88_VERSION);
 
 static unsigned int mpegbufs = 32;
 module_param(mpegbufs,int,0644);
@@ -731,7 +731,6 @@ static int vidioc_querycap (struct file *file, void  *priv,
 	strcpy(cap->driver, "cx88_blackbird");
 	strlcpy(cap->card, core->board.name, sizeof(cap->card));
 	sprintf(cap->bus_info,"PCI:%s",pci_name(dev->pci));
-	cap->version = CX88_VERSION_CODE;
 	cap->capabilities =
 		V4L2_CAP_VIDEO_CAPTURE |
 		V4L2_CAP_READWRITE     |
@@ -1057,23 +1056,26 @@ static int mpeg_open(struct file *file)
 
 	dprintk( 1, "%s\n", __func__);
 
-	lock_kernel();
+	mutex_lock(&dev->core->lock);
 
 	/* Make sure we can acquire the hardware */
 	drv = cx8802_get_driver(dev, CX88_MPEG_BLACKBIRD);
-	if (drv) {
-		err = drv->request_acquire(drv);
-		if(err != 0) {
-			dprintk(1,"%s: Unable to acquire hardware, %d\n", __func__, err);
-			unlock_kernel();
-			return err;
-		}
+	if (!drv) {
+		dprintk(1, "%s: blackbird driver is not loaded\n", __func__);
+		mutex_unlock(&dev->core->lock);
+		return -ENODEV;
 	}
 
-	if (!atomic_read(&dev->core->mpeg_users) && blackbird_initialize_codec(dev) < 0) {
-		if (drv)
-			drv->request_release(drv);
-		unlock_kernel();
+	err = drv->request_acquire(drv);
+	if (err != 0) {
+		dprintk(1,"%s: Unable to acquire hardware, %d\n", __func__, err);
+		mutex_unlock(&dev->core->lock);
+		return err;
+	}
+
+	if (!dev->core->mpeg_users && blackbird_initialize_codec(dev) < 0) {
+		drv->request_release(drv);
+		mutex_unlock(&dev->core->lock);
 		return -EINVAL;
 	}
 	dprintk(1, "open dev=%s\n", video_device_node_name(vdev));
@@ -1081,9 +1083,8 @@ static int mpeg_open(struct file *file)
 	/* allocate + initialize per filehandle data */
 	fh = kzalloc(sizeof(*fh),GFP_KERNEL);
 	if (NULL == fh) {
-		if (drv)
-			drv->request_release(drv);
-		unlock_kernel();
+		drv->request_release(drv);
+		mutex_unlock(&dev->core->lock);
 		return -ENOMEM;
 	}
 	file->private_data = fh;
@@ -1094,15 +1095,14 @@ static int mpeg_open(struct file *file)
 			    V4L2_BUF_TYPE_VIDEO_CAPTURE,
 			    V4L2_FIELD_INTERLACED,
 			    sizeof(struct cx88_buffer),
-			    fh);
+			    fh, NULL);
 
 	/* FIXME: locking against other video device */
 	cx88_set_scale(dev->core, dev->width, dev->height,
 			fh->mpegq.field);
-	unlock_kernel();
 
-	atomic_inc(&dev->core->mpeg_users);
-
+	dev->core->mpeg_users++;
+	mutex_unlock(&dev->core->lock);
 	return 0;
 }
 
@@ -1112,7 +1112,9 @@ static int mpeg_release(struct file *file)
 	struct cx8802_dev *dev = fh->dev;
 	struct cx8802_driver *drv = NULL;
 
-	if (dev->mpeg_active && atomic_read(&dev->core->mpeg_users) == 1)
+	mutex_lock(&dev->core->lock);
+
+	if (dev->mpeg_active && dev->core->mpeg_users == 1)
 		blackbird_stop_codec(dev);
 
 	cx8802_cancel_buffers(fh->dev);
@@ -1120,15 +1122,19 @@ static int mpeg_release(struct file *file)
 	videobuf_stop(&fh->mpegq);
 
 	videobuf_mmap_free(&fh->mpegq);
+
 	file->private_data = NULL;
 	kfree(fh);
 
 	/* Make sure we release the hardware */
 	drv = cx8802_get_driver(dev, CX88_MPEG_BLACKBIRD);
+	WARN_ON(!drv);
 	if (drv)
 		drv->request_release(drv);
 
-	atomic_dec(&dev->core->mpeg_users);
+	dev->core->mpeg_users--;
+
+	mutex_unlock(&dev->core->lock);
 
 	return 0;
 }
@@ -1333,11 +1339,9 @@ static int cx8802_blackbird_probe(struct cx8802_driver *drv)
 	blackbird_register_video(dev);
 
 	/* initial device configuration: needed ? */
-	mutex_lock(&dev->core->lock);
 //	init_controls(core);
 	cx88_set_tvnorm(core,core->tvnorm);
 	cx88_video_mux(core,0);
-	mutex_unlock(&dev->core->lock);
 
 	return 0;
 
@@ -1364,14 +1368,8 @@ static struct cx8802_driver cx8802_blackbird_driver = {
 
 static int __init blackbird_init(void)
 {
-	printk(KERN_INFO "cx2388x blackbird driver version %d.%d.%d loaded\n",
-	       (CX88_VERSION_CODE >> 16) & 0xff,
-	       (CX88_VERSION_CODE >>  8) & 0xff,
-	       CX88_VERSION_CODE & 0xff);
-#ifdef SNAPSHOT
-	printk(KERN_INFO "cx2388x: snapshot date %04d-%02d-%02d\n",
-	       SNAPSHOT/10000, (SNAPSHOT/100)%100, SNAPSHOT%100);
-#endif
+	printk(KERN_INFO "cx2388x blackbird driver version %s loaded\n",
+	       CX88_VERSION);
 	return cx8802_register_driver(&cx8802_blackbird_driver);
 }
 
@@ -1385,11 +1383,3 @@ module_exit(blackbird_fini);
 
 module_param_named(video_debug,cx8802_mpeg_template.debug, int, 0644);
 MODULE_PARM_DESC(debug,"enable debug messages [video]");
-
-/* ----------------------------------------------------------- */
-/*
- * Local variables:
- * c-basic-offset: 8
- * End:
- * kate: eol "unix"; indent-width 3; remove-trailing-space on; replace-trailing-space-save on; tab-width 8; replace-tabs off; space-indent off; mixed-indent off
- */

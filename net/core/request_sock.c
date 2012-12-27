@@ -26,13 +26,15 @@
  * but then some measure against one socket starving all other sockets
  * would be needed.
  *
- * It was 128 by default. Experiments with real servers show, that
+ * The minimum value of it is 128. Experiments with real servers show that
  * it is absolutely not enough even at 100conn/sec. 256 cures most
- * of problems. This value is adjusted to 128 for very small machines
- * (<=32Mb of memory) and to 1024 on normal or better ones (>=256Mb).
+ * of problems.
+ * This value is adjusted to 128 for low memory machines,
+ * and it will increase in proportion to the memory of machine.
  * Note : Dont forget somaxconn that may limit backlog too.
  */
 int sysctl_max_syn_backlog = 256;
+EXPORT_SYMBOL(sysctl_max_syn_backlog);
 
 int reqsk_queue_alloc(struct request_sock_queue *queue,
 		      unsigned int nr_table_entries)
@@ -45,9 +47,7 @@ int reqsk_queue_alloc(struct request_sock_queue *queue,
 	nr_table_entries = roundup_pow_of_two(nr_table_entries + 1);
 	lopt_size += nr_table_entries * sizeof(struct request_sock *);
 	if (lopt_size > PAGE_SIZE)
-		lopt = __vmalloc(lopt_size,
-			GFP_KERNEL | __GFP_HIGHMEM | __GFP_ZERO,
-			PAGE_KERNEL);
+		lopt = vzalloc(lopt_size);
 	else
 		lopt = kzalloc(lopt_size, GFP_KERNEL);
 	if (lopt == NULL)

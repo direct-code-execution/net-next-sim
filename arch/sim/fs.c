@@ -1,13 +1,25 @@
 #include <linux/fs.h>
 #include <linux/splice.h>
 #include <linux/mount.h>
+#include <linux/sysctl.h>
+#include <fs/mount.h>
+#include <linux/slab.h>
+#include <linux/backing-dev.h>
+#include <linux/pagemap.h>
+#include <linux/user_namespace.h>
+
 #include "sim-assert.h"
 
 struct super_block;
-void kill_anon_super(struct super_block *sb)
-{
-  sim_assert (false);
-}
+
+struct backing_dev_info default_backing_dev_info = {
+	.name		= "default",
+	.ra_pages	= VM_MAX_READAHEAD * 1024 / PAGE_CACHE_SIZE,
+	.state		= 0,
+	.capabilities	= BDI_CAP_MAP_COPY,
+};
+struct user_namespace init_user_ns ;
+
 int get_sb_pseudo(struct file_system_type *type, char *str,
 		  const struct super_operations *ops, unsigned long z,
 		  struct vfsmount *mnt)
@@ -39,15 +51,36 @@ void inode_init_once(struct inode *inode)
 {
   memset(inode, 0, sizeof(*inode));
 }
-struct vfsmount *kern_mount_data(struct file_system_type *fs, void *data)
+
+// Implementation taken from vfs_kern_mount from linux/namespace.c
+struct vfsmount *kern_mount_data(struct file_system_type *type, void *data)
 {
-  // minimum stuff needed by the network stack to avoid segfaults.
-  static struct vfsmount mnt;
-  static struct super_block sb;
-  mnt.mnt_sb = &sb;
-  // initialize the superblock
-  fs->get_sb (fs, 0, 0, 0, &mnt);
-  return &mnt;
+	static struct mount local_mnt;
+	struct mount *mnt = &local_mnt;
+	struct dentry *root = 0;
+
+	memset (mnt,0,sizeof (struct mount));
+	if (!type)
+		return ERR_PTR(-ENODEV);
+	int flags = MS_KERNMOUNT;
+	char *name = type->name;
+	if (flags & MS_KERNMOUNT)
+		mnt->mnt.mnt_flags = MNT_INTERNAL;
+
+	root = type->mount(type, flags, name, data);
+	if (IS_ERR(root)) {
+		return ERR_CAST(root);
+	}
+
+	mnt->mnt.mnt_root = root;
+	mnt->mnt.mnt_sb = root->d_sb;
+	mnt->mnt_mountpoint = mnt->mnt.mnt_root;
+	mnt->mnt_parent = mnt;
+//	br_write_lock(vfsmount_lock);   DCE is monothreaded , so we do not care of lock here
+	list_add_tail(&mnt->mnt_instance, &root->d_sb->s_mounts);
+//	br_write_unlock(vfsmount_lock);  DCE is monothreaded , so we do not care of lock here
+
+	return &mnt->mnt;
 }
 
 int register_filesystem(struct file_system_type *fs)
@@ -100,7 +133,6 @@ struct dentry * d_alloc(struct dentry *entry, const struct qstr *str)
 }
 void d_instantiate(struct dentry *entry, struct inode *inode)
 {
-  sim_assert (false);
 }
 char *dynamic_dname(struct dentry *dentry, char *buffer, int buflen,
 		    const char *fmt, ...)
@@ -134,26 +166,11 @@ int fasync_helper(int a, struct file *file, int b, struct fasync_struct **c)
   sim_assert (false);
   return 0;
 }
-loff_t no_llseek(struct file *file, loff_t offset, int origin)
-{
-  sim_assert (false);
-  return 0;
-}
-void path_put(struct path *path)
-{
-  sim_assert (false);
-}
-int simple_statfs(struct dentry *entry, struct kstatfs *statfs)
-{
-  sim_assert (false);
-  return 0;
-}
 long sys_close(unsigned int fd)
 {
   sim_assert (false);
   return 0;
 }
-
 ssize_t splice_to_pipe(struct pipe_inode_info *info,
 		       struct splice_pipe_desc *desc)
 {
@@ -165,11 +182,9 @@ int splice_grow_spd(struct pipe_inode_info *info, struct splice_pipe_desc *desc)
   sim_assert (false);
   return 0;
 }
-void splice_shrink_spd(struct pipe_inode_info *info,
-		       struct splice_pipe_desc *desc)
+void splice_shrink_spd(struct pipe_inode_info *info, struct splice_pipe_desc *desc)
 {
   sim_assert (false);
-  return 0;
 }
 
 ssize_t generic_splice_sendpage(struct pipe_inode_info *pipe,
@@ -192,6 +207,40 @@ void generic_pipe_buf_unmap(struct pipe_inode_info *pipe, struct pipe_buffer *bu
 
 int generic_pipe_buf_confirm(struct pipe_inode_info *pipe, struct pipe_buffer *buf)
 {
-  sim_assert (false);
-  return 0;
+	  sim_assert (false);
+	  return 0;
+}
+
+int proc_nr_inodes(ctl_table *table, int write, void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	  sim_assert (false);
+	  return 0;
+}
+
+int proc_nr_dentry(ctl_table *table, int write, void __user *buffer,
+		   size_t *lenp, loff_t *ppos)
+{
+	sim_assert (false);
+		  return 0;
+}
+
+/*
+ * Handle writeback of dirty data for the device backed by this bdi. Also
+ * wakes up periodically and does kupdated style flushing.
+ */
+int bdi_writeback_thread(void *data)
+{
+	sim_assert (false);
+
+	return 0;
+}
+
+void get_filesystem(struct file_system_type *fs)
+{
+	return;
+}
+//#include <fs/proc/proc_sysctl.c>
+unsigned int nr_free_buffer_pages(void)
+{
+	return 1024;
 }

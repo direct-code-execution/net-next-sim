@@ -15,7 +15,6 @@
 #include <asm/io.h>			/* need byte IO */
 #include <linux/spinlock.h>		/* And spinlocks */
 #include <linux/delay.h>
-#include <asm/system.h>
 
 
 #ifdef HAVE_REALLY_SLOW_DMA_CONTROLLER
@@ -91,7 +90,10 @@
 #define MAX_DMA_ADDRESS		(PAGE_OFFSET + 0x01000000)
 #endif
 #define MAX_DMA_PFN		PFN_DOWN(virt_to_phys((void *)MAX_DMA_ADDRESS))
+
+#ifndef MAX_DMA32_PFN
 #define MAX_DMA32_PFN		(1UL << (32 - PAGE_SHIFT))
+#endif
 
 /* 8237 DMA controllers */
 #define IO_DMA1_BASE	0x00	/* 8 bit slave DMA, channels 0..3 */

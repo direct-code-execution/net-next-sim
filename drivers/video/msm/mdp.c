@@ -28,6 +28,7 @@
 #include <mach/msm_iomap.h>
 #include <mach/msm_fb.h>
 #include <linux/platform_device.h>
+#include <linux/export.h>
 
 #include "mdp_hw.h"
 
@@ -90,7 +91,7 @@ static int locked_disable_mdp_irq(struct mdp_info *mdp, uint32_t mask)
 	mdp_irq_mask &= ~(mask);
 	/* if no one is waiting on the interrupt, disable it */
 	if (!mdp_irq_mask) {
-		disable_irq(mdp->irq);
+		disable_irq_nosync(mdp->irq);
 		if (clk)
 			clk_disable(clk);
 	}
@@ -406,8 +407,7 @@ int mdp_probe(struct platform_device *pdev)
 		goto error_get_irq;
 	}
 
-	mdp->base = ioremap(resource->start,
-			    resource->end - resource->start);
+	mdp->base = ioremap(resource->start, resource_size(resource));
 	if (mdp->base == 0) {
 		printk(KERN_ERR "msmfb: cannot allocate mdp regs!\n");
 		ret = -ENOMEM;
@@ -422,10 +422,11 @@ int mdp_probe(struct platform_device *pdev)
 	clk = clk_get(&pdev->dev, "mdp_clk");
 	if (IS_ERR(clk)) {
 		printk(KERN_INFO "mdp: failed to get mdp clk");
-		return PTR_ERR(clk);
+		ret = PTR_ERR(clk);
+		goto error_get_clk;
 	}
 
-	ret = request_irq(mdp->irq, mdp_isr, IRQF_DISABLED, "msm_mdp", mdp);
+	ret = request_irq(mdp->irq, mdp_isr, 0, "msm_mdp", mdp);
 	if (ret)
 		goto error_request_irq;
 	disable_irq(mdp->irq);
@@ -482,6 +483,7 @@ int mdp_probe(struct platform_device *pdev)
 	/* register mdp device */
 	mdp->mdp_dev.dev.parent = &pdev->dev;
 	mdp->mdp_dev.dev.class = mdp_class;
+	dev_set_name(&mdp->mdp_dev.dev, "mdp%d", pdev->id);
 
 	/* if you can remove the platform device you'd have to implement
 	 * this:
@@ -495,6 +497,7 @@ int mdp_probe(struct platform_device *pdev)
 error_device_register:
 	free_irq(mdp->irq, mdp);
 error_request_irq:
+error_get_clk:
 	iounmap(mdp->base);
 error_get_irq:
 error_ioremap:

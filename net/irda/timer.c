@@ -24,7 +24,6 @@
  *
  ********************************************************************/
 
-#include <asm/system.h>
 #include <linux/delay.h>
 
 #include <net/irda/timer.h>
@@ -59,7 +58,7 @@ void irlap_start_query_timer(struct irlap_cb *self, int S, int s)
 	 * slot time, plus add some extra time to properly receive the last
 	 * discovery packet (which is longer due to extra discovery info),
 	 * to avoid messing with for incomming connections requests and
-	 * to accomodate devices that perform discovery slower than us.
+	 * to accommodate devices that perform discovery slower than us.
 	 * Jean II */
 	timeout = ((sysctl_slot_timeout * HZ / 1000) * (S - s)
 		   + XIDEXTRA_TIMEOUT + SMALLBUSY_TIMEOUT);

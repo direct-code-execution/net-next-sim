@@ -48,7 +48,7 @@ MODULE_DESCRIPTION("Wistron laptop button driver");
 MODULE_LICENSE("GPL v2");
 MODULE_VERSION("0.3");
 
-static int force; /* = 0; */
+static bool force; /* = 0; */
 module_param(force, bool, 0);
 MODULE_PARM_DESC(force, "Load even if computer is not in database");
 
@@ -274,7 +274,7 @@ static struct key_entry keymap_fs_amilo_pro_v3505[] __initdata = {
 	{ KE_BLUETOOTH, 0x30 },                      /* Fn+F10 */
 	{ KE_KEY,       0x31, {KEY_MAIL} },          /* mail button */
 	{ KE_KEY,       0x36, {KEY_WWW} },           /* www button */
-	{ KE_WIFI,      0x78 },                      /* satelite dish button */
+	{ KE_WIFI,      0x78 },                      /* satellite dish button */
 	{ KE_END,       0 }
 };
 

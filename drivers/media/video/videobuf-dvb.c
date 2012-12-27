@@ -57,7 +57,7 @@ static int videobuf_dvb_thread(void *data)
 		buf = list_entry(dvb->dvbq.stream.next,
 				 struct videobuf_buffer, stream);
 		list_del(&buf->stream);
-		err = videobuf_waiton(buf,0,1);
+		err = videobuf_waiton(&dvb->dvbq, buf, 0, 1);
 
 		/* no more feeds left or stop_feed() asked us to quit */
 		if (0 == dvb->nfeeds)
@@ -226,9 +226,10 @@ static int videobuf_dvb_register_frontend(struct dvb_adapter *adapter,
 	}
 
 	/* register network adapter */
-	dvb_net_init(adapter, &dvb->net, &dvb->demux.dmx);
-	if (dvb->net.dvbdev == NULL) {
-		result = -ENOMEM;
+	result = dvb_net_init(adapter, &dvb->net, &dvb->demux.dmx);
+	if (result < 0) {
+		printk(KERN_WARNING "%s: dvb_net_init failed (errno = %d)\n",
+		       dvb->name, result);
 		goto fail_fe_conn;
 	}
 	return 0;

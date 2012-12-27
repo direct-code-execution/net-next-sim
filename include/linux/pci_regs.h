@@ -223,7 +223,7 @@
 #define  PCI_PM_CAP_PME_CLOCK	0x0008	/* PME clock required */
 #define  PCI_PM_CAP_RESERVED    0x0010  /* Reserved field */
 #define  PCI_PM_CAP_DSI		0x0020	/* Device specific initialization */
-#define  PCI_PM_CAP_AUX_POWER	0x01C0	/* Auxilliary power support mask */
+#define  PCI_PM_CAP_AUX_POWER	0x01C0	/* Auxiliary power support mask */
 #define  PCI_PM_CAP_D1		0x0200	/* D1 power state support */
 #define  PCI_PM_CAP_D2		0x0400	/* D2 power state support */
 #define  PCI_PM_CAP_PME		0x0800	/* PME pin supported */
@@ -300,12 +300,22 @@
 #define PCI_MSI_DATA_64		12	/* 16 bits of data for 64-bit devices */
 #define PCI_MSI_MASK_64		16	/* Mask bits register for 64-bit devices */
 
-/* MSI-X registers (these are at offset PCI_MSIX_FLAGS) */
+/* MSI-X registers */
 #define PCI_MSIX_FLAGS		2
 #define  PCI_MSIX_FLAGS_QSIZE	0x7FF
 #define  PCI_MSIX_FLAGS_ENABLE	(1 << 15)
 #define  PCI_MSIX_FLAGS_MASKALL	(1 << 14)
-#define PCI_MSIX_FLAGS_BIRMASK	(7 << 0)
+#define PCI_MSIX_TABLE		4
+#define PCI_MSIX_PBA		8
+#define  PCI_MSIX_FLAGS_BIRMASK	(7 << 0)
+
+/* MSI-X entry's format */
+#define PCI_MSIX_ENTRY_SIZE		16
+#define  PCI_MSIX_ENTRY_LOWER_ADDR	0
+#define  PCI_MSIX_ENTRY_UPPER_ADDR	4
+#define  PCI_MSIX_ENTRY_DATA		8
+#define  PCI_MSIX_ENTRY_VECTOR_CTRL	12
+#define   PCI_MSIX_ENTRY_CTRL_MASKBIT	1
 
 /* CompactPCI Hotswap Register */
 
@@ -381,8 +391,9 @@
 #define  PCI_EXP_TYPE_UPSTREAM	0x5	/* Upstream Port */
 #define  PCI_EXP_TYPE_DOWNSTREAM 0x6	/* Downstream Port */
 #define  PCI_EXP_TYPE_PCI_BRIDGE 0x7	/* PCI/PCI-X Bridge */
+#define  PCI_EXP_TYPE_PCIE_BRIDGE 0x8	/* PCI/PCI-X to PCIE Bridge */
 #define  PCI_EXP_TYPE_RC_END	0x9	/* Root Complex Integrated Endpoint */
-#define  PCI_EXP_TYPE_RC_EC	0x10	/* Root Complex Event Collector */
+#define  PCI_EXP_TYPE_RC_EC	0xa	/* Root Complex Event Collector */
 #define PCI_EXP_FLAGS_SLOT	0x0100	/* Slot implemented */
 #define PCI_EXP_FLAGS_IRQ	0x3e00	/* Interrupt message number */
 #define PCI_EXP_DEVCAP		4	/* Device capabilities */
@@ -425,7 +436,7 @@
 #define  PCI_EXP_LNKCAP_L0SEL	0x00007000 /* L0s Exit Latency */
 #define  PCI_EXP_LNKCAP_L1EL	0x00038000 /* L1 Exit Latency */
 #define  PCI_EXP_LNKCAP_CLKPM	0x00040000 /* L1 Clock Power Management */
-#define  PCI_EXP_LNKCAP_SDERC	0x00080000 /* Suprise Down Error Reporting Capable */
+#define  PCI_EXP_LNKCAP_SDERC	0x00080000 /* Surprise Down Error Reporting Capable */
 #define  PCI_EXP_LNKCAP_DLLLARC	0x00100000 /* Data Link Layer Link Active Reporting Capable */
 #define  PCI_EXP_LNKCAP_LBNC	0x00200000 /* Link Bandwidth Notification Capability */
 #define  PCI_EXP_LNKCAP_PN	0xff000000 /* Port Number */
@@ -494,10 +505,22 @@
 #define  PCI_EXP_RTCTL_CRSSVE	0x10	/* CRS Software Visibility Enable */
 #define PCI_EXP_RTCAP		30	/* Root Capabilities */
 #define PCI_EXP_RTSTA		32	/* Root Status */
+#define PCI_EXP_RTSTA_PME	0x10000 /* PME status */
+#define PCI_EXP_RTSTA_PENDING	0x20000 /* PME pending */
 #define PCI_EXP_DEVCAP2		36	/* Device Capabilities 2 */
 #define  PCI_EXP_DEVCAP2_ARI	0x20	/* Alternative Routing-ID */
+#define  PCI_EXP_DEVCAP2_LTR	0x800	/* Latency tolerance reporting */
+#define  PCI_EXP_OBFF_MASK	0xc0000 /* OBFF support mechanism */
+#define  PCI_EXP_OBFF_MSG	0x40000 /* New message signaling */
+#define  PCI_EXP_OBFF_WAKE	0x80000 /* Re-use WAKE# for OBFF */
 #define PCI_EXP_DEVCTL2		40	/* Device Control 2 */
 #define  PCI_EXP_DEVCTL2_ARI	0x20	/* Alternative Routing-ID */
+#define  PCI_EXP_IDO_REQ_EN	0x100	/* ID-based ordering request enable */
+#define  PCI_EXP_IDO_CMP_EN	0x200	/* ID-based ordering completion enable */
+#define  PCI_EXP_LTR_EN		0x400	/* Latency tolerance reporting */
+#define  PCI_EXP_OBFF_MSGA_EN	0x2000	/* OBFF enable with Message type A */
+#define  PCI_EXP_OBFF_MSGB_EN	0x4000	/* OBFF enable with Message type B */
+#define  PCI_EXP_OBFF_WAKE_EN	0x6000	/* OBFF using WAKE# signaling */
 #define PCI_EXP_LNKCTL2		48	/* Link Control 2 */
 #define PCI_EXP_SLTCTL2		56	/* Slot Control 2 */
 
@@ -515,6 +538,9 @@
 #define PCI_EXT_CAP_ID_ARI	14
 #define PCI_EXT_CAP_ID_ATS	15
 #define PCI_EXT_CAP_ID_SRIOV	16
+#define PCI_EXT_CAP_ID_PRI	19
+#define PCI_EXT_CAP_ID_LTR	24
+#define PCI_EXT_CAP_ID_PASID	27
 
 /* Advanced Error Reporting */
 #define PCI_ERR_UNCOR_STATUS	4	/* Uncorrectable Error Status */
@@ -640,6 +666,26 @@
 #define  PCI_ATS_CTRL_STU(x)	((x) & 0x1f)	/* Smallest Translation Unit */
 #define  PCI_ATS_MIN_STU	12	/* shift of minimum STU block */
 
+/* Page Request Interface */
+#define PCI_PRI_CTRL		0x04	/* PRI control register */
+#define  PCI_PRI_CTRL_ENABLE	0x01	/* Enable */
+#define  PCI_PRI_CTRL_RESET	0x02	/* Reset */
+#define PCI_PRI_STATUS		0x06	/* PRI status register */
+#define  PCI_PRI_STATUS_RF	0x001	/* Response Failure */
+#define  PCI_PRI_STATUS_UPRGI	0x002	/* Unexpected PRG index */
+#define  PCI_PRI_STATUS_STOPPED	0x100	/* PRI Stopped */
+#define PCI_PRI_MAX_REQ		0x08	/* PRI max reqs supported */
+#define PCI_PRI_ALLOC_REQ	0x0c	/* PRI max reqs allowed */
+
+/* PASID capability */
+#define PCI_PASID_CAP		0x04    /* PASID feature register */
+#define  PCI_PASID_CAP_EXEC	0x02	/* Exec permissions Supported */
+#define  PCI_PASID_CAP_PRIV	0x04	/* Priviledge Mode Supported */
+#define PCI_PASID_CTRL		0x06    /* PASID control register */
+#define  PCI_PASID_CTRL_ENABLE	0x01	/* Enable bit */
+#define  PCI_PASID_CTRL_EXEC	0x02	/* Exec permissions Enable */
+#define  PCI_PASID_CTRL_PRIV	0x04	/* Priviledge Mode Enable */
+
 /* Single Root I/O Virtualization */
 #define PCI_SRIOV_CAP		0x04	/* SR-IOV Capabilities */
 #define  PCI_SRIOV_CAP_VFM	0x01	/* VF Migration Capable */
@@ -670,6 +716,12 @@
 #define  PCI_SRIOV_VFM_MI	0x1	/* Dormant.MigrateIn */
 #define  PCI_SRIOV_VFM_MO	0x2	/* Active.MigrateOut */
 #define  PCI_SRIOV_VFM_AV	0x3	/* Active.Available */
+
+#define PCI_LTR_MAX_SNOOP_LAT	0x4
+#define PCI_LTR_MAX_NOSNOOP_LAT	0x6
+#define  PCI_LTR_VALUE_MASK	0x000003ff
+#define  PCI_LTR_SCALE_MASK	0x00001c00
+#define  PCI_LTR_SCALE_SHIFT	10
 
 /* Access Control Service */
 #define PCI_ACS_CAP		0x04	/* ACS Capability Register */

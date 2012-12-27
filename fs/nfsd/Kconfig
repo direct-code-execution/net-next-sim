@@ -70,6 +70,7 @@ config NFSD_V4
 	select NFSD_V3
 	select FS_POSIX_ACL
 	select SUNRPC_GSS
+	select CRYPTO
 	help
 	  This option enables support in your system's NFS server for
 	  version 4 of the NFS protocol (RFC 3530).
@@ -77,5 +78,15 @@ config NFSD_V4
 	  To export files using NFSv4, you need to install additional user
 	  space programs which can be found in the Linux nfs-utils package,
 	  available from http://linux-nfs.org/.
+
+	  If unsure, say N.
+
+config NFSD_FAULT_INJECTION
+	bool "NFS server manual fault injection"
+	depends on NFSD_V4 && DEBUG_KERNEL
+	help
+	  This option enables support for manually injecting faults
+	  into the NFS server.  This is intended to be used for
+	  testing error recovery on the NFS client.
 
 	  If unsure, say N.

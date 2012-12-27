@@ -109,13 +109,16 @@ static void __init coyote_init(void)
 #ifdef CONFIG_ARCH_ADI_COYOTE
 MACHINE_START(ADI_COYOTE, "ADI Engineering Coyote")
 	/* Maintainer: MontaVista Software, Inc. */
-	.phys_io	= IXP4XX_PERIPHERAL_BASE_PHYS,
-	.io_pg_offst	= ((IXP4XX_PERIPHERAL_BASE_VIRT) >> 18) & 0xfffc,
 	.map_io		= ixp4xx_map_io,
+	.init_early	= ixp4xx_init_early,
 	.init_irq	= ixp4xx_init_irq,
 	.timer		= &ixp4xx_timer,
-	.boot_params	= 0x0100,
+	.atag_offset	= 0x100,
 	.init_machine	= coyote_init,
+#if defined(CONFIG_PCI)
+	.dma_zone_size	= SZ_64M,
+#endif
+	.restart	= ixp4xx_restart,
 MACHINE_END
 #endif
 
@@ -126,13 +129,13 @@ MACHINE_END
 #ifdef CONFIG_MACH_IXDPG425
 MACHINE_START(IXDPG425, "Intel IXDPG425")
 	/* Maintainer: MontaVista Software, Inc. */
-	.phys_io	= IXP4XX_PERIPHERAL_BASE_PHYS,
-	.io_pg_offst	= ((IXP4XX_PERIPHERAL_BASE_VIRT) >> 18) & 0xfffc,
 	.map_io		= ixp4xx_map_io,
+	.init_early	= ixp4xx_init_early,
 	.init_irq	= ixp4xx_init_irq,
 	.timer		= &ixp4xx_timer,
-	.boot_params	= 0x0100,
+	.atag_offset	= 0x100,
 	.init_machine	= coyote_init,
+	.restart	= ixp4xx_restart,
 MACHINE_END
 #endif
 

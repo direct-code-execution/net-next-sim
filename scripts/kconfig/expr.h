@@ -10,6 +10,7 @@
 extern "C" {
 #endif
 
+#include <assert.h>
 #include <stdio.h>
 #ifndef __cplusplus
 #include <stdbool.h>
@@ -18,13 +19,9 @@ extern "C" {
 struct file {
 	struct file *next;
 	struct file *parent;
-	char *name;
+	const char *name;
 	int lineno;
-	int flags;
 };
-
-#define FILE_BUSY		0x0001
-#define FILE_SCANNED		0x0002
 
 typedef enum tristate {
 	no, mod, yes
@@ -164,6 +161,7 @@ struct menu {
 	struct menu *list;
 	struct symbol *sym;
 	struct property *prompt;
+	struct expr *visibility;
 	struct expr *dep;
 	unsigned int flags;
 	char *help;
@@ -174,8 +172,6 @@ struct menu {
 
 #define MENU_CHANGED		0x0001
 #define MENU_ROOT		0x0002
-
-#ifndef SWIG
 
 extern struct file *file_list;
 extern struct file *current_file;
@@ -191,7 +187,7 @@ struct expr *expr_alloc_two(enum expr_type type, struct expr *e1, struct expr *e
 struct expr *expr_alloc_comp(enum expr_type type, struct symbol *s1, struct symbol *s2);
 struct expr *expr_alloc_and(struct expr *e1, struct expr *e2);
 struct expr *expr_alloc_or(struct expr *e1, struct expr *e2);
-struct expr *expr_copy(struct expr *org);
+struct expr *expr_copy(const struct expr *org);
 void expr_free(struct expr *e);
 int expr_eq(struct expr *e1, struct expr *e2);
 void expr_eliminate_eq(struct expr **ep1, struct expr **ep2);
@@ -206,6 +202,7 @@ struct expr *expr_extract_eq_and(struct expr **ep1, struct expr **ep2);
 struct expr *expr_extract_eq_or(struct expr **ep1, struct expr **ep2);
 void expr_extract_eq(enum expr_type type, struct expr **ep, struct expr **ep1, struct expr **ep2);
 struct expr *expr_trans_compare(struct expr *e, enum expr_type type, struct symbol *sym);
+struct expr *expr_simplify_unmet_dep(struct expr *e1, struct expr *e2);
 
 void expr_fprint(struct expr *e, FILE *out);
 struct gstr; /* forward */
@@ -220,7 +217,6 @@ static inline int expr_is_no(struct expr *e)
 {
 	return e && (e->type == E_SYMBOL && e->left.sym == &symbol_no);
 }
-#endif
 
 #ifdef __cplusplus
 }

@@ -27,8 +27,8 @@
 
 #define MDR1_MODE_MASK			0x07
 
-static volatile u8 *uart_base;
-static int uart_shift;
+volatile u8 *uart_base;
+int uart_shift;
 
 /*
  * Store the DEBUG_LL uart number into memory.
@@ -36,7 +36,13 @@ static int uart_shift;
  */
 static void set_omap_uart_info(unsigned char port)
 {
-	*(volatile u32 *)OMAP_UART_INFO = port;
+	/*
+	 * Get address of some.bss variable and round it down
+	 * a la CONFIG_AUTO_ZRELADDR.
+	 */
+	u32 ram_start = (u32)&uart_shift & 0xf8000000;
+	u32 *uart_info = (u32 *)(ram_start + OMAP_UART_INFO_OFS);
+	*uart_info = port;
 }
 
 static void putc(int c)
@@ -93,6 +99,10 @@ static inline void flush(void)
 #define DEBUG_LL_ZOOM(mach)						\
 	_DEBUG_LL_ENTRY(mach, ZOOM_UART_BASE, ZOOM_PORT_SHIFT, ZOOM_UART)
 
+#define DEBUG_LL_TI81XX(p, mach)					\
+	_DEBUG_LL_ENTRY(mach, TI81XX_UART##p##_BASE, OMAP_PORT_SHIFT,	\
+		TI81XXUART##p)
+
 static inline void __arch_decomp_setup(unsigned long arch_id)
 {
 	int port = 0;
@@ -125,7 +135,6 @@ static inline void __arch_decomp_setup(unsigned long arch_id)
 		DEBUG_LL_OMAP1(3, sx1);
 
 		/* omap2 based boards using UART1 */
-		DEBUG_LL_OMAP2(1, omap2evm);
 		DEBUG_LL_OMAP2(1, omap_2430sdp);
 		DEBUG_LL_OMAP2(1, omap_apollon);
 		DEBUG_LL_OMAP2(1, omap_h4);
@@ -139,10 +148,19 @@ static inline void __arch_decomp_setup(unsigned long arch_id)
 		DEBUG_LL_OMAP2(1, omap3evm);
 		DEBUG_LL_OMAP3(1, omap_3430sdp);
 		DEBUG_LL_OMAP3(1, omap_3630sdp);
+		DEBUG_LL_OMAP3(1, omap3530_lv_som);
+		DEBUG_LL_OMAP3(1, omap3_torpedo);
 
 		/* omap3 based boards using UART3 */
 		DEBUG_LL_OMAP3(3, cm_t35);
+		DEBUG_LL_OMAP3(3, cm_t3517);
+		DEBUG_LL_OMAP3(3, cm_t3730);
+		DEBUG_LL_OMAP3(3, craneboard);
+		DEBUG_LL_OMAP3(3, devkit8000);
 		DEBUG_LL_OMAP3(3, igep0020);
+		DEBUG_LL_OMAP3(3, igep0030);
+		DEBUG_LL_OMAP3(3, nokia_rm680);
+		DEBUG_LL_OMAP3(3, nokia_rm696);
 		DEBUG_LL_OMAP3(3, nokia_rx51);
 		DEBUG_LL_OMAP3(3, omap3517evm);
 		DEBUG_LL_OMAP3(3, omap3_beagle);
@@ -153,10 +171,17 @@ static inline void __arch_decomp_setup(unsigned long arch_id)
 
 		/* omap4 based boards using UART3 */
 		DEBUG_LL_OMAP4(3, omap_4430sdp);
+		DEBUG_LL_OMAP4(3, omap4_panda);
 
 		/* zoom2/3 external uart */
 		DEBUG_LL_ZOOM(omap_zoom2);
 		DEBUG_LL_ZOOM(omap_zoom3);
+
+		/* TI8168 base boards using UART3 */
+		DEBUG_LL_TI81XX(3, ti8168evm);
+
+		/* TI8148 base boards using UART1 */
+		DEBUG_LL_TI81XX(1, ti8148evm);
 
 	} while (0);
 }

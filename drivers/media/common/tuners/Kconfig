@@ -23,18 +23,19 @@ config MEDIA_TUNER
 	depends on VIDEO_MEDIA && I2C
 	select MEDIA_TUNER_XC2028 if !MEDIA_TUNER_CUSTOMISE
 	select MEDIA_TUNER_XC5000 if !MEDIA_TUNER_CUSTOMISE
+	select MEDIA_TUNER_XC4000 if !MEDIA_TUNER_CUSTOMISE
 	select MEDIA_TUNER_MT20XX if !MEDIA_TUNER_CUSTOMISE
 	select MEDIA_TUNER_TDA8290 if !MEDIA_TUNER_CUSTOMISE
-	select MEDIA_TUNER_TEA5761 if !MEDIA_TUNER_CUSTOMISE
+	select MEDIA_TUNER_TEA5761 if !MEDIA_TUNER_CUSTOMISE && EXPERIMENTAL
 	select MEDIA_TUNER_TEA5767 if !MEDIA_TUNER_CUSTOMISE
 	select MEDIA_TUNER_SIMPLE if !MEDIA_TUNER_CUSTOMISE
 	select MEDIA_TUNER_TDA9887 if !MEDIA_TUNER_CUSTOMISE
 	select MEDIA_TUNER_MC44S803 if !MEDIA_TUNER_CUSTOMISE
 
-menuconfig MEDIA_TUNER_CUSTOMISE
+config MEDIA_TUNER_CUSTOMISE
 	bool "Customize analog and hybrid tuner modules to build"
 	depends on MEDIA_TUNER
-	default y if EMBEDDED
+	default y if EXPERT
 	help
 	  This allows the user to deselect tuner drivers unnecessary
 	  for their hardware from the build. Use this option with care
@@ -44,7 +45,8 @@ menuconfig MEDIA_TUNER_CUSTOMISE
 
 	  If unsure say N.
 
-if MEDIA_TUNER_CUSTOMISE
+menu "Customize TV tuners"
+	visible if MEDIA_TUNER_CUSTOMISE
 
 config MEDIA_TUNER_SIMPLE
 	tristate "Simple tuner support"
@@ -114,6 +116,13 @@ config MEDIA_TUNER_MT2060
 	help
 	  A driver for the silicon IF tuner MT2060 from Microtune.
 
+config MEDIA_TUNER_MT2063
+	tristate "Microtune MT2063 silicon IF tuner"
+	depends on VIDEO_MEDIA && I2C
+	default m if MEDIA_TUNER_CUSTOMISE
+	help
+	  A driver for the silicon IF tuner MT2063 from Microtune.
+
 config MEDIA_TUNER_MT2266
 	tristate "Microtune MT2266 silicon tuner"
 	depends on VIDEO_MEDIA && I2C
@@ -151,6 +160,15 @@ config MEDIA_TUNER_XC5000
 	  This device is only used inside a SiP called together with a
 	  demodulator for now.
 
+config MEDIA_TUNER_XC4000
+	tristate "Xceive XC4000 silicon tuner"
+	depends on VIDEO_MEDIA && I2C
+	default m if MEDIA_TUNER_CUSTOMISE
+	help
+	  A driver for the silicon tuner XC4000 from Xceive.
+	  This device is only used inside a SiP called together with a
+	  demodulator for now.
+
 config MEDIA_TUNER_MXL5005S
 	tristate "MaxLinear MSL5005S silicon tuner"
 	depends on VIDEO_MEDIA && I2C
@@ -179,4 +197,18 @@ config MEDIA_TUNER_MAX2165
 	help
 	  A driver for the silicon tuner MAX2165 from Maxim.
 
-endif # MEDIA_TUNER_CUSTOMISE
+config MEDIA_TUNER_TDA18218
+	tristate "NXP TDA18218 silicon tuner"
+	depends on VIDEO_MEDIA && I2C
+	default m if MEDIA_TUNER_CUSTOMISE
+	help
+	  NXP TDA18218 silicon tuner driver.
+
+config MEDIA_TUNER_TDA18212
+	tristate "NXP TDA18212 silicon tuner"
+	depends on VIDEO_MEDIA && I2C
+	default m if MEDIA_TUNER_CUSTOMISE
+	help
+	  NXP TDA18212 silicon tuner driver.
+
+endmenu

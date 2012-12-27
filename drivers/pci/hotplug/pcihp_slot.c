@@ -24,6 +24,7 @@
  */
 
 #include <linux/pci.h>
+#include <linux/export.h>
 #include <linux/pci_hotplug.h>
 
 static struct hpp_type0 pci_default_type0 = {
@@ -168,6 +169,10 @@ void pci_configure_slot(struct pci_dev *dev)
 			(dev->hdr_type == PCI_HEADER_TYPE_BRIDGE &&
 			(dev->class >> 8) == PCI_CLASS_BRIDGE_PCI)))
 		return;
+
+	if (dev->bus && dev->bus->self)
+		pcie_bus_configure_settings(dev->bus,
+					    dev->bus->self->pcie_mpss);
 
 	memset(&hpp, 0, sizeof(hpp));
 	ret = pci_get_hp_params(dev, &hpp);

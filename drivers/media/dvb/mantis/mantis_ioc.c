@@ -24,6 +24,7 @@
 #include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/interrupt.h>
+#include <asm/io.h>
 
 #include "dmxdev.h"
 #include "dvbdev.h"
@@ -68,21 +69,14 @@ int mantis_get_mac(struct mantis_pci *mantis)
 		return err;
 	}
 
-	dprintk(MANTIS_ERROR, 0,
-		"    MAC Address=[%02x:%02x:%02x:%02x:%02x:%02x]\n",
-		mac_addr[0],
-		mac_addr[1],
-		mac_addr[2],
-		mac_addr[3],
-		mac_addr[4],
-		mac_addr[5]);
+	dprintk(MANTIS_ERROR, 0, "    MAC Address=[%pM]\n", mac_addr);
 
 	return 0;
 }
 EXPORT_SYMBOL_GPL(mantis_get_mac);
 
 /* Turn the given bit on or off. */
-void gpio_set_bits(struct mantis_pci *mantis, u32 bitpos, u8 value)
+void mantis_gpio_set_bits(struct mantis_pci *mantis, u32 bitpos, u8 value)
 {
 	u32 cur;
 
@@ -97,7 +91,7 @@ void gpio_set_bits(struct mantis_pci *mantis, u32 bitpos, u8 value)
 	mmwrite(mantis->gpio_status, MANTIS_GPIF_ADDR);
 	mmwrite(0x00, MANTIS_GPIF_DOUT);
 }
-EXPORT_SYMBOL_GPL(gpio_set_bits);
+EXPORT_SYMBOL_GPL(mantis_gpio_set_bits);
 
 int mantis_stream_control(struct mantis_pci *mantis, enum mantis_stream_control stream_ctl)
 {

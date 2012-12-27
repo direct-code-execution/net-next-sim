@@ -207,59 +207,9 @@ static int vr41xx_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *wkalrm)
 	return 0;
 }
 
-static int vr41xx_rtc_irq_set_freq(struct device *dev, int freq)
-{
-	u64 count;
-
-	if (!is_power_of_2(freq))
-		return -EINVAL;
-	count = RTC_FREQUENCY;
-	do_div(count, freq);
-
-	spin_lock_irq(&rtc_lock);
-
-	periodic_count = count;
-	rtc1_write(RTCL1LREG, periodic_count);
-	rtc1_write(RTCL1HREG, periodic_count >> 16);
-
-	spin_unlock_irq(&rtc_lock);
-
-	return 0;
-}
-
-static int vr41xx_rtc_irq_set_state(struct device *dev, int enabled)
-{
-	if (enabled)
-		enable_irq(pie_irq);
-	else
-		disable_irq(pie_irq);
-
-	return 0;
-}
-
 static int vr41xx_rtc_ioctl(struct device *dev, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
-	case RTC_AIE_ON:
-		spin_lock_irq(&rtc_lock);
-
-		if (!alarm_enabled) {
-			enable_irq(aie_irq);
-			alarm_enabled = 1;
-		}
-
-		spin_unlock_irq(&rtc_lock);
-		break;
-	case RTC_AIE_OFF:
-		spin_lock_irq(&rtc_lock);
-
-		if (alarm_enabled) {
-			disable_irq(aie_irq);
-			alarm_enabled = 0;
-		}
-
-		spin_unlock_irq(&rtc_lock);
-		break;
 	case RTC_EPOCH_READ:
 		return put_user(epoch, (unsigned long __user *)arg);
 	case RTC_EPOCH_SET:
@@ -272,6 +222,24 @@ static int vr41xx_rtc_ioctl(struct device *dev, unsigned int cmd, unsigned long 
 		return -ENOIOCTLCMD;
 	}
 
+	return 0;
+}
+
+static int vr41xx_rtc_alarm_irq_enable(struct device *dev, unsigned int enabled)
+{
+	spin_lock_irq(&rtc_lock);
+	if (enabled) {
+		if (!alarm_enabled) {
+			enable_irq(aie_irq);
+			alarm_enabled = 1;
+		}
+	} else {
+		if (alarm_enabled) {
+			disable_irq(aie_irq);
+			alarm_enabled = 0;
+		}
+	}
+	spin_unlock_irq(&rtc_lock);
 	return 0;
 }
 
@@ -310,8 +278,6 @@ static const struct rtc_class_ops vr41xx_rtc_ops = {
 	.set_time	= vr41xx_rtc_set_time,
 	.read_alarm	= vr41xx_rtc_read_alarm,
 	.set_alarm	= vr41xx_rtc_set_alarm,
-	.irq_set_freq	= vr41xx_rtc_irq_set_freq,
-	.irq_set_state	= vr41xx_rtc_irq_set_state,
 };
 
 static int __devinit rtc_probe(struct platform_device *pdev)
@@ -367,7 +333,7 @@ static int __devinit rtc_probe(struct platform_device *pdev)
 		goto err_device_unregister;
 	}
 
-	retval = request_irq(aie_irq, elapsedtime_interrupt, IRQF_DISABLED,
+	retval = request_irq(aie_irq, elapsedtime_interrupt, 0,
 	                     "elapsed_time", pdev);
 	if (retval < 0)
 		goto err_device_unregister;
@@ -376,7 +342,7 @@ static int __devinit rtc_probe(struct platform_device *pdev)
 	if (pie_irq <= 0)
 		goto err_free_irq;
 
-	retval = request_irq(pie_irq, rtclong1_interrupt, IRQF_DISABLED,
+	retval = request_irq(pie_irq, rtclong1_interrupt, 0,
 		             "rtclong1", pdev);
 	if (retval < 0)
 		goto err_free_irq;
@@ -439,15 +405,4 @@ static struct platform_driver rtc_platform_driver = {
 	},
 };
 
-static int __init vr41xx_rtc_init(void)
-{
-	return platform_driver_register(&rtc_platform_driver);
-}
-
-static void __exit vr41xx_rtc_exit(void)
-{
-	platform_driver_unregister(&rtc_platform_driver);
-}
-
-module_init(vr41xx_rtc_init);
-module_exit(vr41xx_rtc_exit);
+module_platform_driver(rtc_platform_driver);

@@ -43,7 +43,7 @@
 #include <mach/mmc.h>
 #include <mach/pxafb.h>
 #include <mach/irda.h>
-#include <mach/pxa27x_keypad.h>
+#include <plat/pxa27x_keypad.h>
 #include <mach/udc.h>
 #include <mach/palmasoc.h>
 #include <mach/palm27x.h>
@@ -241,12 +241,13 @@ static inline void palmtx_keys_init(void) {}
 /******************************************************************************
  * NAND Flash
  ******************************************************************************/
-#if defined(CONFIG_MTD_NAND_GPIO) || defined(CONFIG_MTD_NAND_GPIO_MODULE)
+#if defined(CONFIG_MTD_NAND_PLATFORM) || \
+	defined(CONFIG_MTD_NAND_PLATFORM_MODULE)
 static void palmtx_nand_cmd_ctl(struct mtd_info *mtd, int cmd,
 				 unsigned int ctrl)
 {
 	struct nand_chip *this = mtd->priv;
-	unsigned long nandaddr = (unsigned long)this->IO_ADDR_W;
+	char __iomem *nandaddr = this->IO_ADDR_W;
 
 	if (cmd == NAND_CMD_NONE)
 		return;
@@ -314,17 +315,17 @@ static inline void palmtx_nand_init(void) {}
  ******************************************************************************/
 static struct map_desc palmtx_io_desc[] __initdata = {
 {
-	.virtual	= PALMTX_PCMCIA_VIRT,
+	.virtual	= (unsigned long)PALMTX_PCMCIA_VIRT,
 	.pfn		= __phys_to_pfn(PALMTX_PCMCIA_PHYS),
 	.length		= PALMTX_PCMCIA_SIZE,
 	.type		= MT_DEVICE,
 }, {
-	.virtual	= PALMTX_NAND_ALE_VIRT,
+	.virtual	= (unsigned long)PALMTX_NAND_ALE_VIRT,
 	.pfn		= __phys_to_pfn(PALMTX_NAND_ALE_PHYS),
 	.length		= SZ_1M,
 	.type		= MT_DEVICE,
 }, {
-	.virtual	= PALMTX_NAND_CLE_VIRT,
+	.virtual	= (unsigned long)PALMTX_NAND_CLE_VIRT,
 	.pfn		= __phys_to_pfn(PALMTX_NAND_CLE_PHYS),
 	.length		= SZ_1M,
 	.type		= MT_DEVICE,
@@ -333,7 +334,7 @@ static struct map_desc palmtx_io_desc[] __initdata = {
 
 static void __init palmtx_map_io(void)
 {
-	pxa_map_io();
+	pxa27x_map_io();
 	iotable_init(palmtx_io_desc, ARRAY_SIZE(palmtx_io_desc));
 }
 
@@ -363,11 +364,12 @@ static void __init palmtx_init(void)
 }
 
 MACHINE_START(PALMTX, "Palm T|X")
-	.phys_io	= PALMTX_PHYS_IO_START,
-	.io_pg_offst	= io_p2v(0x40000000),
-	.boot_params	= 0xa0000100,
+	.atag_offset	= 0x100,
 	.map_io		= palmtx_map_io,
+	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.timer		= &pxa_timer,
-	.init_machine	= palmtx_init
+	.init_machine	= palmtx_init,
+	.restart	= pxa_restart,
 MACHINE_END

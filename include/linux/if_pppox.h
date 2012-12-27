@@ -20,8 +20,9 @@
 #include <linux/types.h>
 #include <asm/byteorder.h>
 
-#ifdef  __KERNEL__
+#include <linux/socket.h>
 #include <linux/if_ether.h>
+#ifdef  __KERNEL__
 #include <linux/if.h>
 #include <linux/netdevice.h>
 #include <linux/ppp_channel.h>
@@ -40,25 +41,35 @@
  * PPPoE addressing definition 
  */ 
 typedef __be16 sid_t;
-struct pppoe_addr{ 
-       sid_t           sid;                    /* Session identifier */ 
-       unsigned char   remote[ETH_ALEN];       /* Remote address */ 
-       char            dev[IFNAMSIZ];          /* Local device to use */ 
+struct pppoe_addr {
+	sid_t         sid;                    /* Session identifier */
+	unsigned char remote[ETH_ALEN];       /* Remote address */
+	char          dev[IFNAMSIZ];          /* Local device to use */
 }; 
  
 /************************************************************************ 
- * Protocols supported by AF_PPPOX 
- */ 
+ * PPTP addressing definition
+ */
+struct pptp_addr {
+	__be16		call_id;
+	struct in_addr	sin_addr;
+};
+
+/************************************************************************
+ * Protocols supported by AF_PPPOX
+ */
 #define PX_PROTO_OE    0 /* Currently just PPPoE */
 #define PX_PROTO_OL2TP 1 /* Now L2TP also */
-#define PX_MAX_PROTO   2
+#define PX_PROTO_PPTP  2
+#define PX_MAX_PROTO   3
 
-struct sockaddr_pppox { 
-       sa_family_t     sa_family;            /* address family, AF_PPPOX */ 
-       unsigned int    sa_protocol;          /* protocol identifier */ 
-       union{ 
-               struct pppoe_addr       pppoe; 
-       }sa_addr; 
+struct sockaddr_pppox {
+	__kernel_sa_family_t sa_family;       /* address family, AF_PPPOX */
+	unsigned int    sa_protocol;          /* protocol identifier */
+	union {
+		struct pppoe_addr  pppoe;
+		struct pptp_addr   pptp;
+	} sa_addr;
 } __attribute__((packed));
 
 /* The use of the above union isn't viable because the size of this
@@ -67,7 +78,7 @@ struct sockaddr_pppox {
  * type instead.
  */
 struct sockaddr_pppol2tp {
-	sa_family_t     sa_family;      /* address family, AF_PPPOX */
+	__kernel_sa_family_t sa_family; /* address family, AF_PPPOX */
 	unsigned int    sa_protocol;    /* protocol identifier */
 	struct pppol2tp_addr pppol2tp;
 } __attribute__((packed));
@@ -76,7 +87,7 @@ struct sockaddr_pppol2tp {
  * bits. So we need a different sockaddr structure.
  */
 struct sockaddr_pppol2tpv3 {
-	sa_family_t     sa_family;      /* address family, AF_PPPOX */
+	__kernel_sa_family_t sa_family; /* address family, AF_PPPOX */
 	unsigned int    sa_protocol;    /* protocol identifier */
 	struct pppol2tpv3_addr pppol2tp;
 } __attribute__((packed));
@@ -150,15 +161,23 @@ struct pppoe_opt {
 					     relayed to (PPPoE relaying) */
 };
 
+struct pptp_opt {
+	struct pptp_addr src_addr;
+	struct pptp_addr dst_addr;
+	u32 ack_sent, ack_recv;
+	u32 seq_sent, seq_recv;
+	int ppp_flags;
+};
 #include <net/sock.h>
 
 struct pppox_sock {
 	/* struct sock must be the first member of pppox_sock */
-	struct sock		sk;
-	struct ppp_channel	chan;
+	struct sock sk;
+	struct ppp_channel chan;
 	struct pppox_sock	*next;	  /* for hash table */
 	union {
 		struct pppoe_opt pppoe;
+		struct pptp_opt  pptp;
 	} proto;
 	__be16			num;
 };
@@ -186,7 +205,7 @@ struct pppox_proto {
 	struct module	*owner;
 };
 
-extern int register_pppox_proto(int proto_num, struct pppox_proto *pp);
+extern int register_pppox_proto(int proto_num, const struct pppox_proto *pp);
 extern void unregister_pppox_proto(int proto_num);
 extern void pppox_unbind_sock(struct sock *sk);/* delete ppp-channel binding */
 extern int pppox_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);

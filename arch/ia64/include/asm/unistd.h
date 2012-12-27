@@ -315,11 +315,20 @@
 #define __NR_fanotify_init		1323
 #define __NR_fanotify_mark		1324
 #define __NR_prlimit64			1325
+#define __NR_name_to_handle_at		1326
+#define __NR_open_by_handle_at  	1327
+#define __NR_clock_adjtime		1328
+#define __NR_syncfs			1329
+#define __NR_setns			1330
+#define __NR_sendmmsg			1331
+#define __NR_process_vm_readv		1332
+#define __NR_process_vm_writev		1333
+#define __NR_accept4			1334
 
 #ifdef __KERNEL__
 
 
-#define NR_syscalls			302 /* length of syscall table */
+#define NR_syscalls			311 /* length of syscall table */
 
 /*
  * The following defines stop scripts/checksyscalls.sh from complaining about

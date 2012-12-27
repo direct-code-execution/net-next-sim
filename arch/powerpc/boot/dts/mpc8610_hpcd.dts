@@ -175,7 +175,7 @@
 		serial0: serial@4500 {
 			cell-index = <0>;
 			device_type = "serial";
-			compatible = "ns16550";
+			compatible = "fsl,ns16550", "ns16550";
 			reg = <0x4500 0x100>;
 			clock-frequency = <0>;
 			interrupts = <42 2>;
@@ -186,7 +186,7 @@
 		serial1: serial@4600 {
 			cell-index = <1>;
 			device_type = "serial";
-			compatible = "ns16550";
+			compatible = "fsl,ns16550", "ns16550";
 			reg = <0x4600 0x100>;
 			clock-frequency = <0>;
 			interrupts = <42 2>;
@@ -286,6 +286,7 @@
 
 		ssi@16100 {
 			compatible = "fsl,mpc8610-ssi";
+			status = "disabled";
 			cell-index = <1>;
 			reg = <0x16100 0x100>;
 			interrupt-parent = <&mpic>;

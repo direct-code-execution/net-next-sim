@@ -25,7 +25,6 @@
 #include <linux/jiffies.h>
 #include <linux/spinlock.h>
 #include <linux/list.h>
-#include <linux/sysdev.h>
 #include <linux/ctype.h>
 #include <linux/edac.h>
 #include <asm/uaccess.h>
@@ -40,7 +39,7 @@ static LIST_HEAD(mc_devices);
 
 #ifdef CONFIG_EDAC_DEBUG
 
-static void edac_mc_dump_channel(struct channel_info *chan)
+static void edac_mc_dump_channel(struct rank_info *chan)
 {
 	debugf4("\tchannel = %p\n", chan);
 	debugf4("\tchannel->chan_idx = %d\n", chan->chan_idx);
@@ -76,6 +75,8 @@ static void edac_mc_dump_mci(struct mem_ctl_info *mci)
 	debugf3("\tpvt_info = %p\n\n", mci->pvt_info);
 }
 
+#endif				/* CONFIG_EDAC_DEBUG */
+
 /*
  * keep those in sync with the enum mem_type
  */
@@ -99,8 +100,6 @@ const char *edac_mem_types[] = {
 	"Registered DDR3 RAM",
 };
 EXPORT_SYMBOL_GPL(edac_mem_types);
-
-#endif				/* CONFIG_EDAC_DEBUG */
 
 /* 'ptr' points to a possibly unaligned item X such that sizeof(X) is 'size'.
  * Adjust 'ptr' so that its alignment is at least as stringent as what the
@@ -157,7 +156,7 @@ struct mem_ctl_info *edac_mc_alloc(unsigned sz_pvt, unsigned nr_csrows,
 {
 	struct mem_ctl_info *mci;
 	struct csrow_info *csi, *csrow;
-	struct channel_info *chi, *chp, *chan;
+	struct rank_info *chi, *chp, *chan;
 	void *pvt;
 	unsigned size;
 	int row, chn;
@@ -182,7 +181,7 @@ struct mem_ctl_info *edac_mc_alloc(unsigned sz_pvt, unsigned nr_csrows,
 	 * rather than an imaginary chunk of memory located at address 0.
 	 */
 	csi = (struct csrow_info *)(((char *)mci) + ((unsigned long)csi));
-	chi = (struct channel_info *)(((char *)mci) + ((unsigned long)chi));
+	chi = (struct rank_info *)(((char *)mci) + ((unsigned long)chi));
 	pvt = sz_pvt ? (((char *)mci) + ((unsigned long)pvt)) : NULL;
 
 	/* setup index and various internal pointers */
@@ -207,6 +206,7 @@ struct mem_ctl_info *edac_mc_alloc(unsigned sz_pvt, unsigned nr_csrows,
 	}
 
 	mci->op_state = OP_ALLOC;
+	INIT_LIST_HEAD(&mci->grp_kobj_list);
 
 	/*
 	 * Initialize the 'root' kobj for the edac_mc controller
@@ -234,18 +234,24 @@ EXPORT_SYMBOL_GPL(edac_mc_alloc);
  */
 void edac_mc_free(struct mem_ctl_info *mci)
 {
+	debugf1("%s()\n", __func__);
+
 	edac_mc_unregister_sysfs_main_kobj(mci);
+
+	/* free the mci instance memory here */
+	kfree(mci);
 }
 EXPORT_SYMBOL_GPL(edac_mc_free);
 
 
-/*
+/**
  * find_mci_by_dev
  *
  *	scan list of controllers looking for the one that manages
  *	the 'dev' device
+ * @dev: pointer to a struct device related with the MCI
  */
-static struct mem_ctl_info *find_mci_by_dev(struct device *dev)
+struct mem_ctl_info *find_mci_by_dev(struct device *dev)
 {
 	struct mem_ctl_info *mci;
 	struct list_head *item;
@@ -261,6 +267,7 @@ static struct mem_ctl_info *find_mci_by_dev(struct device *dev)
 
 	return NULL;
 }
+EXPORT_SYMBOL_GPL(find_mci_by_dev);
 
 /*
  * handler for EDAC to check if NMI type handler has asserted interrupt
@@ -439,20 +446,16 @@ fail1:
 	return 1;
 }
 
-static void complete_mc_list_del(struct rcu_head *head)
-{
-	struct mem_ctl_info *mci;
-
-	mci = container_of(head, struct mem_ctl_info, rcu);
-	INIT_LIST_HEAD(&mci->link);
-}
-
 static void del_mc_from_global_list(struct mem_ctl_info *mci)
 {
 	atomic_dec(&edac_handlers);
 	list_del_rcu(&mci->link);
-	call_rcu(&mci->rcu, complete_mc_list_del);
-	rcu_barrier();
+
+	/* these are for safe removal of devices from global list while
+	 * NMI handlers may be traversing list
+	 */
+	synchronize_rcu();
+	INIT_LIST_HEAD(&mci->link);
 }
 
 /**
@@ -578,14 +581,16 @@ struct mem_ctl_info *edac_mc_del_mc(struct device *dev)
 		return NULL;
 	}
 
-	/* marking MCI offline */
-	mci->op_state = OP_OFFLINE;
-
 	del_mc_from_global_list(mci);
 	mutex_unlock(&mem_ctls_mutex);
 
-	/* flush workq processes and remove sysfs */
+	/* flush workq processes */
 	edac_mc_workq_teardown(mci);
+
+	/* marking MCI offline */
+	mci->op_state = OP_OFFLINE;
+
+	/* remove from sysfs */
 	edac_remove_sysfs_mci_device(mci);
 
 	edac_printk(KERN_INFO, EDAC_MC,
@@ -615,13 +620,13 @@ static void edac_mc_scrub_block(unsigned long page, unsigned long offset,
 	if (PageHighMem(pg))
 		local_irq_save(flags);
 
-	virt_addr = kmap_atomic(pg, KM_BOUNCE_READ);
+	virt_addr = kmap_atomic(pg);
 
 	/* Perform architecture specific atomic scrub operation */
 	atomic_scrub(virt_addr + offset, size);
 
 	/* Unmap and complete */
-	kunmap_atomic(virt_addr, KM_BOUNCE_READ);
+	kunmap_atomic(virt_addr);
 
 	if (PageHighMem(pg))
 		local_irq_restore(flags);
@@ -714,7 +719,7 @@ void edac_mc_handle_ce(struct mem_ctl_info *mci,
 		 * Some MC's can remap memory so that it is still available
 		 * at a different address when PCI devices map into memory.
 		 * MC's that can't do this lose the memory where PCI devices
-		 * are mapped.  This mapping is MC dependant and so we call
+		 * are mapped.  This mapping is MC dependent and so we call
 		 * back into the MC driver for it to map the MC page to
 		 * a physical (CPU) page which can then be mapped to a virtual
 		 * page - which can then be scrubbed.

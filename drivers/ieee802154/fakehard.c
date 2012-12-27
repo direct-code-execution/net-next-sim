@@ -343,7 +343,7 @@ static void ieee802154_fake_setup(struct net_device *dev)
 {
 	dev->addr_len		= IEEE802154_ADDR_LEN;
 	memset(dev->broadcast, 0xff, IEEE802154_ADDR_LEN);
-	dev->features		= NETIF_F_NO_CSUM;
+	dev->features		= NETIF_F_HW_CSUM;
 	dev->needed_tailroom	= 2; /* FCS */
 	dev->mtu		= 127;
 	dev->tx_queue_len	= 10;
@@ -370,8 +370,6 @@ static int __devinit ieee802154fake_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	phy->dev.platform_data = dev;
-
 	memcpy(dev->dev_addr, "\xba\xbe\xca\xfe\xde\xad\xbe\xef",
 			dev->addr_len);
 	memcpy(dev->perm_addr, dev->dev_addr, dev->addr_len);
@@ -392,16 +390,6 @@ static int __devinit ieee802154fake_probe(struct platform_device *pdev)
 
 	priv = netdev_priv(dev);
 	priv->phy = phy;
-
-	/*
-	 * If the name is a format string the caller wants us to do a
-	 * name allocation.
-	 */
-	if (strchr(dev->name, '%')) {
-		err = dev_alloc_name(dev, dev->name);
-		if (err < 0)
-			goto out;
-	}
 
 	wpan_phy_set_dev(phy, &pdev->dev);
 	SET_NETDEV_DEV(dev, &phy->dev);

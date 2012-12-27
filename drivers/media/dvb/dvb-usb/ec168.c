@@ -36,7 +36,9 @@ static int ec168_rw_udev(struct usb_device *udev, struct ec168_req *req)
 	int ret;
 	unsigned int pipe;
 	u8 request, requesttype;
-	u8 buf[req->size];
+	u8 *buf;
+
+
 
 	switch (req->cmd) {
 	case DOWNLOAD_FIRMWARE:
@@ -72,6 +74,12 @@ static int ec168_rw_udev(struct usb_device *udev, struct ec168_req *req)
 		goto error;
 	}
 
+	buf = kmalloc(req->size, GFP_KERNEL);
+	if (!buf) {
+		ret = -ENOMEM;
+		goto error;
+	}
+
 	if (requesttype == (USB_TYPE_VENDOR | USB_DIR_OUT)) {
 		/* write */
 		memcpy(buf, req->data, req->size);
@@ -84,13 +92,13 @@ static int ec168_rw_udev(struct usb_device *udev, struct ec168_req *req)
 	msleep(1); /* avoid I2C errors */
 
 	ret = usb_control_msg(udev, pipe, request, requesttype, req->value,
-		req->index, buf, sizeof(buf), EC168_USB_TIMEOUT);
+		req->index, buf, req->size, EC168_USB_TIMEOUT);
 
 	ec168_debug_dump(request, requesttype, req->value, req->index, buf,
 		req->size, deb_xfer);
 
 	if (ret < 0)
-		goto error;
+		goto err_dealloc;
 	else
 		ret = 0;
 
@@ -98,7 +106,11 @@ static int ec168_rw_udev(struct usb_device *udev, struct ec168_req *req)
 	if (!ret && requesttype == (USB_TYPE_VENDOR | USB_DIR_IN))
 		memcpy(req->data, buf, req->size);
 
+	kfree(buf);
 	return ret;
+
+err_dealloc:
+	kfree(buf);
 error:
 	deb_info("%s: failed:%d\n", __func__, ret);
 	return ret;
@@ -188,9 +200,9 @@ static struct ec100_config ec168_ec100_config = {
 static int ec168_ec100_frontend_attach(struct dvb_usb_adapter *adap)
 {
 	deb_info("%s:\n", __func__);
-	adap->fe = dvb_attach(ec100_attach, &ec168_ec100_config,
+	adap->fe_adap[0].fe = dvb_attach(ec100_attach, &ec168_ec100_config,
 		&adap->dev->i2c_adap);
-	if (adap->fe == NULL)
+	if (adap->fe_adap[0].fe == NULL)
 		return -ENODEV;
 
 	return 0;
@@ -216,7 +228,7 @@ static struct mxl5005s_config ec168_mxl5003s_config = {
 static int ec168_mxl5003s_tuner_attach(struct dvb_usb_adapter *adap)
 {
 	deb_info("%s:\n", __func__);
-	return dvb_attach(mxl5005s_attach, adap->fe, &adap->dev->i2c_adap,
+	return dvb_attach(mxl5005s_attach, adap->fe_adap[0].fe, &adap->dev->i2c_adap,
 		&ec168_mxl5003s_config) == NULL ? -ENODEV : 0;
 }
 
@@ -370,6 +382,8 @@ static struct dvb_usb_device_properties ec168_properties = {
 	.num_adapters = 1,
 	.adapter = {
 		{
+		.num_frontends = 1,
+		.fe = {{
 			.streaming_ctrl   = ec168_streaming_ctrl,
 			.frontend_attach  = ec168_ec100_frontend_attach,
 			.tuner_attach     = ec168_mxl5003s_tuner_attach,
@@ -383,6 +397,7 @@ static struct dvb_usb_device_properties ec168_properties = {
 					}
 				}
 			},
+		}},
 		}
 	},
 
@@ -413,27 +428,7 @@ static struct usb_driver ec168_driver = {
 	.id_table   = ec168_id,
 };
 
-/* module stuff */
-static int __init ec168_module_init(void)
-{
-	int ret;
-	deb_info("%s:\n", __func__);
-	ret = usb_register(&ec168_driver);
-	if (ret)
-		err("module init failed:%d", ret);
-
-	return ret;
-}
-
-static void __exit ec168_module_exit(void)
-{
-	deb_info("%s:\n", __func__);
-	/* deregister this driver from the USB subsystem */
-	usb_deregister(&ec168_driver);
-}
-
-module_init(ec168_module_init);
-module_exit(ec168_module_exit);
+module_usb_driver(ec168_driver);
 
 MODULE_AUTHOR("Antti Palosaari <crope@iki.fi>");
 MODULE_DESCRIPTION("E3C EC168 DVB-T USB2.0 driver");

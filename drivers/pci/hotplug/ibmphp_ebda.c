@@ -276,6 +276,12 @@ int __init ibmphp_access_ebda (void)
 
 	for (;;) {
 		offset = next_offset;
+
+		/* Make sure what we read is still in the mapped section */
+		if (WARN(offset > (ebda_sz * 1024 - 4),
+			 "ibmphp_ebda: next read is beyond ebda_sz\n"))
+			break;
+
 		next_offset = readw (io_mem + offset);	/* offset of next blk */
 
 		offset += 2;
@@ -362,8 +368,10 @@ int __init ibmphp_access_ebda (void)
 			debug ("rio blk id: %x\n", blk_id);
 
 			rio_table_ptr = kzalloc(sizeof(struct rio_table_hdr), GFP_KERNEL);
-			if (!rio_table_ptr)
-				return -ENOMEM; 
+			if (!rio_table_ptr) {
+				rc = -ENOMEM;
+				goto out;
+			}
 			rio_table_ptr->ver_num = readb (io_mem + offset);
 			rio_table_ptr->scal_count = readb (io_mem + offset + 1);
 			rio_table_ptr->riodev_count = readb (io_mem + offset + 2);

@@ -91,8 +91,7 @@ syscall_trace_entry:
 	SAVE_STATIC
 	move	s0, t2
 	move	a0, sp
-	li	a1, 0
-	jal	do_syscall_trace
+	jal	syscall_trace_enter
 
 	move	t0, s0
 	RESTORE_STATIC
@@ -300,7 +299,7 @@ sys_call_table:
 	PTR	sys_ni_syscall			/* 5170, was get_kernel_syms */
 	PTR	sys_ni_syscall			/* was query_module */
 	PTR	sys_quotactl
-	PTR	sys_nfsservctl
+	PTR	sys_ni_syscall			/* was nfsservctl */
 	PTR	sys_ni_syscall			/* res. for getpmsg */
 	PTR	sys_ni_syscall			/* 5175  for putpmsg */
 	PTR	sys_ni_syscall			/* res. for afs_syscall */
@@ -404,7 +403,7 @@ sys_call_table:
 	PTR	sys_ioprio_get
 	PTR	sys_utimensat			/* 5275 */
 	PTR	sys_signalfd
-	PTR	sys_ni_syscall
+	PTR	sys_ni_syscall			/* was timerfd */
 	PTR	sys_eventfd
 	PTR	sys_fallocate
 	PTR	sys_timerfd_create		/* 5280 */
@@ -425,4 +424,12 @@ sys_call_table:
 	PTR	sys_fanotify_init		/* 5295 */
 	PTR	sys_fanotify_mark
 	PTR	sys_prlimit64
+	PTR	sys_name_to_handle_at
+	PTR	sys_open_by_handle_at
+	PTR	sys_clock_adjtime		/* 5300 */
+	PTR	sys_syncfs
+	PTR	sys_sendmmsg
+	PTR	sys_setns
+	PTR	sys_process_vm_readv
+	PTR	sys_process_vm_writev		/* 5305 */
 	.size	sys_call_table,.-sys_call_table

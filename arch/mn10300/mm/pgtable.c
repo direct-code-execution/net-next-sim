@@ -21,7 +21,6 @@
 #include <linux/spinlock.h>
 #include <linux/quicklist.h>
 
-#include <asm/system.h>
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/tlb.h>
@@ -59,7 +58,7 @@ void set_pmd_pfn(unsigned long vaddr, unsigned long pfn, pgprot_t flags)
 	 * It's enough to flush this one mapping.
 	 * (PGE mappings get flushed as well)
 	 */
-	__flush_tlb_one(vaddr);
+	local_flush_tlb_one(vaddr);
 }
 
 pte_t *pte_alloc_one_kernel(struct mm_struct *mm, unsigned long address)

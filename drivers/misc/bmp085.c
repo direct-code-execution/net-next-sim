@@ -2,7 +2,7 @@
 
     This driver supports the bmp085 digital barometric pressure
     and temperature sensor from Bosch Sensortec. The datasheet
-    is avaliable from their website:
+    is available from their website:
     http://www.bosch-sensortec.com/content/language1/downloads/BST-BMP085-DS000-05.pdf
 
     A pressure measurement is issued by reading from pressure0_input.
@@ -87,7 +87,7 @@ struct bmp085_data {
 	u32 raw_temperature;
 	u32 raw_pressure;
 	unsigned char oversampling_setting;
-	u32 last_temp_measurement;
+	unsigned long last_temp_measurement;
 	s32 b6; /* calculated temperature correction coefficient */
 };
 
@@ -216,7 +216,7 @@ static s32 bmp085_get_temperature(struct bmp085_data *data, int *temperature)
 		*temperature = (x1+x2+8) >> 4;
 
 exit:
-	return status;;
+	return status;
 }
 
 /*
@@ -234,7 +234,8 @@ static s32 bmp085_get_pressure(struct bmp085_data *data, int *pressure)
 	int status;
 
 	/* alt least every second force an update of the ambient temperature */
-	if (data->last_temp_measurement + 1*HZ < jiffies) {
+	if (data->last_temp_measurement == 0 ||
+			time_is_before_jiffies(data->last_temp_measurement + 1*HZ)) {
 		status = bmp085_get_temperature(data, NULL);
 		if (status != 0)
 			goto exit;
@@ -402,7 +403,7 @@ exit:
 	return status;
 }
 
-static int bmp085_probe(struct i2c_client *client,
+static int __devinit bmp085_probe(struct i2c_client *client,
 			 const struct i2c_device_id *id)
 {
 	struct bmp085_data *data;
@@ -429,7 +430,7 @@ static int bmp085_probe(struct i2c_client *client,
 	if (err)
 		goto exit_free;
 
-	dev_info(&data->client->dev, "Succesfully initialized bmp085!\n");
+	dev_info(&data->client->dev, "Successfully initialized bmp085!\n");
 	goto exit;
 
 exit_free:
@@ -438,7 +439,7 @@ exit:
 	return err;
 }
 
-static int bmp085_remove(struct i2c_client *client)
+static int __devexit bmp085_remove(struct i2c_client *client)
 {
 	sysfs_remove_group(&client->dev.kobj, &bmp085_attr_group);
 	kfree(i2c_get_clientdata(client));
@@ -449,6 +450,7 @@ static const struct i2c_device_id bmp085_id[] = {
 	{ "bmp085", 0 },
 	{ }
 };
+MODULE_DEVICE_TABLE(i2c, bmp085_id);
 
 static struct i2c_driver bmp085_driver = {
 	.driver = {
@@ -457,26 +459,14 @@ static struct i2c_driver bmp085_driver = {
 	},
 	.id_table	= bmp085_id,
 	.probe		= bmp085_probe,
-	.remove		= bmp085_remove,
+	.remove		= __devexit_p(bmp085_remove),
 
 	.detect		= bmp085_detect,
 	.address_list	= normal_i2c
 };
 
-static int __init bmp085_init(void)
-{
-	return i2c_add_driver(&bmp085_driver);
-}
-
-static void __exit bmp085_exit(void)
-{
-	i2c_del_driver(&bmp085_driver);
-}
-
+module_i2c_driver(bmp085_driver);
 
 MODULE_AUTHOR("Christoph Mair <christoph.mair@gmail.com");
 MODULE_DESCRIPTION("BMP085 driver");
 MODULE_LICENSE("GPL");
-
-module_init(bmp085_init);
-module_exit(bmp085_exit);

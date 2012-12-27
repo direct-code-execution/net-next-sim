@@ -189,8 +189,7 @@ static void __iomem *baseaddr;
 		<title>Partition defines</title>
 		<para>
 			If you want to divide your device into partitions, then
-			enable the configuration switch CONFIG_MTD_PARTITIONS and define
-			a partitioning scheme suitable to your board.
+			define a partitioning scheme suitable to your board.
 		</para>
 		<programlisting>
 #define NUM_PARTITIONS 2
@@ -250,7 +249,7 @@ static void board_hwcontrol(struct mtd_info *mtd, int cmd)
 		<title>Device ready function</title>
 		<para>
 			If the hardware interface has the ready busy pin of the NAND chip connected to a
-			GPIO or other accesible I/O pin, this function is used to read back the state of the
+			GPIO or other accessible I/O pin, this function is used to read back the state of the
 			pin. The function has no arguments and should return 0, if the device is busy (R/B pin 
 			is low) and 1, if the device is ready (R/B pin is high).
 			If the hardware interface does not give access to the ready busy pin, then
@@ -485,7 +484,7 @@ static void board_select_chip (struct mtd_info *mtd, int chip)
 				Reed-Solomon library.
 			</para>
 			<para>
-				The ECC bytes must be placed immidiately after the data
+				The ECC bytes must be placed immediately after the data
 				bytes in order to make the syndrome generator work. This
 				is contrary to the usual layout used by software ECC. The
 				separation of data and out of band area is not longer
@@ -573,7 +572,7 @@ static void board_select_chip (struct mtd_info *mtd, int chip)
 			</para>
 			<para>
 				The simplest way to activate the FLASH based bad block table support 
-				is to set the option NAND_USE_FLASH_BBT in the option field of
+				is to set the option NAND_BBT_USE_FLASH in the bbt_option field of
 				the nand chip structure before calling nand_scan(). For AG-AND
 				chips is this done by default.
 				This activates the default FLASH based bad block table functionality 
@@ -629,7 +628,7 @@ static void board_select_chip (struct mtd_info *mtd, int chip)
 				holds the bad block table. Store a pointer to the pattern  
 				in the pattern field. Further the length of the pattern has to be 
 				stored in len and the offset in the spare area must be given
-				in the offs member of the nand_bbt_descr stucture. For mirrored
+				in the offs member of the nand_bbt_descr structure. For mirrored
 				bad block tables different patterns are mandatory.</para></listitem>
 				<listitem><para>Table creation</para>
 				<para>Set the option NAND_BBT_CREATE to enable the table creation
@@ -648,7 +647,7 @@ static void board_select_chip (struct mtd_info *mtd, int chip)
 				<listitem><para>Table version control</para>
 				<para>Set the option NAND_BBT_VERSION to enable the table version control.
 				It's highly recommended to enable this for mirrored tables with write
-				support. It makes sure that the risk of loosing the bad block
+				support. It makes sure that the risk of losing the bad block
 				table information is reduced to the loss of the information about the
 				one worn out block which should be marked bad. The version is stored in
 				4 consecutive bytes in the spare area of the device. The position of
@@ -773,20 +772,6 @@ struct nand_oobinfo {
 				If the spare area buffer is NULL then only the ECC placement is
 				done according to the default builtin scheme.
 			</para>
-		</sect2>
-		<sect2 id="User_space_placement_selection">
-			<title>User space placement selection</title>
-		<para>
-			All non ecc functions like mtd->read and mtd->write use an internal 
-			structure, which can be set by an ioctl. This structure is preset 
-			to the autoplacement default.
-	     		<programlisting>
-	ioctl (fd, MEMSETOOBSEL, oobsel);
-	     		</programlisting>
-			oobsel is a pointer to a user supplied structure of type
-			nand_oobconfig. The contents of this structure must match the 
-			criteria of the filesystem, which will be used. See an example in utils/nandwrite.c.
-		</para>
 		</sect2>
 	</sect1>	
 	<sect1 id="Spare_area_autoplacement_default">
@@ -1060,19 +1045,19 @@ data in this page</entry>
 <row>
 <entry>0x3D</entry>
 <entry>ECC byte 21</entry>
-<entry>Error correction code byte 0 of the eigth 256 Bytes of data
+<entry>Error correction code byte 0 of the eighth 256 Bytes of data
 in this page</entry>
 </row>
 <row>
 <entry>0x3E</entry>
 <entry>ECC byte 22</entry>
-<entry>Error correction code byte 1 of the eigth 256 Bytes of data
+<entry>Error correction code byte 1 of the eighth 256 Bytes of data
 in this page</entry>
 </row>
 <row>
 <entry>0x3F</entry>
 <entry>ECC byte 23</entry>
-<entry>Error correction code byte 2 of the eigth 256 Bytes of data
+<entry>Error correction code byte 2 of the eighth 256 Bytes of data
 in this page</entry>
 </row>
 </tbody></tgroup></informaltable>
@@ -1159,9 +1144,6 @@ in this page</entry>
 		These constants are defined in nand.h. They are ored together to describe
 		the functionality.
      		<programlisting>
-/* Use a flash based bad block table. This option is parsed by the
- * default bad block table function (nand_default_bbt). */
-#define NAND_USE_FLASH_BBT	0x00010000
 /* The hw ecc generator provides a syndrome instead a ecc value on read 
  * This can only work if we have the ecc bytes directly behind the 
  * data bytes. Applies for DOC and AG-AND Renesas HW Reed Solomon generators */

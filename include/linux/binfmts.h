@@ -18,17 +18,18 @@ struct pt_regs;
 #define BINPRM_BUF_SIZE 128
 
 #ifdef __KERNEL__
-#include <linux/list.h>
+#include <linux/sched.h>
 
 #define CORENAME_MAX_SIZE 128
 
 /*
  * This structure is used to hold the arguments that are used when loading binaries.
  */
-struct linux_binprm{
+struct linux_binprm {
 	char buf[BINPRM_BUF_SIZE];
 #ifdef CONFIG_MMU
 	struct vm_area_struct *vma;
+	unsigned long vma_pages;
 #else
 # define MAX_ARG_PAGES	32
 	struct page *page[MAX_ARG_PAGES];
@@ -57,6 +58,7 @@ struct linux_binprm{
 	unsigned interp_flags;
 	unsigned interp_data;
 	unsigned long loader, exec;
+	char tcomm[TASK_COMM_LEN];
 };
 
 #define BINPRM_FLAGS_ENFORCE_NONDUMP_BIT 0
@@ -88,29 +90,29 @@ struct linux_binfmt {
 	int (*load_shlib)(struct file *);
 	int (*core_dump)(struct coredump_params *cprm);
 	unsigned long min_coredump;	/* minimal dump size */
-	int hasvdso;
 };
 
-extern int __register_binfmt(struct linux_binfmt *fmt, int insert);
+extern void __register_binfmt(struct linux_binfmt *fmt, int insert);
 
 /* Registration of default binfmt handlers */
-static inline int register_binfmt(struct linux_binfmt *fmt)
+static inline void register_binfmt(struct linux_binfmt *fmt)
 {
-	return __register_binfmt(fmt, 0);
+	__register_binfmt(fmt, 0);
 }
 /* Same as above, but adds a new binfmt at the top of the list */
-static inline int insert_binfmt(struct linux_binfmt *fmt)
+static inline void insert_binfmt(struct linux_binfmt *fmt)
 {
-	return __register_binfmt(fmt, 1);
+	__register_binfmt(fmt, 1);
 }
 
 extern void unregister_binfmt(struct linux_binfmt *);
 
 extern int prepare_binprm(struct linux_binprm *);
 extern int __must_check remove_arg_zero(struct linux_binprm *);
-extern int search_binary_handler(struct linux_binprm *,struct pt_regs *);
+extern int search_binary_handler(struct linux_binprm *, struct pt_regs *);
 extern int flush_old_exec(struct linux_binprm * bprm);
 extern void setup_new_exec(struct linux_binprm * bprm);
+extern void would_dump(struct linux_binprm *, struct file *);
 
 extern int suid_dumpable;
 #define SUID_DUMP_DISABLE	0	/* No setuid dumping */

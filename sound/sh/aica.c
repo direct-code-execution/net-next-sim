@@ -29,7 +29,7 @@
 #include <linux/slab.h>
 #include <linux/time.h>
 #include <linux/wait.h>
-#include <linux/moduleparam.h>
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/firmware.h>
 #include <linux/timer.h>
@@ -55,7 +55,7 @@ MODULE_FIRMWARE("aica_firmware.bin");
 #define CARD_NAME "AICA"
 static int index = -1;
 static char *id;
-static int enable = 1;
+static bool enable = 1;
 module_param(index, int, 0444);
 MODULE_PARM_DESC(index, "Index value for " CARD_NAME " soundcard.");
 module_param(id, charp, 0444);
@@ -188,7 +188,7 @@ static void spu_reset(void)
 	spu_memset(0, 0, 0x200000 / 4);
 	/* Put ARM7 in endless loop */
 	local_irq_save(flags);
-	ctrl_outl(0xea000002, SPU_MEMORY_BASE);
+	__raw_writel(0xea000002, SPU_MEMORY_BASE);
 	local_irq_restore(flags);
 	spu_enable();
 }

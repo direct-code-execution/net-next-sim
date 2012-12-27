@@ -16,6 +16,7 @@
 #define __LINUX_REGULATOR_DRIVER_H_
 
 #include <linux/device.h>
+#include <linux/notifier.h>
 #include <linux/regulator/consumer.h>
 
 struct regulator_dev;
@@ -42,7 +43,11 @@ enum regulator_status {
  *
  * @set_voltage: Set the voltage for the regulator within the range specified.
  *               The driver should select the voltage closest to min_uV.
+ * @set_voltage_sel: Set the voltage for the regulator using the specified
+ *                   selector.
  * @get_voltage: Return the currently configured voltage for the regulator.
+ * @get_voltage_sel: Return the currently configured voltage selector for the
+ *                   regulator.
  * @list_voltage: Return one of the supported voltages, in microvolts; zero
  *	if the selector indicates a voltage that is unusable on this system;
  *	or negative errno.  Selectors range from zero to one less than
@@ -59,7 +64,11 @@ enum regulator_status {
  *                    when running with the specified parameters.
  *
  * @enable_time: Time taken for the regulator voltage output voltage to
- *               stabalise after being enabled, in microseconds.
+ *               stabilise after being enabled, in microseconds.
+ * @set_voltage_time_sel: Time taken for the regulator voltage output voltage
+ *               to stabilise after being set to a new value, in microseconds.
+ *               The function provides the from and to voltage selector, the
+ *               function should return the worst case.
  *
  * @set_suspend_voltage: Set the voltage for the regulator when the system
  *                       is suspended.
@@ -79,8 +88,11 @@ struct regulator_ops {
 	int (*list_voltage) (struct regulator_dev *, unsigned selector);
 
 	/* get/set regulator voltage */
-	int (*set_voltage) (struct regulator_dev *, int min_uV, int max_uV);
+	int (*set_voltage) (struct regulator_dev *, int min_uV, int max_uV,
+			    unsigned *selector);
+	int (*set_voltage_sel) (struct regulator_dev *, unsigned selector);
 	int (*get_voltage) (struct regulator_dev *);
+	int (*get_voltage_sel) (struct regulator_dev *);
 
 	/* get/set regulator current  */
 	int (*set_current_limit) (struct regulator_dev *,
@@ -92,12 +104,15 @@ struct regulator_ops {
 	int (*disable) (struct regulator_dev *);
 	int (*is_enabled) (struct regulator_dev *);
 
-	/* get/set regulator operating mode (defined in regulator.h) */
+	/* get/set regulator operating mode (defined in consumer.h) */
 	int (*set_mode) (struct regulator_dev *, unsigned int mode);
 	unsigned int (*get_mode) (struct regulator_dev *);
 
-	/* Time taken to enable the regulator */
+	/* Time taken to enable or set voltage on the regulator */
 	int (*enable_time) (struct regulator_dev *);
+	int (*set_voltage_time_sel) (struct regulator_dev *,
+				     unsigned int old_selector,
+				     unsigned int new_selector);
 
 	/* report regulator status ... most other accessors report
 	 * control inputs, this reports results of combining inputs
@@ -120,7 +135,7 @@ struct regulator_ops {
 	int (*set_suspend_enable) (struct regulator_dev *);
 	int (*set_suspend_disable) (struct regulator_dev *);
 
-	/* set regulator suspend operating mode (defined in regulator.h) */
+	/* set regulator suspend operating mode (defined in consumer.h) */
 	int (*set_suspend_mode) (struct regulator_dev *, unsigned int mode);
 };
 
@@ -139,6 +154,7 @@ enum regulator_type {
  * this type.
  *
  * @name: Identifying name for the regulator.
+ * @supply_name: Identifying the regulator supply
  * @id: Numerical identifier for the regulator.
  * @n_voltages: Number of selectors available for ops.list_voltage().
  * @ops: Regulator operations table.
@@ -148,6 +164,7 @@ enum regulator_type {
  */
 struct regulator_desc {
 	const char *name;
+	const char *supply_name;
 	int id;
 	unsigned n_voltages;
 	struct regulator_ops *ops;
@@ -168,31 +185,34 @@ struct regulator_desc {
  */
 struct regulator_dev {
 	struct regulator_desc *desc;
-	int use_count;
-	int open_count;
 	int exclusive;
+	u32 use_count;
+	u32 open_count;
 
 	/* lists we belong to */
 	struct list_head list; /* list of all regulators */
-	struct list_head slist; /* list of supplied regulators */
 
 	/* lists we own */
 	struct list_head consumer_list; /* consumers we supply */
-	struct list_head supply_list; /* regulators we supply */
 
 	struct blocking_notifier_head notifier;
 	struct mutex mutex; /* consumer lock */
 	struct module *owner;
 	struct device dev;
 	struct regulation_constraints *constraints;
-	struct regulator_dev *supply;	/* for tree */
+	struct regulator *supply;	/* for tree */
+
+	struct delayed_work disable_work;
+	int deferred_disables;
 
 	void *reg_data;		/* regulator_dev data */
+
+	struct dentry *debugfs;
 };
 
 struct regulator_dev *regulator_register(struct regulator_desc *regulator_desc,
-	struct device *dev, struct regulator_init_data *init_data,
-	void *driver_data);
+	struct device *dev, const struct regulator_init_data *init_data,
+	void *driver_data, struct device_node *of_node);
 void regulator_unregister(struct regulator_dev *rdev);
 
 int regulator_notifier_call_chain(struct regulator_dev *rdev,

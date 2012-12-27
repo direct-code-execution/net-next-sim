@@ -35,6 +35,8 @@
 
 /* system i/o configuration register high */
 #define MPC83XX_SICRH_OFFS         0x118
+#define MPC8308_SICRH_USB_MASK     0x000c0000
+#define MPC8308_SICRH_USB_ULPI     0x00040000
 #define MPC834X_SICRH_USB_UTMI     0x00020000
 #define MPC831X_SICRH_USB_MASK     0x000000e0
 #define MPC831X_SICRH_USB_ULPI     0x000000a0
@@ -68,5 +70,21 @@ extern long mpc83xx_time_init(void);
 extern int mpc837x_usb_cfg(void);
 extern int mpc834x_usb_cfg(void);
 extern int mpc831x_usb_cfg(void);
+extern void mpc83xx_ipic_init_IRQ(void);
+#ifdef CONFIG_QUICC_ENGINE
+extern void mpc83xx_qe_init_IRQ(void);
+extern void mpc83xx_ipic_and_qe_init_IRQ(void);
+#else
+static inline void __init mpc83xx_qe_init_IRQ(void) {}
+#define mpc83xx_ipic_and_qe_init_IRQ mpc83xx_ipic_init_IRQ
+#endif /* CONFIG_QUICC_ENGINE */
+
+#ifdef CONFIG_PCI
+extern void mpc83xx_setup_pci(void);
+#else
+#define mpc83xx_setup_pci()	do {} while (0)
+#endif
+
+extern int mpc83xx_declare_of_platform_devices(void);
 
 #endif				/* __MPC83XX_H__ */

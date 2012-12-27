@@ -120,6 +120,7 @@ MGR_ATTR static noinline int dcplb_miss(unsigned int cpu)
 		d_data = L2_DMEMORY;
 	} else if (addr >= physical_mem_end) {
 		if (addr >= ASYNC_BANK0_BASE && addr < ASYNC_BANK3_BASE + ASYNC_BANK3_SIZE) {
+#if defined(CONFIG_ROMFS_ON_MTD) && defined(CONFIG_MTD_ROM)
 			mask = current_rwx_mask[cpu];
 			if (mask) {
 				int page = (addr - (ASYNC_BANK0_BASE - _ramend)) >> PAGE_SHIFT;
@@ -129,6 +130,7 @@ MGR_ATTR static noinline int dcplb_miss(unsigned int cpu)
 				if (mask[idx] & bit)
 					d_data |= CPLB_USER_RD;
 			}
+#endif
 		} else if (addr >= BOOT_ROM_START && addr < BOOT_ROM_START + BOOT_ROM_LENGTH
 		    && (status & (FAULT_RW | FAULT_USERSUPV)) == FAULT_USERSUPV) {
 			addr &= ~(1 * 1024 * 1024 - 1);
@@ -318,7 +320,7 @@ void flush_switched_cplbs(unsigned int cpu)
 
 	nr_cplb_flush[cpu]++;
 
-	local_irq_save_hw(flags);
+	flags = hard_local_irq_save();
 	_disable_icplb();
 	for (i = first_switched_icplb; i < MAX_CPLBS; i++) {
 		icplb_tbl[cpu][i].data = 0;
@@ -332,7 +334,7 @@ void flush_switched_cplbs(unsigned int cpu)
 		bfin_write32(DCPLB_DATA0 + i * 4, 0);
 	}
 	_enable_dcplb();
-	local_irq_restore_hw(flags);
+	hard_local_irq_restore(flags);
 
 }
 
@@ -348,7 +350,7 @@ void set_mask_dcplbs(unsigned long *masks, unsigned int cpu)
 		return;
 	}
 
-	local_irq_save_hw(flags);
+	flags = hard_local_irq_save();
 	current_rwx_mask[cpu] = masks;
 
 	if (L2_LENGTH && addr >= L2_START && addr < L2_START + L2_LENGTH) {
@@ -373,5 +375,5 @@ void set_mask_dcplbs(unsigned long *masks, unsigned int cpu)
 		addr += PAGE_SIZE;
 	}
 	_enable_dcplb();
-	local_irq_restore_hw(flags);
+	hard_local_irq_restore(flags);
 }

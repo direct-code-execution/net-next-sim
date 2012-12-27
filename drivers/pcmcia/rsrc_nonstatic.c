@@ -29,7 +29,6 @@
 #include <asm/irq.h>
 
 #include <pcmcia/ss.h>
-#include <pcmcia/cs.h>
 #include <pcmcia/cistpl.h>
 #include "cs_internal.h"
 
@@ -771,7 +770,7 @@ static int nonstatic_find_io(struct pcmcia_socket *s, unsigned int attr,
 							res->end + num);
 			if (!ret) {
 				ret = adjust_resource(s->io[i].res, res->start,
-					       res->end - res->start + num + 1);
+						      resource_size(res) + num);
 				if (ret)
 					continue;
 				*base = try;
@@ -789,8 +788,8 @@ static int nonstatic_find_io(struct pcmcia_socket *s, unsigned int attr,
 							res->end);
 			if (!ret) {
 				ret = adjust_resource(s->io[i].res,
-					       res->start - num,
-					       res->end - res->start + num + 1);
+						      res->start - num,
+						      resource_size(res) + num);
 				if (ret)
 					continue;
 				*base = try;

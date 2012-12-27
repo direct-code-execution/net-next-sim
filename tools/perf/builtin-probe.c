@@ -20,7 +20,6 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *
  */
-#define _GNU_SOURCE
 #include <sys/utsname.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -31,11 +30,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#undef _GNU_SOURCE
 #include "perf.h"
 #include "builtin.h"
 #include "util/util.h"
 #include "util/strlist.h"
+#include "util/strfilter.h"
 #include "util/symbol.h"
 #include "util/debug.h"
 #include "util/debugfs.h"
@@ -43,20 +42,26 @@
 #include "util/probe-finder.h"
 #include "util/probe-event.h"
 
-#define MAX_PATH_LEN 256
+#define DEFAULT_VAR_FILTER "!__k???tab_* & !__crc_*"
+#define DEFAULT_FUNC_FILTER "!_*"
 
 /* Session management structure */
 static struct {
 	bool list_events;
 	bool force_add;
 	bool show_lines;
+	bool show_vars;
+	bool show_ext_vars;
+	bool show_funcs;
+	bool mod_events;
 	int nevents;
 	struct perf_probe_event events[MAX_PROBES];
 	struct strlist *dellist;
 	struct line_range line_range;
+	const char *target;
 	int max_probe_points;
+	struct strfilter *filter;
 } params;
-
 
 /* Parse an event definition. Note that any error must die. */
 static int parse_probe_event(const char *str)
@@ -92,6 +97,7 @@ static int parse_probe_event_argv(int argc, const char **argv)
 	len = 0;
 	for (i = 0; i < argc; i++)
 		len += sprintf(&buf[len], "%s ", argv[i]);
+	params.mod_events = true;
 	ret = parse_probe_event(buf);
 	free(buf);
 	return ret;
@@ -100,9 +106,10 @@ static int parse_probe_event_argv(int argc, const char **argv)
 static int opt_add_probe_event(const struct option *opt __used,
 			      const char *str, int unset __used)
 {
-	if (str)
+	if (str) {
+		params.mod_events = true;
 		return parse_probe_event(str);
-	else
+	} else
 		return 0;
 }
 
@@ -110,6 +117,7 @@ static int opt_del_probe_event(const struct option *opt __used,
 			       const char *str, int unset __used)
 {
 	if (str) {
+		params.mod_events = true;
 		if (!params.dellist)
 			params.dellist = strlist__new(true, NULL);
 		strlist__add(params.dellist, str);
@@ -123,14 +131,62 @@ static int opt_show_lines(const struct option *opt __used,
 {
 	int ret = 0;
 
-	if (str)
-		ret = parse_line_range_desc(str, &params.line_range);
-	INIT_LIST_HEAD(&params.line_range.line_list);
+	if (!str)
+		return 0;
+
+	if (params.show_lines) {
+		pr_warning("Warning: more than one --line options are"
+			   " detected. Only the first one is valid.\n");
+		return 0;
+	}
+
 	params.show_lines = true;
+	ret = parse_line_range_desc(str, &params.line_range);
+	INIT_LIST_HEAD(&params.line_range.line_list);
+
+	return ret;
+}
+
+static int opt_show_vars(const struct option *opt __used,
+			 const char *str, int unset __used)
+{
+	struct perf_probe_event *pev = &params.events[params.nevents];
+	int ret;
+
+	if (!str)
+		return 0;
+
+	ret = parse_probe_event(str);
+	if (!ret && pev->nargs != 0) {
+		pr_err("  Error: '--vars' doesn't accept arguments.\n");
+		return -EINVAL;
+	}
+	params.show_vars = true;
 
 	return ret;
 }
 #endif
+
+static int opt_set_filter(const struct option *opt __used,
+			  const char *str, int unset __used)
+{
+	const char *err;
+
+	if (str) {
+		pr_debug2("Set filter: %s\n", str);
+		if (params.filter)
+			strfilter__delete(params.filter);
+		params.filter = strfilter__new(str, &err);
+		if (!params.filter) {
+			pr_err("Filter parse error at %td.\n", err - str + 1);
+			pr_err("Source: \"%s\"\n", str);
+			pr_err("         %*c\n", (int)(err - str + 1), '^');
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
 
 static const char * const probe_usage[] = {
 	"perf probe [<options>] 'PROBEDEF' ['PROBEDEF' ...]",
@@ -138,7 +194,8 @@ static const char * const probe_usage[] = {
 	"perf probe [<options>] --del '[GROUP:]EVENT' ...",
 	"perf probe --list",
 #ifdef DWARF_SUPPORT
-	"perf probe --line 'LINEDESC'",
+	"perf probe [<options>] --line 'LINEDESC'",
+	"perf probe [<options>] --vars 'PROBEPOINT'",
 #endif
 	NULL
 };
@@ -180,14 +237,29 @@ static const struct option options[] = {
 	OPT_CALLBACK('L', "line", NULL,
 		     "FUNC[:RLN[+NUM|-RLN2]]|SRC:ALN[+NUM|-ALN2]",
 		     "Show source code lines.", opt_show_lines),
+	OPT_CALLBACK('V', "vars", NULL,
+		     "FUNC[@SRC][+OFF|%return|:RL|;PT]|SRC:AL|SRC;PT",
+		     "Show accessible variables on PROBEDEF", opt_show_vars),
+	OPT_BOOLEAN('\0', "externs", &params.show_ext_vars,
+		    "Show external variables too (with --vars only)"),
 	OPT_STRING('k', "vmlinux", &symbol_conf.vmlinux_name,
 		   "file", "vmlinux pathname"),
 	OPT_STRING('s', "source", &symbol_conf.source_prefix,
 		   "directory", "path to kernel source"),
+	OPT_STRING('m', "module", &params.target,
+		   "modname|path",
+		   "target module name (for online) or path (for offline)"),
 #endif
 	OPT__DRY_RUN(&probe_event_dry_run),
 	OPT_INTEGER('\0', "max-probes", &params.max_probe_points,
 		 "Set how many probe points can be found for a probe."),
+	OPT_BOOLEAN('F', "funcs", &params.show_funcs,
+		    "Show potential probe-able functions."),
+	OPT_CALLBACK('\0', "filter", NULL,
+		     "[!]FILTER", "Set a filter (with --vars/funcs only)\n"
+		     "\t\t\t(default: \"" DEFAULT_VAR_FILTER "\" for --vars,\n"
+		     "\t\t\t \"" DEFAULT_FUNC_FILTER "\" for --funcs)",
+		     opt_set_filter),
 	OPT_END()
 };
 
@@ -213,16 +285,29 @@ int cmd_probe(int argc, const char **argv, const char *prefix __used)
 		params.max_probe_points = MAX_PROBES;
 
 	if ((!params.nevents && !params.dellist && !params.list_events &&
-	     !params.show_lines))
+	     !params.show_lines && !params.show_funcs))
 		usage_with_options(probe_usage, options);
 
+	/*
+	 * Only consider the user's kernel image path if given.
+	 */
+	symbol_conf.try_vmlinux_path = (symbol_conf.vmlinux_name == NULL);
+
 	if (params.list_events) {
-		if (params.nevents != 0 || params.dellist) {
+		if (params.mod_events) {
 			pr_err("  Error: Don't use --list with --add/--del.\n");
 			usage_with_options(probe_usage, options);
 		}
 		if (params.show_lines) {
 			pr_err("  Error: Don't use --list with --line.\n");
+			usage_with_options(probe_usage, options);
+		}
+		if (params.show_vars) {
+			pr_err(" Error: Don't use --list with --vars.\n");
+			usage_with_options(probe_usage, options);
+		}
+		if (params.show_funcs) {
+			pr_err("  Error: Don't use --list with --funcs.\n");
 			usage_with_options(probe_usage, options);
 		}
 		ret = show_perf_probe_events();
@@ -231,18 +316,67 @@ int cmd_probe(int argc, const char **argv, const char *prefix __used)
 			       ret);
 		return ret;
 	}
+	if (params.show_funcs) {
+		if (params.nevents != 0 || params.dellist) {
+			pr_err("  Error: Don't use --funcs with"
+			       " --add/--del.\n");
+			usage_with_options(probe_usage, options);
+		}
+		if (params.show_lines) {
+			pr_err("  Error: Don't use --funcs with --line.\n");
+			usage_with_options(probe_usage, options);
+		}
+		if (params.show_vars) {
+			pr_err("  Error: Don't use --funcs with --vars.\n");
+			usage_with_options(probe_usage, options);
+		}
+		if (!params.filter)
+			params.filter = strfilter__new(DEFAULT_FUNC_FILTER,
+						       NULL);
+		ret = show_available_funcs(params.target,
+					   params.filter);
+		strfilter__delete(params.filter);
+		if (ret < 0)
+			pr_err("  Error: Failed to show functions."
+			       " (%d)\n", ret);
+		return ret;
+	}
 
 #ifdef DWARF_SUPPORT
 	if (params.show_lines) {
-		if (params.nevents != 0 || params.dellist) {
-			pr_warning("  Error: Don't use --line with"
-				   " --add/--del.\n");
+		if (params.mod_events) {
+			pr_err("  Error: Don't use --line with"
+			       " --add/--del.\n");
+			usage_with_options(probe_usage, options);
+		}
+		if (params.show_vars) {
+			pr_err(" Error: Don't use --line with --vars.\n");
 			usage_with_options(probe_usage, options);
 		}
 
-		ret = show_line_range(&params.line_range);
+		ret = show_line_range(&params.line_range, params.target);
 		if (ret < 0)
 			pr_err("  Error: Failed to show lines. (%d)\n", ret);
+		return ret;
+	}
+	if (params.show_vars) {
+		if (params.mod_events) {
+			pr_err("  Error: Don't use --vars with"
+			       " --add/--del.\n");
+			usage_with_options(probe_usage, options);
+		}
+		if (!params.filter)
+			params.filter = strfilter__new(DEFAULT_VAR_FILTER,
+						       NULL);
+
+		ret = show_available_vars(params.events, params.nevents,
+					  params.max_probe_points,
+					  params.target,
+					  params.filter,
+					  params.show_ext_vars);
+		strfilter__delete(params.filter);
+		if (ret < 0)
+			pr_err("  Error: Failed to show vars. (%d)\n", ret);
 		return ret;
 	}
 #endif
@@ -258,8 +392,9 @@ int cmd_probe(int argc, const char **argv, const char *prefix __used)
 
 	if (params.nevents) {
 		ret = add_perf_probe_events(params.events, params.nevents,
-					    params.force_add,
-					    params.max_probe_points);
+					    params.max_probe_points,
+					    params.target,
+					    params.force_add);
 		if (ret < 0) {
 			pr_err("  Error: Failed to add events. (%d)\n", ret);
 			return ret;

@@ -36,11 +36,12 @@
 	if RED works correctly.
  */
 
-struct red_sched_data
-{
+struct red_sched_data {
 	u32			limit;		/* HARD maximal queue length */
 	unsigned char		flags;
+	struct timer_list	adapt_timer;
 	struct red_parms	parms;
+	struct red_vars		vars;
 	struct red_stats	stats;
 	struct Qdisc		*qdisc;
 };
@@ -55,47 +56,47 @@ static inline int red_use_harddrop(struct red_sched_data *q)
 	return q->flags & TC_RED_HARDDROP;
 }
 
-static int red_enqueue(struct sk_buff *skb, struct Qdisc* sch)
+static int red_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 {
 	struct red_sched_data *q = qdisc_priv(sch);
 	struct Qdisc *child = q->qdisc;
 	int ret;
 
-	q->parms.qavg = red_calc_qavg(&q->parms, child->qstats.backlog);
+	q->vars.qavg = red_calc_qavg(&q->parms,
+				     &q->vars,
+				     child->qstats.backlog);
 
-	if (red_is_idling(&q->parms))
-		red_end_of_idle_period(&q->parms);
+	if (red_is_idling(&q->vars))
+		red_end_of_idle_period(&q->vars);
 
-	switch (red_action(&q->parms, q->parms.qavg)) {
-		case RED_DONT_MARK:
-			break;
+	switch (red_action(&q->parms, &q->vars, q->vars.qavg)) {
+	case RED_DONT_MARK:
+		break;
 
-		case RED_PROB_MARK:
-			sch->qstats.overlimits++;
-			if (!red_use_ecn(q) || !INET_ECN_set_ce(skb)) {
-				q->stats.prob_drop++;
-				goto congestion_drop;
-			}
+	case RED_PROB_MARK:
+		sch->qstats.overlimits++;
+		if (!red_use_ecn(q) || !INET_ECN_set_ce(skb)) {
+			q->stats.prob_drop++;
+			goto congestion_drop;
+		}
 
-			q->stats.prob_mark++;
-			break;
+		q->stats.prob_mark++;
+		break;
 
-		case RED_HARD_MARK:
-			sch->qstats.overlimits++;
-			if (red_use_harddrop(q) || !red_use_ecn(q) ||
-			    !INET_ECN_set_ce(skb)) {
-				q->stats.forced_drop++;
-				goto congestion_drop;
-			}
+	case RED_HARD_MARK:
+		sch->qstats.overlimits++;
+		if (red_use_harddrop(q) || !red_use_ecn(q) ||
+		    !INET_ECN_set_ce(skb)) {
+			q->stats.forced_drop++;
+			goto congestion_drop;
+		}
 
-			q->stats.forced_mark++;
-			break;
+		q->stats.forced_mark++;
+		break;
 	}
 
 	ret = qdisc_enqueue(skb, child);
 	if (likely(ret == NET_XMIT_SUCCESS)) {
-		sch->bstats.bytes += qdisc_pkt_len(skb);
-		sch->bstats.packets++;
 		sch->q.qlen++;
 	} else if (net_xmit_drop_count(ret)) {
 		q->stats.pdrop++;
@@ -108,22 +109,24 @@ congestion_drop:
 	return NET_XMIT_CN;
 }
 
-static struct sk_buff * red_dequeue(struct Qdisc* sch)
+static struct sk_buff *red_dequeue(struct Qdisc *sch)
 {
 	struct sk_buff *skb;
 	struct red_sched_data *q = qdisc_priv(sch);
 	struct Qdisc *child = q->qdisc;
 
 	skb = child->dequeue(child);
-	if (skb)
+	if (skb) {
+		qdisc_bstats_update(sch, skb);
 		sch->q.qlen--;
-	else if (!red_is_idling(&q->parms))
-		red_start_of_idle_period(&q->parms);
-
+	} else {
+		if (!red_is_idling(&q->vars))
+			red_start_of_idle_period(&q->vars);
+	}
 	return skb;
 }
 
-static struct sk_buff * red_peek(struct Qdisc* sch)
+static struct sk_buff *red_peek(struct Qdisc *sch)
 {
 	struct red_sched_data *q = qdisc_priv(sch);
 	struct Qdisc *child = q->qdisc;
@@ -131,7 +134,7 @@ static struct sk_buff * red_peek(struct Qdisc* sch)
 	return child->ops->peek(child);
 }
 
-static unsigned int red_drop(struct Qdisc* sch)
+static unsigned int red_drop(struct Qdisc *sch)
 {
 	struct red_sched_data *q = qdisc_priv(sch);
 	struct Qdisc *child = q->qdisc;
@@ -144,30 +147,33 @@ static unsigned int red_drop(struct Qdisc* sch)
 		return len;
 	}
 
-	if (!red_is_idling(&q->parms))
-		red_start_of_idle_period(&q->parms);
+	if (!red_is_idling(&q->vars))
+		red_start_of_idle_period(&q->vars);
 
 	return 0;
 }
 
-static void red_reset(struct Qdisc* sch)
+static void red_reset(struct Qdisc *sch)
 {
 	struct red_sched_data *q = qdisc_priv(sch);
 
 	qdisc_reset(q->qdisc);
 	sch->q.qlen = 0;
-	red_restart(&q->parms);
+	red_restart(&q->vars);
 }
 
 static void red_destroy(struct Qdisc *sch)
 {
 	struct red_sched_data *q = qdisc_priv(sch);
+
+	del_timer_sync(&q->adapt_timer);
 	qdisc_destroy(q->qdisc);
 }
 
 static const struct nla_policy red_policy[TCA_RED_MAX + 1] = {
 	[TCA_RED_PARMS]	= { .len = sizeof(struct tc_red_qopt) },
 	[TCA_RED_STAB]	= { .len = RED_STAB_SIZE },
+	[TCA_RED_MAX_P] = { .type = NLA_U32 },
 };
 
 static int red_change(struct Qdisc *sch, struct nlattr *opt)
@@ -177,6 +183,7 @@ static int red_change(struct Qdisc *sch, struct nlattr *opt)
 	struct tc_red_qopt *ctl;
 	struct Qdisc *child = NULL;
 	int err;
+	u32 max_P;
 
 	if (opt == NULL)
 		return -EINVAL;
@@ -188,6 +195,8 @@ static int red_change(struct Qdisc *sch, struct nlattr *opt)
 	if (tb[TCA_RED_PARMS] == NULL ||
 	    tb[TCA_RED_STAB] == NULL)
 		return -EINVAL;
+
+	max_P = tb[TCA_RED_MAX_P] ? nla_get_u32(tb[TCA_RED_MAX_P]) : 0;
 
 	ctl = nla_data(tb[TCA_RED_PARMS]);
 
@@ -206,22 +215,42 @@ static int red_change(struct Qdisc *sch, struct nlattr *opt)
 		q->qdisc = child;
 	}
 
-	red_set_parms(&q->parms, ctl->qth_min, ctl->qth_max, ctl->Wlog,
-				 ctl->Plog, ctl->Scell_log,
-				 nla_data(tb[TCA_RED_STAB]));
+	red_set_parms(&q->parms,
+		      ctl->qth_min, ctl->qth_max, ctl->Wlog,
+		      ctl->Plog, ctl->Scell_log,
+		      nla_data(tb[TCA_RED_STAB]),
+		      max_P);
+	red_set_vars(&q->vars);
 
-	if (skb_queue_empty(&sch->q))
-		red_end_of_idle_period(&q->parms);
+	del_timer(&q->adapt_timer);
+	if (ctl->flags & TC_RED_ADAPTATIVE)
+		mod_timer(&q->adapt_timer, jiffies + HZ/2);
+
+	if (!q->qdisc->q.qlen)
+		red_start_of_idle_period(&q->vars);
 
 	sch_tree_unlock(sch);
 	return 0;
 }
 
-static int red_init(struct Qdisc* sch, struct nlattr *opt)
+static inline void red_adaptative_timer(unsigned long arg)
+{
+	struct Qdisc *sch = (struct Qdisc *)arg;
+	struct red_sched_data *q = qdisc_priv(sch);
+	spinlock_t *root_lock = qdisc_lock(qdisc_root_sleeping(sch));
+
+	spin_lock(root_lock);
+	red_adaptative_algo(&q->parms, &q->vars);
+	mod_timer(&q->adapt_timer, jiffies + HZ/2);
+	spin_unlock(root_lock);
+}
+
+static int red_init(struct Qdisc *sch, struct nlattr *opt)
 {
 	struct red_sched_data *q = qdisc_priv(sch);
 
 	q->qdisc = &noop_qdisc;
+	setup_timer(&q->adapt_timer, red_adaptative_timer, (unsigned long)sch);
 	return red_change(sch, opt);
 }
 
@@ -239,10 +268,12 @@ static int red_dump(struct Qdisc *sch, struct sk_buff *skb)
 		.Scell_log	= q->parms.Scell_log,
 	};
 
+	sch->qstats.backlog = q->qdisc->qstats.backlog;
 	opts = nla_nest_start(skb, TCA_OPTIONS);
 	if (opts == NULL)
 		goto nla_put_failure;
 	NLA_PUT(skb, TCA_RED_PARMS, sizeof(opt), &opt);
+	NLA_PUT_U32(skb, TCA_RED_MAX_P, q->parms.max_P);
 	return nla_nest_end(skb, opts);
 
 nla_put_failure:

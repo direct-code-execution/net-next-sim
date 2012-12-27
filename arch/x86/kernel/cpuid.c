@@ -33,7 +33,6 @@
 #include <linux/init.h>
 #include <linux/poll.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/major.h>
 #include <linux/fs.h>
 #include <linux/device.h>
@@ -44,7 +43,6 @@
 
 #include <asm/processor.h>
 #include <asm/msr.h>
-#include <asm/system.h>
 
 static struct class *cpuid_class;
 
@@ -178,7 +176,7 @@ static struct notifier_block __refdata cpuid_class_cpu_notifier =
 	.notifier_call = cpuid_class_cpu_callback,
 };
 
-static char *cpuid_devnode(struct device *dev, mode_t *mode)
+static char *cpuid_devnode(struct device *dev, umode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "cpu/%u/cpuid", MINOR(dev->devt));
 }

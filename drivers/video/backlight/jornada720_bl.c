@@ -106,6 +106,7 @@ static int jornada_bl_probe(struct platform_device *pdev)
 	struct backlight_device *bd;
 
 	memset(&props, 0, sizeof(struct backlight_properties));
+	props.type = BACKLIGHT_RAW;
 	props.max_brightness = BL_MAX_BRIGHT;
 	bd = backlight_device_register(S1D_DEVICENAME, &pdev->dev, NULL,
 				       &jornada_bl_ops, &props);
@@ -146,19 +147,8 @@ static struct platform_driver jornada_bl_driver = {
 	},
 };
 
-int __init jornada_bl_init(void)
-{
-	return platform_driver_register(&jornada_bl_driver);
-}
-
-void __exit jornada_bl_exit(void)
-{
-	platform_driver_unregister(&jornada_bl_driver);
-}
+module_platform_driver(jornada_bl_driver);
 
 MODULE_AUTHOR("Kristoffer Ericson <kristoffer.ericson>");
 MODULE_DESCRIPTION("HP Jornada 710/720/728 Backlight driver");
 MODULE_LICENSE("GPL");
-
-module_init(jornada_bl_init);
-module_exit(jornada_bl_exit);

@@ -27,6 +27,7 @@
  */
 
 #include <linux/i2c.h>
+#include <linux/module.h>
 #include <media/v4l2-int-device.h>
 
 #include "tcm825x.h"
@@ -493,7 +494,7 @@ static int ioctl_g_ctrl(struct v4l2_int_device *s,
 	int val, r;
 	struct vcontrol *lvc;
 
-	/* exposure time is special, spread accross 2 registers */
+	/* exposure time is special, spread across 2 registers */
 	if (vc->id == V4L2_CID_EXPOSURE) {
 		int val_lower, val_upper;
 
@@ -538,7 +539,7 @@ static int ioctl_s_ctrl(struct v4l2_int_device *s,
 	struct vcontrol *lvc;
 	int val = vc->value;
 
-	/* exposure time is special, spread accross 2 registers */
+	/* exposure time is special, spread across 2 registers */
 	if (vc->id == V4L2_CID_EXPOSURE) {
 		int val_lower, val_upper;
 		val_lower = val & TCM825X_MASK(TCM825X_ESRSPD_L);

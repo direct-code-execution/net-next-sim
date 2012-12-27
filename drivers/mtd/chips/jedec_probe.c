@@ -1914,11 +1914,10 @@ static void jedec_reset(u32 base, struct map_info *map, struct cfi_private *cfi)
 	 * (oh and incidentaly the jedec spec - 3.5.3.3) the reset
 	 * sequence is *supposed* to be 0xaa at 0x5555, 0x55 at
 	 * 0x2aaa, 0xF0 at 0x5555 this will not affect the AMD chips
-	 * as they will ignore the writes and dont care what address
+	 * as they will ignore the writes and don't care what address
 	 * the F0 is written to */
 	if (cfi->addr_unlock1) {
-		DEBUG( MTD_DEBUG_LEVEL3,
-		       "reset unlock called %x %x \n",
+		pr_debug( "reset unlock called %x %x \n",
 		       cfi->addr_unlock1,cfi->addr_unlock2);
 		cfi_send_gen_cmd(0xaa, cfi->addr_unlock1, base, map, cfi, cfi->device_type, NULL);
 		cfi_send_gen_cmd(0x55, cfi->addr_unlock2, base, map, cfi, cfi->device_type, NULL);
@@ -1935,14 +1934,14 @@ static void jedec_reset(u32 base, struct map_info *map, struct cfi_private *cfi)
 }
 
 
-static int cfi_jedec_setup(struct cfi_private *p_cfi, int index)
+static int cfi_jedec_setup(struct map_info *map, struct cfi_private *cfi, int index)
 {
 	int i,num_erase_regions;
 	uint8_t uaddr;
 
-	if (! (jedec_table[index].devtypes & p_cfi->device_type)) {
-		DEBUG(MTD_DEBUG_LEVEL1, "Rejecting potential %s with incompatible %d-bit device type\n",
-		      jedec_table[index].name, 4 * (1<<p_cfi->device_type));
+	if (!(jedec_table[index].devtypes & cfi->device_type)) {
+		pr_debug("Rejecting potential %s with incompatible %d-bit device type\n",
+		      jedec_table[index].name, 4 * (1<<cfi->device_type));
 		return 0;
 	}
 
@@ -1950,27 +1949,28 @@ static int cfi_jedec_setup(struct cfi_private *p_cfi, int index)
 
 	num_erase_regions = jedec_table[index].nr_regions;
 
-	p_cfi->cfiq = kmalloc(sizeof(struct cfi_ident) + num_erase_regions * 4, GFP_KERNEL);
-	if (!p_cfi->cfiq) {
+	cfi->cfiq = kmalloc(sizeof(struct cfi_ident) + num_erase_regions * 4, GFP_KERNEL);
+	if (!cfi->cfiq) {
 		//xx printk(KERN_WARNING "%s: kmalloc failed for CFI ident structure\n", map->name);
 		return 0;
 	}
 
-	memset(p_cfi->cfiq,0,sizeof(struct cfi_ident));
+	memset(cfi->cfiq, 0, sizeof(struct cfi_ident));
 
-	p_cfi->cfiq->P_ID = jedec_table[index].cmd_set;
-	p_cfi->cfiq->NumEraseRegions = jedec_table[index].nr_regions;
-	p_cfi->cfiq->DevSize = jedec_table[index].dev_size;
-	p_cfi->cfi_mode = CFI_MODE_JEDEC;
+	cfi->cfiq->P_ID = jedec_table[index].cmd_set;
+	cfi->cfiq->NumEraseRegions = jedec_table[index].nr_regions;
+	cfi->cfiq->DevSize = jedec_table[index].dev_size;
+	cfi->cfi_mode = CFI_MODE_JEDEC;
+	cfi->sector_erase_cmd = CMD(0x30);
 
 	for (i=0; i<num_erase_regions; i++){
-		p_cfi->cfiq->EraseRegionInfo[i] = jedec_table[index].regions[i];
+		cfi->cfiq->EraseRegionInfo[i] = jedec_table[index].regions[i];
 	}
-	p_cfi->cmdset_priv = NULL;
+	cfi->cmdset_priv = NULL;
 
 	/* This may be redundant for some cases, but it doesn't hurt */
-	p_cfi->mfr = jedec_table[index].mfr_id;
-	p_cfi->id = jedec_table[index].dev_id;
+	cfi->mfr = jedec_table[index].mfr_id;
+	cfi->id = jedec_table[index].dev_id;
 
 	uaddr = jedec_table[index].uaddr;
 
@@ -1978,8 +1978,8 @@ static int cfi_jedec_setup(struct cfi_private *p_cfi, int index)
 	   our brains explode when we see the datasheets talking about address
 	   lines numbered from A-1 to A18. The CFI table has unlock addresses
 	   in device-words according to the mode the device is connected in */
-	p_cfi->addr_unlock1 = unlock_addrs[uaddr].addr1 / p_cfi->device_type;
-	p_cfi->addr_unlock2 = unlock_addrs[uaddr].addr2 / p_cfi->device_type;
+	cfi->addr_unlock1 = unlock_addrs[uaddr].addr1 / cfi->device_type;
+	cfi->addr_unlock2 = unlock_addrs[uaddr].addr2 / cfi->device_type;
 
 	return 1;	/* ok */
 }
@@ -2020,7 +2020,7 @@ static inline int jedec_match( uint32_t base,
 		 * there aren't.
 		 */
 		if (finfo->dev_id > 0xff) {
-			DEBUG( MTD_DEBUG_LEVEL3, "%s(): ID is not 8bit\n",
+			pr_debug("%s(): ID is not 8bit\n",
 			       __func__);
 			goto match_done;
 		}
@@ -2044,12 +2044,10 @@ static inline int jedec_match( uint32_t base,
 	}
 
 	/* the part size must fit in the memory window */
-	DEBUG( MTD_DEBUG_LEVEL3,
-	       "MTD %s(): Check fit 0x%.8x + 0x%.8x = 0x%.8x\n",
+	pr_debug("MTD %s(): Check fit 0x%.8x + 0x%.8x = 0x%.8x\n",
 	       __func__, base, 1 << finfo->dev_size, base + (1 << finfo->dev_size) );
 	if ( base + cfi_interleave(cfi) * ( 1 << finfo->dev_size ) > map->size ) {
-		DEBUG( MTD_DEBUG_LEVEL3,
-		       "MTD %s(): 0x%.4x 0x%.4x %dKiB doesn't fit\n",
+		pr_debug("MTD %s(): 0x%.4x 0x%.4x %dKiB doesn't fit\n",
 		       __func__, finfo->mfr_id, finfo->dev_id,
 		       1 << finfo->dev_size );
 		goto match_done;
@@ -2060,13 +2058,12 @@ static inline int jedec_match( uint32_t base,
 
 	uaddr = finfo->uaddr;
 
-	DEBUG( MTD_DEBUG_LEVEL3, "MTD %s(): check unlock addrs 0x%.4x 0x%.4x\n",
+	pr_debug("MTD %s(): check unlock addrs 0x%.4x 0x%.4x\n",
 	       __func__, cfi->addr_unlock1, cfi->addr_unlock2 );
 	if ( MTD_UADDR_UNNECESSARY != uaddr && MTD_UADDR_DONT_CARE != uaddr
 	     && ( unlock_addrs[uaddr].addr1 / cfi->device_type != cfi->addr_unlock1 ||
 		  unlock_addrs[uaddr].addr2 / cfi->device_type != cfi->addr_unlock2 ) ) {
-		DEBUG( MTD_DEBUG_LEVEL3,
-			"MTD %s(): 0x%.4x 0x%.4x did not match\n",
+		pr_debug("MTD %s(): 0x%.4x 0x%.4x did not match\n",
 			__func__,
 			unlock_addrs[uaddr].addr1,
 			unlock_addrs[uaddr].addr2);
@@ -2074,7 +2071,7 @@ static inline int jedec_match( uint32_t base,
 	}
 
 	/*
-	 * Make sure the ID's dissappear when the device is taken out of
+	 * Make sure the ID's disappear when the device is taken out of
 	 * ID mode.  The only time this should fail when it should succeed
 	 * is when the ID's are written as data to the same
 	 * addresses.  For this rare and unfortunate case the chip
@@ -2082,15 +2079,13 @@ static inline int jedec_match( uint32_t base,
 	 * FIXME - write a driver that takes all of the chip info as
 	 * module parameters, doesn't probe but forces a load.
 	 */
-	DEBUG( MTD_DEBUG_LEVEL3,
-	       "MTD %s(): check ID's disappear when not in ID mode\n",
+	pr_debug("MTD %s(): check ID's disappear when not in ID mode\n",
 	       __func__ );
 	jedec_reset( base, map, cfi );
 	mfr = jedec_read_mfr( map, base, cfi );
 	id = jedec_read_id( map, base, cfi );
 	if ( mfr == cfi->mfr && id == cfi->id ) {
-		DEBUG( MTD_DEBUG_LEVEL3,
-		       "MTD %s(): ID 0x%.2x:0x%.2x did not change after reset:\n"
+		pr_debug("MTD %s(): ID 0x%.2x:0x%.2x did not change after reset:\n"
 		       "You might need to manually specify JEDEC parameters.\n",
 			__func__, cfi->mfr, cfi->id );
 		goto match_done;
@@ -2103,7 +2098,7 @@ static inline int jedec_match( uint32_t base,
 	 * Put the device back in ID mode - only need to do this if we
 	 * were truly frobbing a real device.
 	 */
-	DEBUG( MTD_DEBUG_LEVEL3, "MTD %s(): return to ID mode\n", __func__ );
+	pr_debug("MTD %s(): return to ID mode\n", __func__ );
 	if (cfi->addr_unlock1) {
 		cfi_send_gen_cmd(0xaa, cfi->addr_unlock1, base, map, cfi, cfi->device_type, NULL);
 		cfi_send_gen_cmd(0x55, cfi->addr_unlock2, base, map, cfi, cfi->device_type, NULL);
@@ -2166,16 +2161,14 @@ static int jedec_probe_chip(struct map_info *map, __u32 base,
 
 		cfi->mfr = jedec_read_mfr(map, base, cfi);
 		cfi->id = jedec_read_id(map, base, cfi);
-		DEBUG(MTD_DEBUG_LEVEL3,
-		      "Search for id:(%02x %02x) interleave(%d) type(%d)\n",
+		pr_debug("Search for id:(%02x %02x) interleave(%d) type(%d)\n",
 			cfi->mfr, cfi->id, cfi_interleave(cfi), cfi->device_type);
 		for (i = 0; i < ARRAY_SIZE(jedec_table); i++) {
 			if ( jedec_match( base, map, cfi, &jedec_table[i] ) ) {
-				DEBUG( MTD_DEBUG_LEVEL3,
-				       "MTD %s(): matched device 0x%x,0x%x unlock_addrs: 0x%.4x 0x%.4x\n",
+				pr_debug("MTD %s(): matched device 0x%x,0x%x unlock_addrs: 0x%.4x 0x%.4x\n",
 				       __func__, cfi->mfr, cfi->id,
 				       cfi->addr_unlock1, cfi->addr_unlock2 );
-				if (!cfi_jedec_setup(cfi, i))
+				if (!cfi_jedec_setup(map, cfi, i))
 					return 0;
 				goto ok_out;
 			}

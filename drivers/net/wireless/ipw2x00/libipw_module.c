@@ -54,6 +54,7 @@
 
 #define DRV_DESCRIPTION "802.11 data/management/control stack"
 #define DRV_NAME        "libipw"
+#define DRV_PROCNAME	"ieee80211"
 #define DRV_VERSION	LIBIPW_VERSION
 #define DRV_COPYRIGHT   "Copyright (C) 2004-2005 Intel Corporation <jketreno@linux.intel.com>"
 
@@ -149,10 +150,9 @@ struct net_device *alloc_libipw(int sizeof_priv, int monitor)
 	LIBIPW_DEBUG_INFO("Initializing...\n");
 
 	dev = alloc_etherdev(sizeof(struct libipw_device) + sizeof_priv);
-	if (!dev) {
-		LIBIPW_ERROR("Unable to allocate network device.\n");
+	if (!dev)
 		goto failed;
-	}
+
 	ieee = netdev_priv(dev);
 
 	ieee->dev = dev;
@@ -293,16 +293,16 @@ static int __init libipw_init(void)
 	struct proc_dir_entry *e;
 
 	libipw_debug_level = debug;
-	libipw_proc = proc_mkdir("ieee80211", init_net.proc_net);
+	libipw_proc = proc_mkdir(DRV_PROCNAME, init_net.proc_net);
 	if (libipw_proc == NULL) {
-		LIBIPW_ERROR("Unable to create " DRV_NAME
+		LIBIPW_ERROR("Unable to create " DRV_PROCNAME
 				" proc directory\n");
 		return -EIO;
 	}
 	e = proc_create("debug_level", S_IRUGO | S_IWUSR, libipw_proc,
 			&debug_level_proc_fops);
 	if (!e) {
-		remove_proc_entry(DRV_NAME, init_net.proc_net);
+		remove_proc_entry(DRV_PROCNAME, init_net.proc_net);
 		libipw_proc = NULL;
 		return -EIO;
 	}
@@ -319,7 +319,7 @@ static void __exit libipw_exit(void)
 #ifdef CONFIG_LIBIPW_DEBUG
 	if (libipw_proc) {
 		remove_proc_entry("debug_level", libipw_proc);
-		remove_proc_entry(DRV_NAME, init_net.proc_net);
+		remove_proc_entry(DRV_PROCNAME, init_net.proc_net);
 		libipw_proc = NULL;
 	}
 #endif				/* CONFIG_LIBIPW_DEBUG */

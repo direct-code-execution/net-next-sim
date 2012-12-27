@@ -9,6 +9,7 @@
 
 #include <crypto/algapi.h>
 #include <crypto/aes.h>
+#include <crypto/padlock.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/types.h>
@@ -18,10 +19,10 @@
 #include <linux/percpu.h>
 #include <linux/smp.h>
 #include <linux/slab.h>
+#include <asm/cpu_device_id.h>
 #include <asm/byteorder.h>
 #include <asm/processor.h>
 #include <asm/i387.h>
-#include "padlock.h"
 
 /*
  * Number of data blocks actually fetched for each xcrypt insn.
@@ -286,7 +287,7 @@ static inline u8 *padlock_xcrypt_cbc(const u8 *input, u8 *output, void *key,
 	if (initial)
 		asm volatile (".byte 0xf3,0x0f,0xa7,0xd0"	/* rep xcryptcbc */
 			      : "+S" (input), "+D" (output), "+a" (iv)
-			      : "d" (control_word), "b" (key), "c" (count));
+			      : "d" (control_word), "b" (key), "c" (initial));
 
 	asm volatile (".byte 0xf3,0x0f,0xa7,0xd0"	/* rep xcryptcbc */
 		      : "+S" (input), "+D" (output), "+a" (iv)
@@ -503,15 +504,19 @@ static struct crypto_alg cbc_aes_alg = {
 	}
 };
 
+static struct x86_cpu_id padlock_cpu_id[] = {
+	X86_FEATURE_MATCH(X86_FEATURE_XCRYPT),
+	{}
+};
+MODULE_DEVICE_TABLE(x86cpu, padlock_cpu_id);
+
 static int __init padlock_init(void)
 {
 	int ret;
 	struct cpuinfo_x86 *c = &cpu_data(0);
 
-	if (!cpu_has_xcrypt) {
-		printk(KERN_NOTICE PFX "VIA PadLock not detected.\n");
+	if (!x86_match_cpu(padlock_cpu_id))
 		return -ENODEV;
-	}
 
 	if (!cpu_has_xcrypt_enabled) {
 		printk(KERN_NOTICE PFX "VIA PadLock detected, but not enabled. Hmm, strange...\n");

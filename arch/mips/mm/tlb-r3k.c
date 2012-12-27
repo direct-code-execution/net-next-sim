@@ -1,7 +1,7 @@
 /*
  * r2300.c: R2000 and R3000 specific mmu/cache code.
  *
- * Copyright (C) 1996 David S. Miller (dm@engr.sgi.com)
+ * Copyright (C) 1996 David S. Miller (davem@davemloft.net)
  *
  * with a lot of changes to make this thing work for R3000s
  * Tx39XX R4k style caches added. HK
@@ -19,7 +19,7 @@
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <asm/mmu_context.h>
-#include <asm/system.h>
+#include <asm/tlbmisc.h>
 #include <asm/isadep.h>
 #include <asm/io.h>
 #include <asm/bootinfo.h>
@@ -223,8 +223,8 @@ void __update_tlb(struct vm_area_struct *vma, unsigned long address, pte_t pte)
 	local_irq_restore(flags);
 }
 
-void __init add_wired_entry(unsigned long entrylo0, unsigned long entrylo1,
-			    unsigned long entryhi, unsigned long pagemask)
+void add_wired_entry(unsigned long entrylo0, unsigned long entrylo1,
+		     unsigned long entryhi, unsigned long pagemask)
 {
 	unsigned long flags;
 	unsigned long old_ctx;

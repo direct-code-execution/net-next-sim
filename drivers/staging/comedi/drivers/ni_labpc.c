@@ -37,7 +37,7 @@ boards has not
 yet been added to the driver, mainly due to the fact that
 I don't know the device id numbers.  If you have one
 of these boards,
-please file a bug report at https://bugs.comedi.org/
+please file a bug report at http://comedi.org/ 
 so I can get the necessary information from you.
 
 The 1200 series boards have onboard calibration dacs for correcting
@@ -78,6 +78,7 @@ NI manuals:
 
 #include <linux/interrupt.h>
 #include <linux/slab.h>
+#include <linux/io.h>
 #include "../comedidev.h"
 
 #include <linux/delay.h>
@@ -183,11 +184,11 @@ NI manuals:
 #define   OVERRUN_BIT	0x2
 /* fifo overflow */
 #define   OVERFLOW_BIT	0x4
-/* timer interrupt has occured */
+/* timer interrupt has occurred */
 #define   TIMER_BIT	0x8
-/* dma terminal count has occured */
+/* dma terminal count has occurred */
 #define   DMATC_BIT	0x10
-/* external trigger has occured */
+/* external trigger has occurred */
 #define   EXT_TRIG_BIT	0x40
 /* 1200 boards only */
 #define STATUS2_REG	0x1d
@@ -212,8 +213,10 @@ static int labpc_attach(struct comedi_device *dev, struct comedi_devconfig *it);
 static int labpc_cancel(struct comedi_device *dev, struct comedi_subdevice *s);
 static irqreturn_t labpc_interrupt(int irq, void *d);
 static int labpc_drain_fifo(struct comedi_device *dev);
+#ifdef CONFIG_ISA_DMA_API
 static void labpc_drain_dma(struct comedi_device *dev);
 static void handle_isa_dma(struct comedi_device *dev);
+#endif
 static void labpc_drain_dregs(struct comedi_device *dev);
 static int labpc_ai_cmdtest(struct comedi_device *dev,
 			    struct comedi_subdevice *s, struct comedi_cmd *cmd);
@@ -237,9 +240,11 @@ static int labpc_eeprom_write_insn(struct comedi_device *dev,
 				   struct comedi_subdevice *s,
 				   struct comedi_insn *insn,
 				   unsigned int *data);
-static unsigned int labpc_suggest_transfer_size(struct comedi_cmd cmd);
 static void labpc_adc_timing(struct comedi_device *dev, struct comedi_cmd *cmd);
-#ifdef CONFIG_COMEDI_PCI
+#ifdef CONFIG_ISA_DMA_API
+static unsigned int labpc_suggest_transfer_size(struct comedi_cmd cmd);
+#endif
+#ifdef CONFIG_COMEDI_PCI_DRIVERS
 static int labpc_find_device(struct comedi_device *dev, int bus, int slot);
 #endif
 static int labpc_dio_mem_callback(int dir, int port, int data,
@@ -250,7 +255,7 @@ static unsigned int labpc_serial_in(struct comedi_device *dev);
 static unsigned int labpc_eeprom_read(struct comedi_device *dev,
 				      unsigned int address);
 static unsigned int labpc_eeprom_read_status(struct comedi_device *dev);
-static unsigned int labpc_eeprom_write(struct comedi_device *dev,
+static int labpc_eeprom_write(struct comedi_device *dev,
 				       unsigned int address,
 				       unsigned int value);
 static void write_caldac(struct comedi_device *dev, unsigned int channel,
@@ -345,6 +350,7 @@ const int labpc_1200_is_unipolar[NUM_LABPC_1200_AI_RANGES] = {
 	1,
 	1,
 };
+EXPORT_SYMBOL_GPL(labpc_1200_is_unipolar);
 
 /* map range index to gain bits */
 const int labpc_1200_ai_gain_bits[NUM_LABPC_1200_AI_RANGES] = {
@@ -363,6 +369,7 @@ const int labpc_1200_ai_gain_bits[NUM_LABPC_1200_AI_RANGES] = {
 	0x60,
 	0x70,
 };
+EXPORT_SYMBOL_GPL(labpc_1200_ai_gain_bits);
 
 const struct comedi_lrange range_labpc_1200_ai = {
 	NUM_LABPC_1200_AI_RANGES,
@@ -383,6 +390,7 @@ const struct comedi_lrange range_labpc_1200_ai = {
 	 UNI_RANGE(0.1),
 	 }
 };
+EXPORT_SYMBOL_GPL(range_labpc_1200_ai);
 
 /* analog output ranges */
 #define AO_RANGE_IS_UNIPOLAR 0x1
@@ -453,7 +461,7 @@ static const struct labpc_board_struct labpc_boards[] = {
 	 .ai_scan_up = 0,
 	 .memory_mapped_io = 0,
 	 },
-#ifdef CONFIG_COMEDI_PCI
+#ifdef CONFIG_COMEDI_PCI_DRIVERS
 	{
 	 .name = "pci-1200",
 	 .device_id = 0x161,
@@ -497,14 +505,14 @@ static struct comedi_driver driver_labpc = {
 	.offset = sizeof(struct labpc_board_struct),
 };
 
-#ifdef CONFIG_COMEDI_PCI
+#ifdef CONFIG_COMEDI_PCI_DRIVERS
 static DEFINE_PCI_DEVICE_TABLE(labpc_pci_table) = {
 	{PCI_DEVICE(PCI_VENDOR_ID_NI, 0x161)},
 	{0}
 };
 
 MODULE_DEVICE_TABLE(pci, labpc_pci_table);
-#endif /* CONFIG_COMEDI_PCI */
+#endif /* CONFIG_COMEDI_PCI_DRIVERS */
 
 static inline int labpc_counter_load(struct comedi_device *dev,
 				     unsigned long base_address,
@@ -523,7 +531,10 @@ int labpc_common_attach(struct comedi_device *dev, unsigned long iobase,
 {
 	struct comedi_subdevice *s;
 	int i;
-	unsigned long dma_flags, isr_flags;
+	unsigned long isr_flags;
+#ifdef CONFIG_ISA_DMA_API
+	unsigned long dma_flags;
+#endif
 	short lsb, msb;
 
 	printk(KERN_ERR "comedi%d: ni_labpc: %s, io 0x%lx", dev->minor,
@@ -572,7 +583,8 @@ int labpc_common_attach(struct comedi_device *dev, unsigned long iobase,
 	/* grab our IRQ */
 	if (irq) {
 		isr_flags = 0;
-		if (thisboard->bustype == pci_bustype)
+		if (thisboard->bustype == pci_bustype
+		    || thisboard->bustype == pcmcia_bustype)
 			isr_flags |= IRQF_SHARED;
 		if (request_irq(irq, labpc_interrupt, isr_flags,
 				driver_labpc.driver_name, dev)) {
@@ -582,6 +594,7 @@ int labpc_common_attach(struct comedi_device *dev, unsigned long iobase,
 	}
 	dev->irq = irq;
 
+#ifdef CONFIG_ISA_DMA_API
 	/* grab dma channel */
 	if (dma_chan > 3) {
 		printk(KERN_ERR " invalid dma channel %u\n", dma_chan);
@@ -605,6 +618,7 @@ int labpc_common_attach(struct comedi_device *dev, unsigned long iobase,
 		set_dma_mode(devpriv->dma_chan, DMA_MODE_READ);
 		release_dma_lock(dma_flags);
 	}
+#endif
 
 	dev->board_name = thisboard->name;
 
@@ -701,13 +715,14 @@ int labpc_common_attach(struct comedi_device *dev, unsigned long iobase,
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(labpc_common_attach);
 
 static int labpc_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 {
 	unsigned long iobase = 0;
 	unsigned int irq = 0;
 	unsigned int dma_chan = 0;
-#ifdef CONFIG_COMEDI_PCI
+#ifdef CONFIG_COMEDI_PCI_DRIVERS
 	int retval;
 #endif
 
@@ -718,12 +733,18 @@ static int labpc_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	/* get base address, irq etc. based on bustype */
 	switch (thisboard->bustype) {
 	case isa_bustype:
+#ifdef CONFIG_ISA_DMA_API
 		iobase = it->options[0];
 		irq = it->options[1];
 		dma_chan = it->options[2];
+#else
+		printk(KERN_ERR " this driver has not been built with ISA DMA "
+								"support.\n");
+		return -EINVAL;
+#endif
 		break;
 	case pci_bustype:
-#ifdef CONFIG_COMEDI_PCI
+#ifdef CONFIG_COMEDI_PCI_DRIVERS
 		retval = labpc_find_device(dev, it->options[0], it->options[1]);
 		if (retval < 0)
 			return retval;
@@ -753,7 +774,7 @@ static int labpc_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 }
 
 /* adapted from ni_pcimio for finding mite based boards (pc-1200) */
-#ifdef CONFIG_COMEDI_PCI
+#ifdef CONFIG_COMEDI_PCI_DRIVERS
 static int labpc_find_device(struct comedi_device *dev, int bus, int slot)
 {
 	struct mite_struct *mite;
@@ -791,22 +812,24 @@ int labpc_common_detach(struct comedi_device *dev)
 	if (dev->subdevices)
 		subdev_8255_cleanup(dev, dev->subdevices + 2);
 
+#ifdef CONFIG_ISA_DMA_API
 	/* only free stuff if it has been allocated by _attach */
-	if (devpriv->dma_buffer)
-		kfree(devpriv->dma_buffer);
+	kfree(devpriv->dma_buffer);
 	if (devpriv->dma_chan)
 		free_dma(devpriv->dma_chan);
+#endif
 	if (dev->irq)
 		free_irq(dev->irq, dev);
 	if (thisboard->bustype == isa_bustype && dev->iobase)
 		release_region(dev->iobase, LABPC_SIZE);
-#ifdef CONFIG_COMEDI_PCI
+#ifdef CONFIG_COMEDI_PCI_DRIVERS
 	if (devpriv->mite)
 		mite_unsetup(devpriv->mite);
 #endif
 
 	return 0;
 };
+EXPORT_SYMBOL_GPL(labpc_common_detach);
 
 static void labpc_clear_adc_fifo(const struct comedi_device *dev)
 {
@@ -1129,7 +1152,9 @@ static int labpc_ai_cmdtest(struct comedi_device *dev,
 static int labpc_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
 {
 	int channel, range, aref;
+#ifdef CONFIG_ISA_DMA_API
 	unsigned long irq_flags;
+#endif
 	int ret;
 	struct comedi_async *async = s->async;
 	struct comedi_cmd *cmd = &async->cmd;
@@ -1144,7 +1169,7 @@ static int labpc_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
 	range = CR_RANGE(cmd->chanlist[0]);
 	aref = CR_AREF(cmd->chanlist[0]);
 
-	/* make sure board is disabled before setting up aquisition */
+	/* make sure board is disabled before setting up acquisition */
 	spin_lock_irqsave(&dev->spinlock, flags);
 	devpriv->command2_bits &= ~SWTRIG_BIT & ~HWTRIG_BIT & ~PRETRIG_BIT;
 	devpriv->write_byte(devpriv->command2_bits, dev->iobase + COMMAND2_REG);
@@ -1176,6 +1201,7 @@ static int labpc_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
 		devpriv->write_byte(INIT_A1_BITS,
 				    dev->iobase + COUNTER_A_CONTROL_REG);
 
+#ifdef CONFIG_ISA_DMA_API
 	/*  figure out what method we will use to transfer data */
 	if (devpriv->dma_chan &&	/*  need a dma channel allocated */
 		/*
@@ -1187,7 +1213,9 @@ static int labpc_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
 	    thisboard->bustype == isa_bustype) {
 		xfer = isa_dma_transfer;
 		/* pc-plus has no fifo-half full interrupt */
-	} else if (thisboard->register_layout == labpc_1200_layout &&
+	} else
+#endif
+	if (thisboard->register_layout == labpc_1200_layout &&
 		   /*  wake-end-of-scan should interrupt on fifo not empty */
 		   (cmd->flags & TRIG_WAKE_EOS) == 0 &&
 		   /*  make sure we are taking more than just a few points */
@@ -1311,6 +1339,7 @@ static int labpc_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
 
 	labpc_clear_adc_fifo(dev);
 
+#ifdef CONFIG_ISA_DMA_API
 	/*  set up dma transfer */
 	if (xfer == isa_dma_transfer) {
 		irq_flags = claim_dma_lock();
@@ -1334,6 +1363,7 @@ static int labpc_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
 		devpriv->command3_bits |= DMA_EN_BIT | DMATC_INTR_EN_BIT;
 	} else
 		devpriv->command3_bits &= ~DMA_EN_BIT & ~DMATC_INTR_EN_BIT;
+#endif
 
 	/*  enable error interrupts */
 	devpriv->command3_bits |= ERR_INTR_EN_BIT;
@@ -1344,7 +1374,7 @@ static int labpc_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
 		devpriv->command3_bits &= ~ADC_FNE_INTR_EN_BIT;
 	devpriv->write_byte(devpriv->command3_bits, dev->iobase + COMMAND3_REG);
 
-	/*  startup aquisition */
+	/*  startup acquisition */
 
 	/*  command2 reg */
 	/*  use 2 cascaded counters for pacing */
@@ -1420,6 +1450,7 @@ static irqreturn_t labpc_interrupt(int irq, void *d)
 		return IRQ_HANDLED;
 	}
 
+#ifdef CONFIG_ISA_DMA_API
 	if (devpriv->current_transfer == isa_dma_transfer) {
 		/*
 		 * if a dma terminal count of external stop trigger
@@ -1431,6 +1462,7 @@ static irqreturn_t labpc_interrupt(int irq, void *d)
 			handle_isa_dma(dev);
 		}
 	} else
+#endif
 		labpc_drain_fifo(dev);
 
 	if (devpriv->status1_bits & TIMER_BIT) {
@@ -1503,6 +1535,7 @@ static int labpc_drain_fifo(struct comedi_device *dev)
 	return 0;
 }
 
+#ifdef CONFIG_ISA_DMA_API
 static void labpc_drain_dma(struct comedi_device *dev)
 {
 	struct comedi_subdevice *s = dev->read_subdev;
@@ -1565,13 +1598,16 @@ static void handle_isa_dma(struct comedi_device *dev)
 	/*  clear dma tc interrupt */
 	devpriv->write_byte(0x1, dev->iobase + DMATC_CLEAR_REG);
 }
+#endif
 
-/* makes sure all data acquired by board is transfered to comedi (used
- * when aquisition is terminated by stop_src == TRIG_EXT). */
+/* makes sure all data acquired by board is transferred to comedi (used
+ * when acquisition is terminated by stop_src == TRIG_EXT). */
 static void labpc_drain_dregs(struct comedi_device *dev)
 {
+#ifdef CONFIG_ISA_DMA_API
 	if (devpriv->current_transfer == isa_dma_transfer)
 		labpc_drain_dma(dev);
+#endif
 
 	labpc_drain_fifo(dev);
 }
@@ -1763,6 +1799,7 @@ static int labpc_eeprom_write_insn(struct comedi_device *dev,
 	return 1;
 }
 
+#ifdef CONFIG_ISA_DMA_API
 /* utility function that suggests a dma transfer size in bytes */
 static unsigned int labpc_suggest_transfer_size(struct comedi_cmd cmd)
 {
@@ -1786,6 +1823,7 @@ static unsigned int labpc_suggest_transfer_size(struct comedi_cmd cmd)
 
 	return size;
 }
+#endif
 
 /* figures out what counter values to use based on command */
 static void labpc_adc_timing(struct comedi_device *dev, struct comedi_cmd *cmd)
@@ -1986,8 +2024,8 @@ static unsigned int labpc_eeprom_read(struct comedi_device *dev,
 	return value;
 }
 
-static unsigned int labpc_eeprom_write(struct comedi_device *dev,
-				       unsigned int address, unsigned int value)
+static int labpc_eeprom_write(struct comedi_device *dev,
+				unsigned int address, unsigned int value)
 {
 	const int write_enable_instruction = 0x6;
 	const int write_instruction = 0x2;
@@ -2099,7 +2137,7 @@ static void write_caldac(struct comedi_device *dev, unsigned int channel,
 	devpriv->write_byte(devpriv->command5_bits, dev->iobase + COMMAND5_REG);
 }
 
-#ifdef CONFIG_COMEDI_PCI
+#ifdef CONFIG_COMEDI_PCI_DRIVERS
 static int __devinit driver_labpc_pci_probe(struct pci_dev *dev,
 					    const struct pci_device_id *ent)
 {
@@ -2152,11 +2190,6 @@ module_init(driver_labpc_init_module);
 module_exit(driver_labpc_cleanup_module);
 #endif
 
-EXPORT_SYMBOL_GPL(labpc_common_attach);
-EXPORT_SYMBOL_GPL(labpc_common_detach);
-EXPORT_SYMBOL_GPL(range_labpc_1200_ai);
-EXPORT_SYMBOL_GPL(labpc_1200_ai_gain_bits);
-EXPORT_SYMBOL_GPL(labpc_1200_is_unipolar);
 
 MODULE_AUTHOR("Comedi http://www.comedi.org");
 MODULE_DESCRIPTION("Comedi low-level driver");

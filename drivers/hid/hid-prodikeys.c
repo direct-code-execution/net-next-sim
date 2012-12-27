@@ -16,6 +16,8 @@
  * any later version.
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/usb.h>
@@ -41,8 +43,6 @@ struct pk_device {
 	struct hid_device	*hdev;
 	struct pcmidi_snd	*pm; /* pcmidi device context */
 };
-
-struct pcmidi_snd;
 
 struct pcmidi_sustain {
 	unsigned long		in_use;
@@ -90,7 +90,7 @@ static const char longname[] = "Prodikeys PC-MIDI Keyboard";
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
-static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
+static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 
 module_param_array(index, int, NULL, 0444);
 module_param_array(id, charp, NULL, 0444);
@@ -130,7 +130,7 @@ static ssize_t store_channel(struct device *dev,
 	return -EINVAL;
 }
 
-static DEVICE_ATTR(channel, S_IRUGO | S_IWUGO, show_channel,
+static DEVICE_ATTR(channel, S_IRUGO | S_IWUSR | S_IWGRP , show_channel,
 		store_channel);
 
 static struct device_attribute *sysfs_device_attr_channel = {
@@ -169,7 +169,7 @@ static ssize_t store_sustain(struct device *dev,
 	return -EINVAL;
 }
 
-static DEVICE_ATTR(sustain, S_IRUGO | S_IWUGO, show_sustain,
+static DEVICE_ATTR(sustain, S_IRUGO | S_IWUSR | S_IWGRP, show_sustain,
 		store_sustain);
 
 static struct device_attribute *sysfs_device_attr_sustain = {
@@ -207,7 +207,7 @@ static ssize_t store_octave(struct device *dev,
 	return -EINVAL;
 }
 
-static DEVICE_ATTR(octave, S_IRUGO | S_IWUGO, show_octave,
+static DEVICE_ATTR(octave, S_IRUGO | S_IWUSR | S_IWGRP, show_octave,
 		store_octave);
 
 static struct device_attribute *sysfs_device_attr_octave = {
@@ -240,7 +240,7 @@ drop_note:
 	return;
 }
 
-void pcmidi_sustained_note_release(unsigned long data)
+static void pcmidi_sustained_note_release(unsigned long data)
 {
 	struct pcmidi_sustain *pms = (struct pcmidi_sustain *)data;
 
@@ -248,7 +248,7 @@ void pcmidi_sustained_note_release(unsigned long data)
 	pms->in_use = 0;
 }
 
-void init_sustain_timers(struct pcmidi_snd *pm)
+static void init_sustain_timers(struct pcmidi_snd *pm)
 {
 	struct pcmidi_sustain *pms;
 	unsigned i;
@@ -262,7 +262,7 @@ void init_sustain_timers(struct pcmidi_snd *pm)
 	}
 }
 
-void stop_sustain_timers(struct pcmidi_snd *pm)
+static void stop_sustain_timers(struct pcmidi_snd *pm)
 {
 	struct pcmidi_sustain *pms;
 	unsigned i;
@@ -285,11 +285,11 @@ static int pcmidi_get_output_report(struct pcmidi_snd *pm)
 			continue;
 
 		if (report->maxfield < 1) {
-			dev_err(&hdev->dev, "output report is empty\n");
+			hid_err(hdev, "output report is empty\n");
 			break;
 		}
 		if (report->field[0]->report_count != 2) {
-			dev_err(&hdev->dev, "field count too low\n");
+			hid_err(hdev, "field count too low\n");
 			break;
 		}
 		pm->pcmidi_report6 = report;
@@ -497,7 +497,7 @@ static int pcmidi_handle_report4(struct pcmidi_snd *pm, u8 *data)
 	return 1;
 }
 
-int pcmidi_handle_report(
+static int pcmidi_handle_report(
 	struct pcmidi_snd *pm, unsigned report_id, u8 *data, int size)
 {
 	int ret = 0;
@@ -516,7 +516,8 @@ int pcmidi_handle_report(
 	return ret;
 }
 
-void pcmidi_setup_extra_keys(struct pcmidi_snd *pm, struct input_dev *input)
+static void pcmidi_setup_extra_keys(
+	struct pcmidi_snd *pm, struct input_dev *input)
 {
 	/* reassigned functionality for N/A keys
 		MY PICTURES =>	KEY_WORDPROCESSOR
@@ -600,7 +601,7 @@ static struct snd_rawmidi_ops pcmidi_in_ops = {
 	.trigger = pcmidi_in_trigger
 };
 
-int pcmidi_snd_initialise(struct pcmidi_snd *pm)
+static int pcmidi_snd_initialise(struct pcmidi_snd *pm)
 {
 	static int dev;
 	struct snd_card *card;
@@ -718,7 +719,7 @@ fail:
 	return err;
 }
 
-int pcmidi_snd_terminate(struct pcmidi_snd *pm)
+static int pcmidi_snd_terminate(struct pcmidi_snd *pm)
 {
 	if (pm->card) {
 		stop_sustain_timers(pm);
@@ -740,17 +741,18 @@ int pcmidi_snd_terminate(struct pcmidi_snd *pm)
 /*
  * PC-MIDI report descriptor for report id is wrong.
  */
-static void pk_report_fixup(struct hid_device *hdev, __u8 *rdesc,
-		unsigned int rsize)
+static __u8 *pk_report_fixup(struct hid_device *hdev, __u8 *rdesc,
+		unsigned int *rsize)
 {
-	if (rsize == 178 &&
+	if (*rsize == 178 &&
 	      rdesc[111] == 0x06 && rdesc[112] == 0x00 &&
 	      rdesc[113] == 0xff) {
-		dev_info(&hdev->dev, "fixing up pc-midi keyboard report "
-			"descriptor\n");
+		hid_info(hdev,
+			 "fixing up pc-midi keyboard report descriptor\n");
 
 		rdesc[144] = 0x18; /* report 4: was 0x10 report count */
 	}
+	return rdesc;
 }
 
 static int pk_input_mapping(struct hid_device *hdev, struct hid_input *hi,
@@ -804,7 +806,7 @@ static int pk_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	pk = kzalloc(sizeof(*pk), GFP_KERNEL);
 	if (pk == NULL) {
-		dev_err(&hdev->dev, "prodikeys: can't alloc descriptor\n");
+		hid_err(hdev, "can't alloc descriptor\n");
 		return -ENOMEM;
 	}
 
@@ -812,10 +814,9 @@ static int pk_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	pm = kzalloc(sizeof(*pm), GFP_KERNEL);
 	if (pm == NULL) {
-		dev_err(&hdev->dev,
-			"prodikeys: can't alloc descriptor\n");
+		hid_err(hdev, "can't alloc descriptor\n");
 		ret = -ENOMEM;
-		goto err_free;
+		goto err_free_pk;
 	}
 
 	pm->pk = pk;
@@ -826,7 +827,7 @@ static int pk_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	ret = hid_parse(hdev);
 	if (ret) {
-		dev_err(&hdev->dev, "prodikeys: hid parse failed\n");
+		hid_err(hdev, "hid parse failed\n");
 		goto err_free;
 	}
 
@@ -836,7 +837,7 @@ static int pk_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
 	if (ret) {
-		dev_err(&hdev->dev, "prodikeys: hw start failed\n");
+		hid_err(hdev, "hw start failed\n");
 		goto err_free;
 	}
 
@@ -848,10 +849,10 @@ static int pk_probe(struct hid_device *hdev, const struct hid_device_id *id)
 err_stop:
 	hid_hw_stop(hdev);
 err_free:
-	if (pm != NULL)
-		kfree(pm);
-
+	kfree(pm);
+err_free_pk:
 	kfree(pk);
+
 	return ret;
 }
 
@@ -895,7 +896,7 @@ static int pk_init(void)
 
 	ret = hid_register_driver(&pk_driver);
 	if (ret)
-		printk(KERN_ERR "can't register prodikeys driver\n");
+		pr_err("can't register prodikeys driver\n");
 
 	return ret;
 }

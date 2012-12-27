@@ -51,7 +51,6 @@ static const struct stb0899_s1_reg vp1041_stb0899_s1_init_1[] = {
 	{ STB0899_DISRX_ST0     	, 0x04 },
 	{ STB0899_DISRX_ST1     	, 0x00 },
 	{ STB0899_DISPARITY     	, 0x00 },
-	{ STB0899_DISFIFO       	, 0x00 },
 	{ STB0899_DISSTATUS		, 0x20 },
 	{ STB0899_DISF22        	, 0x99 },
 	{ STB0899_DISF22RX      	, 0xa8 },
@@ -316,14 +315,14 @@ static int vp1041_frontend_init(struct mantis_pci *mantis, struct dvb_frontend *
 	if (err == 0) {
 		mantis_frontend_soft_reset(mantis);
 		msleep(250);
-		mantis->fe = stb0899_attach(&vp1041_stb0899_config, adapter);
+		mantis->fe = dvb_attach(stb0899_attach, &vp1041_stb0899_config, adapter);
 		if (mantis->fe) {
 			dprintk(MANTIS_ERROR, 1,
 				"found STB0899 DVB-S/DVB-S2 frontend @0x%02x",
 				vp1041_stb0899_config.demod_address);
 
-			if (stb6100_attach(mantis->fe, &vp1041_stb6100_config, adapter)) {
-				if (!lnbp21_attach(mantis->fe, adapter, 0, 0))
+			if (dvb_attach(stb6100_attach, mantis->fe, &vp1041_stb6100_config, adapter)) {
+				if (!dvb_attach(lnbp21_attach, mantis->fe, adapter, 0, 0))
 					dprintk(MANTIS_ERROR, 1, "No LNBP21 found!");
 			}
 		} else {

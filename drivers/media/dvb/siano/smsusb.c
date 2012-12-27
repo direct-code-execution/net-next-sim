@@ -24,6 +24,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <linux/usb.h>
 #include <linux/firmware.h>
 #include <linux/slab.h>
+#include <linux/module.h>
 
 #include "smscoreapi.h"
 #include "sms-cards.h"
@@ -288,8 +289,7 @@ static int smsusb1_setmode(void *context, int mode)
 
 static void smsusb_term_device(struct usb_interface *intf)
 {
-	struct smsusb_device_t *dev =
-		(struct smsusb_device_t *) usb_get_intfdata(intf);
+	struct smsusb_device_t *dev = usb_get_intfdata(intf);
 
 	if (dev) {
 		smsusb_stop_streaming(dev);
@@ -298,9 +298,8 @@ static void smsusb_term_device(struct usb_interface *intf)
 		if (dev->coredev)
 			smscore_unregister_device(dev->coredev);
 
-		kfree(dev);
-
 		sms_info("device %p destroyed", dev);
+		kfree(dev);
 	}
 
 	usb_set_intfdata(intf, NULL);
@@ -445,8 +444,7 @@ static void smsusb_disconnect(struct usb_interface *intf)
 
 static int smsusb_suspend(struct usb_interface *intf, pm_message_t msg)
 {
-	struct smsusb_device_t *dev =
-		(struct smsusb_device_t *)usb_get_intfdata(intf);
+	struct smsusb_device_t *dev = usb_get_intfdata(intf);
 	printk(KERN_INFO "%s: Entering status %d.\n", __func__, msg.event);
 	smsusb_stop_streaming(dev);
 	return 0;
@@ -455,8 +453,7 @@ static int smsusb_suspend(struct usb_interface *intf, pm_message_t msg)
 static int smsusb_resume(struct usb_interface *intf)
 {
 	int rc, i;
-	struct smsusb_device_t *dev =
-		(struct smsusb_device_t *)usb_get_intfdata(intf);
+	struct smsusb_device_t *dev = usb_get_intfdata(intf);
 	struct usb_device *udev = interface_to_usbdev(intf);
 
 	printk(KERN_INFO "%s: Entering.\n", __func__);
@@ -560,26 +557,7 @@ static struct usb_driver smsusb_driver = {
 	.resume			= smsusb_resume,
 };
 
-static int __init smsusb_module_init(void)
-{
-	int rc = usb_register(&smsusb_driver);
-	if (rc)
-		sms_err("usb_register failed. Error number %d", rc);
-
-	sms_debug("");
-
-	return rc;
-}
-
-static void __exit smsusb_module_exit(void)
-{
-	/* Regular USB Cleanup */
-	usb_deregister(&smsusb_driver);
-	sms_info("end");
-}
-
-module_init(smsusb_module_init);
-module_exit(smsusb_module_exit);
+module_usb_driver(smsusb_driver);
 
 MODULE_DESCRIPTION("Driver for the Siano SMS1xxx USB dongle");
 MODULE_AUTHOR("Siano Mobile Silicon, INC. (uris@siano-ms.com)");

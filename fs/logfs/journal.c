@@ -612,7 +612,6 @@ static size_t __logfs_write_je(struct super_block *sb, void *buf, u16 type,
 	if (len == 0)
 		return logfs_write_header(super, header, 0, type);
 
-	BUG_ON(len > sb->s_blocksize);
 	compr_len = logfs_compress(buf, data, len, sb->s_blocksize);
 	if (compr_len < 0 || type == JE_ANCHOR) {
 		memcpy(data, buf, len);
@@ -828,7 +827,7 @@ void do_logfs_journal_wl_pass(struct super_block *sb)
 		super->s_journal_seg[i] = segno;
 		super->s_journal_ec[i] = ec;
 		logfs_set_segment_reserved(sb, segno);
-		err = btree_insert32(head, segno, (void *)1, GFP_KERNEL);
+		err = btree_insert32(head, segno, (void *)1, GFP_NOFS);
 		BUG_ON(err); /* mempool should prevent this */
 		err = logfs_erase_segment(sb, segno, 1);
 		BUG_ON(err); /* FIXME: remount-ro would be nicer */

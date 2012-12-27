@@ -1,7 +1,18 @@
 #
 # Magnetometer sensors
 #
-comment "Magnetometer sensors"
+menu "Magnetometer sensors"
+
+config SENSORS_AK8975
+	tristate "Asahi Kasei AK8975 3-Axis Magnetometer"
+	depends on I2C
+	depends on GENERIC_GPIO
+	help
+	  Say yes here to build support for Asahi Kasei AK8975 3-Axis
+	  Magnetometer.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called ak8975.
 
 config SENSORS_HMC5843
 	tristate "Honeywell HMC5843 3-Axis Magnetometer"
@@ -13,3 +24,4 @@ config SENSORS_HMC5843
 	  To compile this driver as a module, choose M here: the module
 	  will be called hmc5843
 
+endmenu

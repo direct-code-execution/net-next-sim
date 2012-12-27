@@ -28,6 +28,8 @@
  * P/N 861040-0000: Sensor ST VV6410       ASIC STV0610   - QuickCam Web
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include "stv06xx_hdcs.h"
 
 static const struct ctrl hdcs1x00_ctrl[] = {
@@ -39,8 +41,8 @@ static const struct ctrl hdcs1x00_ctrl[] = {
 			.minimum	= 0x00,
 			.maximum	= 0xff,
 			.step		= 0x1,
-			.default_value 	= HDCS_DEFAULT_EXPOSURE,
-			.flags         	= V4L2_CTRL_FLAG_SLIDER
+			.default_value	= HDCS_DEFAULT_EXPOSURE,
+			.flags		= V4L2_CTRL_FLAG_SLIDER
 		},
 		.set = hdcs_set_exposure,
 		.get = hdcs_get_exposure
@@ -52,8 +54,8 @@ static const struct ctrl hdcs1x00_ctrl[] = {
 			.minimum	= 0x00,
 			.maximum	= 0xff,
 			.step		= 0x1,
-			.default_value 	= HDCS_DEFAULT_GAIN,
-			.flags         	= V4L2_CTRL_FLAG_SLIDER
+			.default_value	= HDCS_DEFAULT_GAIN,
+			.flags		= V4L2_CTRL_FLAG_SLIDER
 		},
 		.set = hdcs_set_gain,
 		.get = hdcs_get_gain
@@ -83,8 +85,8 @@ static const struct ctrl hdcs1020_ctrl[] = {
 			.minimum	= 0x00,
 			.maximum	= 0xffff,
 			.step		= 0x1,
-			.default_value 	= HDCS_DEFAULT_EXPOSURE,
-			.flags         	= V4L2_CTRL_FLAG_SLIDER
+			.default_value	= HDCS_DEFAULT_EXPOSURE,
+			.flags		= V4L2_CTRL_FLAG_SLIDER
 		},
 		.set = hdcs_set_exposure,
 		.get = hdcs_get_exposure
@@ -96,8 +98,8 @@ static const struct ctrl hdcs1020_ctrl[] = {
 			.minimum	= 0x00,
 			.maximum	= 0xff,
 			.step		= 0x1,
-			.default_value 	= HDCS_DEFAULT_GAIN,
-			.flags         	= V4L2_CTRL_FLAG_SLIDER
+			.default_value	= HDCS_DEFAULT_GAIN,
+			.flags		= V4L2_CTRL_FLAG_SLIDER
 		},
 		.set = hdcs_set_gain,
 		.get = hdcs_get_gain
@@ -163,7 +165,8 @@ static int hdcs_reg_write_seq(struct sd *sd, u8 reg, u8 *vals, u8 len)
 	for (i = 0; i < len; i++) {
 		regs[2 * i] = reg;
 		regs[2 * i + 1] = vals[i];
-		/* All addresses are shifted left one bit as bit 0 toggles r/w */
+		/* All addresses are shifted left one bit
+		 * as bit 0 toggles r/w */
 		reg += 2;
 	}
 
@@ -427,7 +430,7 @@ static int hdcs_probe_1x00(struct sd *sd)
 	if (ret < 0 || sensor != 0x08)
 		return -ENODEV;
 
-	info("HDCS-1000/1100 sensor detected");
+	pr_info("HDCS-1000/1100 sensor detected\n");
 
 	sd->gspca_dev.cam.cam_mode = hdcs1x00_mode;
 	sd->gspca_dev.cam.nmodes = ARRAY_SIZE(hdcs1x00_mode);
@@ -486,7 +489,7 @@ static int hdcs_probe_1020(struct sd *sd)
 	if (ret < 0 || sensor != 0x10)
 		return -ENODEV;
 
-	info("HDCS-1020 sensor detected");
+	pr_info("HDCS-1020 sensor detected\n");
 
 	sd->gspca_dev.cam.cam_mode = hdcs1020_mode;
 	sd->gspca_dev.cam.nmodes = ARRAY_SIZE(hdcs1020_mode);
@@ -568,7 +571,7 @@ static int hdcs_init(struct sd *sd)
 	if (err < 0)
 		return err;
 
-	/* Enable continous frame capture, bit 2: stop when frame complete */
+	/* Enable continuous frame capture, bit 2: stop when frame complete */
 	err = stv06xx_write_sensor(sd, HDCS_REG_CONFIG(sd), BIT(3));
 	if (err < 0)
 		return err;
@@ -600,11 +603,11 @@ static int hdcs_dump(struct sd *sd)
 {
 	u16 reg, val;
 
-	info("Dumping sensor registers:");
+	pr_info("Dumping sensor registers:\n");
 
 	for (reg = HDCS_IDENT; reg <= HDCS_ROWEXPH; reg++) {
 		stv06xx_read_sensor(sd, reg, &val);
-		info("reg 0x%02x = 0x%02x", reg, val);
+		pr_info("reg 0x%02x = 0x%02x\n", reg, val);
 	}
 	return 0;
 }

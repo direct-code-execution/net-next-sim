@@ -15,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/io.h>
+#include <linux/ioport.h>
 #include <linux/c2port.h>
 
 #define DATA_PORT	0x325
@@ -41,7 +42,7 @@ static void duramar2150_c2port_access(struct c2port_device *dev, int status)
 		outb(v | (C2D | C2CK), DIR_PORT);
 	else
 		/* When access is "off" is important that both lines are set
-		 * as inputs or hi-impedence */
+		 * as inputs or hi-impedance */
 		outb(v & ~(C2D | C2CK), DIR_PORT);
 
 	mutex_unlock(&update_lock);

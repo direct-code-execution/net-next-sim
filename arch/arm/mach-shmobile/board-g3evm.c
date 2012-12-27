@@ -32,12 +32,12 @@
 #include <linux/gpio.h>
 #include <linux/input.h>
 #include <linux/input/sh_keysc.h>
+#include <linux/dma-mapping.h>
+#include <mach/irqs.h>
 #include <mach/sh7367.h>
 #include <mach/common.h>
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
-#include <asm/mach/map.h>
-#include <asm/mach/time.h>
 
 /*
  * IrDA
@@ -245,27 +245,6 @@ static struct platform_device *g3evm_devices[] __initdata = {
 	&irda_device,
 };
 
-static struct map_desc g3evm_io_desc[] __initdata = {
-	/* create a 1:1 entity map for 0xe6xxxxxx
-	 * used by CPGA, INTC and PFC.
-	 */
-	{
-		.virtual	= 0xe6000000,
-		.pfn		= __phys_to_pfn(0xe6000000),
-		.length		= 256 << 20,
-		.type		= MT_DEVICE_NONSHARED
-	},
-};
-
-static void __init g3evm_map_io(void)
-{
-	iotable_init(g3evm_io_desc, ARRAY_SIZE(g3evm_io_desc));
-
-	/* setup early devices and console here as well */
-	sh7367_add_early_devices();
-	shmobile_setup_console();
-}
-
 static void __init g3evm_init(void)
 {
 	sh7367_pinmux_init();
@@ -347,28 +326,17 @@ static void __init g3evm_init(void)
 	gpio_request(GPIO_FN_IRDA_OUT, NULL);
 	gpio_request(GPIO_FN_IRDA_IN, NULL);
 	gpio_request(GPIO_FN_IRDA_FIRSEL, NULL);
-	set_irq_type(evt2irq(0x480), IRQ_TYPE_LEVEL_LOW);
 
 	sh7367_add_standard_devices();
 
 	platform_add_devices(g3evm_devices, ARRAY_SIZE(g3evm_devices));
 }
 
-static void __init g3evm_timer_init(void)
-{
-	sh7367_clock_init();
-	shmobile_timer.init();
-}
-
-static struct sys_timer g3evm_timer = {
-	.init		= g3evm_timer_init,
-};
-
 MACHINE_START(G3EVM, "g3evm")
-	.phys_io	= 0xe6000000,
-	.io_pg_offst	= ((0xe6000000) >> 18) & 0xfffc,
-	.map_io		= g3evm_map_io,
+	.map_io		= sh7367_map_io,
+	.init_early	= sh7367_add_early_devices,
 	.init_irq	= sh7367_init_irq,
+	.handle_irq	= shmobile_handle_irq_intc,
 	.init_machine	= g3evm_init,
-	.timer		= &g3evm_timer,
+	.timer		= &shmobile_timer,
 MACHINE_END

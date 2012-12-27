@@ -36,7 +36,7 @@ get_vm_block(struct ct_vm *vm, unsigned int size)
 
 	size = CT_PAGE_ALIGN(size);
 	if (size > vm->size) {
-		printk(KERN_ERR "ctxfi: Fail! No sufficient device virtural "
+		printk(KERN_ERR "ctxfi: Fail! No sufficient device virtual "
 				  "memory space available!\n");
 		return NULL;
 	}
@@ -52,8 +52,7 @@ get_vm_block(struct ct_vm *vm, unsigned int size)
 
 	if (entry->size == size) {
 		/* Move the vm node from unused list to used list directly */
-		list_del(&entry->list);
-		list_add(&entry->list, &vm->used);
+		list_move(&entry->list, &vm->used);
 		vm->size -= size;
 		block = entry;
 		goto out;

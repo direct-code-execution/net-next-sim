@@ -29,7 +29,7 @@
  *           nxp,external-clock-frequency = <16000000>;
  *   };
  *
- * See "Documentation/powerpc/dts-bindings/can/sja1000.txt" for further
+ * See "Documentation/devicetree/bindings/net/can/sja1000.txt" for further
  * information.
  */
 
@@ -38,6 +38,7 @@
 #include <linux/interrupt.h>
 #include <linux/netdevice.h>
 #include <linux/delay.h>
+#include <linux/io.h>
 #include <linux/can/dev.h>
 
 #include <linux/of_platform.h>
@@ -87,8 +88,7 @@ static int __devexit sja1000_ofp_remove(struct platform_device *ofdev)
 	return 0;
 }
 
-static int __devinit sja1000_ofp_probe(struct platform_device *ofdev,
-				       const struct of_device_id *id)
+static int __devinit sja1000_ofp_probe(struct platform_device *ofdev)
 {
 	struct device_node *np = ofdev->dev.of_node;
 	struct net_device *dev;
@@ -107,17 +107,13 @@ static int __devinit sja1000_ofp_probe(struct platform_device *ofdev,
 	res_size = resource_size(&res);
 
 	if (!request_mem_region(res.start, res_size, DRV_NAME)) {
-		dev_err(&ofdev->dev, "couldn't request %#llx..%#llx\n",
-			(unsigned long long)res.start,
-			(unsigned long long)res.end);
+		dev_err(&ofdev->dev, "couldn't request %pR\n", &res);
 		return -EBUSY;
 	}
 
 	base = ioremap_nocache(res.start, res_size);
 	if (!base) {
-		dev_err(&ofdev->dev, "couldn't ioremap %#llx..%#llx\n",
-			(unsigned long long)res.start,
-			(unsigned long long)res.end);
+		dev_err(&ofdev->dev, "couldn't ioremap %pR\n", &res);
 		err = -ENOMEM;
 		goto exit_release_mem;
 	}
@@ -214,7 +210,7 @@ static struct of_device_id __devinitdata sja1000_ofp_table[] = {
 };
 MODULE_DEVICE_TABLE(of, sja1000_ofp_table);
 
-static struct of_platform_driver sja1000_ofp_driver = {
+static struct platform_driver sja1000_ofp_driver = {
 	.driver = {
 		.owner = THIS_MODULE,
 		.name = DRV_NAME,
@@ -224,14 +220,4 @@ static struct of_platform_driver sja1000_ofp_driver = {
 	.remove = __devexit_p(sja1000_ofp_remove),
 };
 
-static int __init sja1000_ofp_init(void)
-{
-	return of_register_platform_driver(&sja1000_ofp_driver);
-}
-module_init(sja1000_ofp_init);
-
-static void __exit sja1000_ofp_exit(void)
-{
-	return of_unregister_platform_driver(&sja1000_ofp_driver);
-};
-module_exit(sja1000_ofp_exit);
+module_platform_driver(sja1000_ofp_driver);

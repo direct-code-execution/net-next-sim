@@ -2,7 +2,7 @@ PXA2xx SPI on SSP driver HOWTO
 ===================================================
 This a mini howto on the pxa2xx_spi driver.  The driver turns a PXA2xx
 synchronous serial port into a SPI master controller
-(see Documentation/spi/spi_summary). The driver has the following features
+(see Documentation/spi/spi-summary). The driver has the following features
 
 - Support for any PXA2xx SSP
 - SSP PIO and SSP DMA data transfers.
@@ -19,17 +19,13 @@ Declaring PXA2xx Master Controllers
 -----------------------------------
 Typically a SPI master is defined in the arch/.../mach-*/board-*.c as a
 "platform device".  The master configuration is passed to the driver via a table
-found in arch/arm/mach-pxa/include/mach/pxa2xx_spi.h:
+found in include/linux/spi/pxa2xx_spi.h:
 
 struct pxa2xx_spi_master {
-	enum pxa_ssp_type ssp_type;
 	u32 clock_enable;
 	u16 num_chipselect;
 	u8 enable_dma;
 };
-
-The "pxa2xx_spi_master.ssp_type" field must have a value between 1 and 3 and
-informs the driver which features a particular SSP supports.
 
 The "pxa2xx_spi_master.clock_enable" field is used to enable/disable the
 corresponding SSP peripheral block in the "Clock Enable Register (CKEN"). See
@@ -61,7 +57,6 @@ static struct resource pxa_spi_nssp_resources[] = {
 };
 
 static struct pxa2xx_spi_master pxa_nssp_master_info = {
-	.ssp_type = PXA25x_NSSP, /* Type of SSP */
 	.clock_enable = CKEN_NSSP, /* NSSP Peripheral clock */
 	.num_chipselect = 1, /* Matches the number of chips attached to NSSP */
 	.enable_dma = 1, /* Enables NSSP DMA */
@@ -90,11 +85,11 @@ Declaring Slave Devices
 -----------------------
 Typically each SPI slave (chip) is defined in the arch/.../mach-*/board-*.c
 using the "spi_board_info" structure found in "linux/spi/spi.h". See
-"Documentation/spi/spi_summary" for additional information.
+"Documentation/spi/spi-summary" for additional information.
 
 Each slave device attached to the PXA must provide slave specific configuration
 information via the structure "pxa2xx_spi_chip" found in
-"arch/arm/mach-pxa/include/mach/pxa2xx_spi.h".  The pxa2xx_spi master controller driver
+"include/linux/spi/pxa2xx_spi.h".  The pxa2xx_spi master controller driver
 will uses the configuration whenever the driver communicates with the slave
 device. All fields are optional.
 
@@ -143,7 +138,7 @@ configured to use SSPFRM instead.
 NOTE: the SPI driver cannot control the chip select if SSPFRM is used, so the
 chipselect is dropped after each spi_transfer.  Most devices need chip select
 asserted around the complete message.  Use SSPFRM as a GPIO (through cs_control)
-to accomodate these chips.
+to accommodate these chips.
 
 
 NSSP SLAVE SAMPLE

@@ -30,11 +30,6 @@
 #define SCREEN_Y_RES      600
 #define SCREEN_BPP        16
 
-#ifndef FIELD_OFFSET
-#define FIELD_OFSFET(type, field) \
-	((unsigned long) (PUCHAR) & (((type *)0)->field))
-#endif
-
 /*Assume SM712 graphics chip has 4MB VRAM */
 #define SM712_VIDEOMEMORYSIZE	  0x00400000
 /*Assume SM722 graphics chip has 8MB VRAM */
@@ -43,7 +38,7 @@
 #define dac_reg	(0x3c8)
 #define dac_val	(0x3c9)
 
-extern char *smtc_RegBaseAddress;
+extern char __iomem *smtc_RegBaseAddress;
 #define smtc_mmiowb(dat, reg)	writeb(dat, smtc_RegBaseAddress + reg)
 #define smtc_mmioww(dat, reg)	writew(dat, smtc_RegBaseAddress + reg)
 #define smtc_mmiowl(dat, reg)	writel(dat, smtc_RegBaseAddress + reg)
@@ -790,4 +785,4 @@ struct ModeInit VGAMode[] = {
 	 },
 };
 
-#define numVGAModes		(sizeof(VGAMode) / sizeof(struct ModeInit))
+#define numVGAModes		ARRAY_SIZE(VGAMode)

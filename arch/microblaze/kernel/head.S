@@ -39,7 +39,7 @@
 #include <asm/mmu.h>
 #include <asm/processor.h>
 
-.data
+.section .data
 .global empty_zero_page
 .align 12
 empty_zero_page:
@@ -50,6 +50,11 @@ swapper_pg_dir:
 
 #endif /* CONFIG_MMU */
 
+.section .rodata
+.align 4
+endian_check:
+	.word	1
+
 	__HEAD
 ENTRY(_start)
 #if CONFIG_KERNEL_BASE_ADDR == 0
@@ -58,34 +63,39 @@ ENTRY(_start)
 real_start:
 #endif
 
-	mfs	r1, rmsr
-	andi	r1, r1, ~2
-	mts	rmsr, r1
+	mts	rmsr, r0
 /*
- * Here is checking mechanism which check if Microblaze has msr instructions
- * We load msr and compare it with previous r1 value - if is the same,
- * msr instructions works if not - cpu don't have them.
+ * According to Xilinx, msrclr instruction behaves like 'mfs rX,rpc'
+ * if the msrclr instruction is not enabled. We use this to detect
+ * if the opcode is available, by issuing msrclr and then testing the result.
+ * r8 == 0 - msr instructions are implemented
+ * r8 != 0 - msr instructions are not implemented
  */
-	/* r8=0 - I have msr instr, 1 - I don't have them */
-	rsubi	r0, r0, 1	/* set the carry bit */
-	msrclr	r0, 0x4		/* try to clear it */
-	/* read the carry bit, r8 will be '0' if msrclr exists */
-	addik	r8, r0, 0
+	mfs	r1, rmsr
+	msrclr	r8, 0 /* clear nothing - just read msr for test */
+	cmpu	r8, r8, r1 /* r1 must contain msr reg content */
 
 /* r7 may point to an FDT, or there may be one linked in.
    if it's in r7, we've got to save it away ASAP.
    We ensure r7 points to a valid FDT, just in case the bootloader
    is broken or non-existent */
 	beqi	r7, no_fdt_arg			/* NULL pointer?  don't copy */
-	lw	r11, r0, r7			/* Does r7 point to a */
-	rsubi	r11, r11, OF_DT_HEADER		/* valid FDT? */
+/* Does r7 point to a valid FDT? Load HEADER magic number */
+	/* Run time Big/Little endian platform */
+	/* Save 1 as word and load byte - 0 - BIG, 1 - LITTLE */
+	lbui	r11, r0, TOPHYS(endian_check)
+	beqid	r11, big_endian /* DO NOT break delay stop dependency */
+	lw	r11, r0, r7 /* Big endian load in delay slot */
+	lwr	r11, r0, r7 /* Little endian load */
+big_endian:
+	rsubi	r11, r11, OF_DT_HEADER	/* Check FDT header */
 	beqi	r11, _prepare_copy_fdt
 	or	r7, r0, r0		/* clear R7 when not valid DTB */
 	bnei	r11, no_fdt_arg			/* No - get out of here */
 _prepare_copy_fdt:
 	or	r11, r0, r0 /* incremment */
 	ori	r4, r0, TOPHYS(_fdt_start)
-	ori	r3, r0, (0x4000 - 4)
+	ori	r3, r0, (0x8000 - 4)
 _copy_fdt:
 	lw	r12, r7, r11 /* r12 = r7 + r11 */
 	sw	r12, r4, r11 /* addr[r4 + r11] = r12 */
@@ -139,6 +149,7 @@ _copy_bram:
 _invalidate:
 	mts	rtlbx, r3
 	mts	rtlbhi, r0			/* flush: ensure V is clear   */
+	mts	rtlblo, r0
 	bgtid	r3, _invalidate		/* loop for all entries       */
 	addik	r3, r3, -1
 	/* sync */
@@ -158,6 +169,53 @@ _invalidate:
 	addik	r3,r0, CONFIG_KERNEL_START /* Load the kernel virtual address */
 	tophys(r4,r3)			/* Load the kernel physical address */
 
+	/* start to do TLB calculation */
+	addik	r12, r0, _end
+	rsub	r12, r3, r12
+	addik	r12, r12, CONFIG_KERNEL_PAD /* that's the pad */
+
+	or r9, r0, r0 /* TLB0 = 0 */
+	or r10, r0, r0 /* TLB1 = 0 */
+
+	addik	r11, r12, -0x1000000
+	bgei	r11, GT16 /* size is greater than 16MB */
+	addik	r11, r12, -0x0800000
+	bgei	r11, GT8 /* size is greater than 8MB */
+	addik	r11, r12, -0x0400000
+	bgei	r11, GT4 /* size is greater than 4MB */
+	/* size is less than 4MB */
+	addik	r11, r12, -0x0200000
+	bgei	r11, GT2 /* size is greater than 2MB */
+	addik	r9, r0, 0x0100000 /* TLB0 must be 1MB */
+	addik	r11, r12, -0x0100000
+	bgei	r11, GT1 /* size is greater than 1MB */
+	/* TLB1 is 0 which is setup above */
+	bri tlb_end
+GT4: /* r11 contains the rest - will be either 1 or 4 */
+	ori r9, r0, 0x400000 /* TLB0 is 4MB */
+	bri TLB1
+GT16: /* TLB0 is 16MB */
+	addik	r9, r0, 0x1000000 /* means TLB0 is 16MB */
+TLB1:
+	/* must be used r2 because of substract if failed */
+	addik	r2, r11, -0x0400000
+	bgei	r2, GT20 /* size is greater than 16MB */
+	/* size is >16MB and <20MB */
+	addik	r11, r11, -0x0100000
+	bgei	r11, GT17 /* size is greater than 17MB */
+	/* kernel is >16MB and < 17MB */
+GT1:
+	addik	r10, r0, 0x0100000 /* means TLB1 is 1MB */
+	bri tlb_end
+GT2: /* TLB0 is 0 and TLB1 will be 4MB */
+GT17: /* TLB1 is 4MB - kernel size <20MB */
+	addik	r10, r0, 0x0400000 /* means TLB1 is 4MB */
+	bri tlb_end
+GT8: /* TLB0 is still zero that's why I can use only TLB1 */
+GT20: /* TLB1 is 16MB - kernel size >20MB */
+	addik	r10, r0, 0x1000000 /* means TLB1 is 16MB */
+tlb_end:
+
 	/*
 	 * Configure and load two entries into TLB slots 0 and 1.
 	 * In case we are pinning TLBs, these are reserved in by the
@@ -167,28 +225,81 @@ _invalidate:
 	andi	r4,r4,0xfffffc00	/* Mask off the real page number */
 	ori	r4,r4,(TLB_WR | TLB_EX)	/* Set the write and execute bits */
 
+	/*
+	 * TLB0 is always used - check if is not zero (r9 stores TLB0 value)
+	 * if is use TLB1 value and clear it (r10 stores TLB1 value)
+	 */
+	bnei	r9, tlb0_not_zero
+	add	r9, r10, r0
+	add	r10, r0, r0
+tlb0_not_zero:
+
+	/* look at the code below */
+	ori	r30, r0, 0x200
+	andi	r29, r9, 0x100000
+	bneid	r29, 1f
+	addik	r30, r30, 0x80
+	andi	r29, r9, 0x400000
+	bneid	r29, 1f
+	addik	r30, r30, 0x80
+	andi	r29, r9, 0x1000000
+	bneid	r29, 1f
+	addik	r30, r30, 0x80
+1:
 	andi	r3,r3,0xfffffc00	/* Mask off the effective page number */
-	ori	r3,r3,(TLB_VALID | TLB_PAGESZ(PAGESZ_16M))
+	ori	r3,r3,(TLB_VALID)
+	or	r3, r3, r30
 
-	mts     rtlbx,r0		/* TLB slow 0 */
-
-	mts	rtlblo,r4		/* Load the data portion of the entry */
-	mts	rtlbhi,r3		/* Load the tag portion of the entry */
-
-	addik	r4, r4, 0x01000000	/* Map next 16 M entries */
-	addik	r3, r3, 0x01000000
-
-	ori	r6,r0,1			/* TLB slot 1 */
-	mts     rtlbx,r6
+	/* Load tlb_skip size value which is index to first unused TLB entry */
+	lwi	r11, r0, TOPHYS(tlb_skip)
+	mts     rtlbx,r11		/* TLB slow 0 */
 
 	mts	rtlblo,r4		/* Load the data portion of the entry */
 	mts	rtlbhi,r3		/* Load the tag portion of the entry */
 
+	/* Increase tlb_skip size */
+	addik	r11, r11, 1
+	swi	r11, r0, TOPHYS(tlb_skip)
+
+	/* TLB1 can be zeroes that's why we not setup it */
+	beqi	r10, jump_over2
+
+	/* look at the code below */
+	ori	r30, r0, 0x200
+	andi	r29, r10, 0x100000
+	bneid	r29, 1f
+	addik	r30, r30, 0x80
+	andi	r29, r10, 0x400000
+	bneid	r29, 1f
+	addik	r30, r30, 0x80
+	andi	r29, r10, 0x1000000
+	bneid	r29, 1f
+	addik	r30, r30, 0x80
+1:
+	addk	r4, r4, r9	/* previous addr + TLB0 size */
+	addk	r3, r3, r9
+
+	andi	r3,r3,0xfffffc00	/* Mask off the effective page number */
+	ori	r3,r3,(TLB_VALID)
+	or	r3, r3, r30
+
+	lwi	r11, r0, TOPHYS(tlb_skip)
+	mts     rtlbx, r11		/* r11 is used from TLB0 */
+
+	mts	rtlblo,r4		/* Load the data portion of the entry */
+	mts	rtlbhi,r3		/* Load the tag portion of the entry */
+
+	/* Increase tlb_skip size */
+	addik	r11, r11, 1
+	swi	r11, r0, TOPHYS(tlb_skip)
+
+jump_over2:
 	/*
 	 * Load a TLB entry for LMB, since we need access to
 	 * the exception vectors, using a 4k real==virtual mapping.
 	 */
-	ori	r6,r0,3			/* TLB slot 3 */
+	/* Use temporary TLB_ID for LMB - clear this temporary mapping later */
+	ori	r6, r0, MICROBLAZE_LMB_TLB_ID
 	mts     rtlbx,r6
 
 	ori	r4,r0,(TLB_WR | TLB_EX)
@@ -213,26 +324,26 @@ start_here:
 #endif /* CONFIG_MMU */
 
 	/* Initialize small data anchors */
-	la	r13, r0, _KERNEL_SDA_BASE_
-	la	r2, r0, _KERNEL_SDA2_BASE_
+	addik	r13, r0, _KERNEL_SDA_BASE_
+	addik	r2, r0, _KERNEL_SDA2_BASE_
 
 	/* Initialize stack pointer */
-	la	r1, r0, init_thread_union + THREAD_SIZE - 4
+	addik	r1, r0, init_thread_union + THREAD_SIZE - 4
 
 	/* Initialize r31 with current task address */
-	la	r31, r0, init_task
+	addik	r31, r0, init_task
 
 	/*
 	 * Call platform dependent initialize function.
 	 * Please see $(ARCH)/mach-$(SUBARCH)/setup.c for
 	 * the function.
 	 */
-	la	r9, r0, machine_early_init
-	brald	r15, r9
+	addik	r11, r0, machine_early_init
+	brald	r15, r11
 	nop
 
 #ifndef CONFIG_MMU
-	la	r15, r0, machine_halt
+	addik	r15, r0, machine_halt
 	braid	start_kernel
 	nop
 #else
@@ -257,8 +368,7 @@ start_here:
 
 	/* Load up the kernel context */
 kernel_load_context:
-	# Keep entry 0 and 1 valid. Entry 3 mapped to LMB can go away.
-	ori	r5,r0,3
+	ori	r5, r0, MICROBLAZE_LMB_TLB_ID
 	mts     rtlbx,r5
 	nop
 	mts	rtlbhi,r0

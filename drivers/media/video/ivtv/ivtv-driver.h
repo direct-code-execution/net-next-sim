@@ -36,7 +36,6 @@
  *                using information provided by Jiun-Kuei Jung @ AVerMedia.
  */
 
-#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/delay.h>
@@ -55,7 +54,6 @@
 #include <linux/mutex.h>
 #include <linux/slab.h>
 #include <asm/uaccess.h>
-#include <asm/system.h>
 #include <asm/byteorder.h>
 
 #include <linux/dvb/video.h>
@@ -332,8 +330,9 @@ struct ivtv_stream {
 	struct ivtv *itv; 		/* for ease of use */
 	const char *name;		/* name of the stream */
 	int type;			/* stream type */
+	u32 caps;			/* V4L2 capabilities */
 
-	u32 id;
+	struct v4l2_fh *fh;		/* pointer to the streaming filehandle */
 	spinlock_t qlock; 		/* locks access to the queues */
 	unsigned long s_flags;		/* status flags, see above */
 	int dma;			/* can be PCI_DMA_TODEVICE, PCI_DMA_FROMDEVICE or PCI_DMA_NONE */
@@ -380,10 +379,8 @@ struct ivtv_stream {
 
 struct ivtv_open_id {
 	struct v4l2_fh fh;
-	u32 open_id;                    /* unique ID for this file descriptor */
 	int type;                       /* stream type */
 	int yuv_frames;                 /* 1: started OUT_UDMA_YUV output mode */
-	enum v4l2_priority prio;        /* priority */
 	struct ivtv *itv;
 };
 
@@ -633,6 +630,16 @@ struct ivtv {
 
 	struct v4l2_device v4l2_dev;
 	struct cx2341x_handler cxhdl;
+	struct {
+		/* PTS/Frame count control cluster */
+		struct v4l2_ctrl *ctrl_pts;
+		struct v4l2_ctrl *ctrl_frame;
+	};
+	struct {
+		/* Audio Playback control cluster */
+		struct v4l2_ctrl *ctrl_audio_playback;
+		struct v4l2_ctrl *ctrl_audio_multilingual_playback;
+	};
 	struct v4l2_ctrl_handler hdl_gpio;
 	struct v4l2_subdev sd_gpio;	/* GPIO sub-device */
 	u16 instance;
@@ -651,7 +658,6 @@ struct ivtv {
 	v4l2_std_id std_out;            /* current TV output standard */
 	u8 audio_stereo_mode;           /* decoder setting how to handle stereo MPEG audio */
 	u8 audio_bilingual_mode;        /* decoder setting how to handle bilingual MPEG audio */
-
 
 	/* Locking */
 	spinlock_t lock;                /* lock access to this struct */
@@ -710,7 +716,6 @@ struct ivtv {
 
 	/* Miscellaneous */
 	u32 open_id;			/* incremented each time an open occurs, is >= 1 */
-	struct v4l2_prio_state prio;    /* priority state */
 	int search_pack_header;         /* 1 if ivtv_copy_buf_to_user() is scanning for a pack header (0xba) */
 	int speed;                      /* current playback speed setting */
 	u8 speed_mute_audio;            /* 1 if audio should be muted when fast forward */
@@ -811,15 +816,23 @@ static inline int ivtv_raw_vbi(const struct ivtv *itv)
 /* Call the specified callback for all subdevs matching hw (if 0, then
    match them all). Ignore any errors. */
 #define ivtv_call_hw(itv, hw, o, f, args...) 				\
-	__v4l2_device_call_subdevs(&(itv)->v4l2_dev, !(hw) || (sd->grp_id & (hw)), o, f , ##args)
+	do {								\
+		struct v4l2_subdev *__sd;				\
+		__v4l2_device_call_subdevs_p(&(itv)->v4l2_dev, __sd,	\
+			!(hw) || (__sd->grp_id & (hw)), o, f , ##args);	\
+	} while (0)
 
 #define ivtv_call_all(itv, o, f, args...) ivtv_call_hw(itv, 0, o, f , ##args)
 
 /* Call the specified callback for all subdevs matching hw (if 0, then
    match them all). If the callback returns an error other than 0 or
    -ENOIOCTLCMD, then return with that error code. */
-#define ivtv_call_hw_err(itv, hw, o, f, args...)  		\
-	__v4l2_device_call_subdevs_until_err(&(itv)->v4l2_dev, !(hw) || (sd->grp_id & (hw)), o, f , ##args)
+#define ivtv_call_hw_err(itv, hw, o, f, args...)			\
+({									\
+	struct v4l2_subdev *__sd;					\
+	__v4l2_device_call_subdevs_until_err_p(&(itv)->v4l2_dev, __sd,	\
+		!(hw) || (__sd->grp_id & (hw)), o, f , ##args);		\
+})
 
 #define ivtv_call_all_err(itv, o, f, args...) ivtv_call_hw_err(itv, 0, o, f , ##args)
 

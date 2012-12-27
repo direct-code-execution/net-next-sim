@@ -77,22 +77,50 @@ static int ivtv_yuv_prep_user_dma(struct ivtv *itv, struct ivtv_user_dma *dma,
 	/* Get user pages for DMA Xfer */
 	down_read(&current->mm->mmap_sem);
 	y_pages = get_user_pages(current, current->mm, y_dma.uaddr, y_dma.page_count, 0, 1, &dma->map[0], NULL);
-	uv_pages = get_user_pages(current, current->mm, uv_dma.uaddr, uv_dma.page_count, 0, 1, &dma->map[y_pages], NULL);
+	uv_pages = 0; /* silence gcc. value is set and consumed only if: */
+	if (y_pages == y_dma.page_count) {
+		uv_pages = get_user_pages(current, current->mm,
+					  uv_dma.uaddr, uv_dma.page_count, 0, 1,
+					  &dma->map[y_pages], NULL);
+	}
 	up_read(&current->mm->mmap_sem);
 
-	dma->page_count = y_dma.page_count + uv_dma.page_count;
+	if (y_pages != y_dma.page_count || uv_pages != uv_dma.page_count) {
+		int rc = -EFAULT;
 
-	if (y_pages + uv_pages != dma->page_count) {
-		IVTV_DEBUG_WARN
-		    ("failed to map user pages, returned %d instead of %d\n",
-		     y_pages + uv_pages, dma->page_count);
+		if (y_pages == y_dma.page_count) {
+			IVTV_DEBUG_WARN
+				("failed to map uv user pages, returned %d "
+				 "expecting %d\n", uv_pages, uv_dma.page_count);
 
-		for (i = 0; i < dma->page_count; i++) {
-			put_page(dma->map[i]);
+			if (uv_pages >= 0) {
+				for (i = 0; i < uv_pages; i++)
+					put_page(dma->map[y_pages + i]);
+				rc = -EFAULT;
+			} else {
+				rc = uv_pages;
+			}
+		} else {
+			IVTV_DEBUG_WARN
+				("failed to map y user pages, returned %d "
+				 "expecting %d\n", y_pages, y_dma.page_count);
 		}
-		dma->page_count = 0;
-		return -EINVAL;
+		if (y_pages >= 0) {
+			for (i = 0; i < y_pages; i++)
+				put_page(dma->map[i]);
+			/*
+			 * Inherit the -EFAULT from rc's
+			 * initialization, but allow it to be
+			 * overriden by uv_pages above if it was an
+			 * actual errno.
+			 */
+		} else {
+			rc = y_pages;
+		}
+		return rc;
 	}
+
+	dma->page_count = y_pages + uv_pages;
 
 	/* Fill & map SG List */
 	if (ivtv_udma_fill_sg_list (dma, &uv_dma, ivtv_udma_fill_sg_list (dma, &y_dma, 0)) < 0) {
@@ -1121,23 +1149,37 @@ int ivtv_yuv_udma_stream_frame(struct ivtv *itv, void __user *src)
 {
 	struct yuv_playback_info *yi = &itv->yuv_info;
 	struct ivtv_dma_frame dma_args;
+	int res;
 
 	ivtv_yuv_setup_stream_frame(itv);
 
 	/* We only need to supply source addresses for this */
 	dma_args.y_source = src;
 	dma_args.uv_source = src + 720 * ((yi->v4l2_src_h + 31) & ~31);
-	return ivtv_yuv_udma_frame(itv, &dma_args);
+	/* Wait for frame DMA. Note that serialize_lock is locked,
+	   so to allow other processes to access the driver while
+	   we are waiting unlock first and later lock again. */
+	mutex_unlock(&itv->serialize_lock);
+	res = ivtv_yuv_udma_frame(itv, &dma_args);
+	mutex_lock(&itv->serialize_lock);
+	return res;
 }
 
 /* IVTV_IOC_DMA_FRAME ioctl handler */
 int ivtv_yuv_prep_frame(struct ivtv *itv, struct ivtv_dma_frame *args)
 {
-/*	IVTV_DEBUG_INFO("yuv_prep_frame\n"); */
+	int res;
 
+/*	IVTV_DEBUG_INFO("yuv_prep_frame\n"); */
 	ivtv_yuv_next_free(itv);
 	ivtv_yuv_setup_frame(itv, args);
-	return ivtv_yuv_udma_frame(itv, args);
+	/* Wait for frame DMA. Note that serialize_lock is locked,
+	   so to allow other processes to access the driver while
+	   we are waiting unlock first and later lock again. */
+	mutex_unlock(&itv->serialize_lock);
+	res = ivtv_yuv_udma_frame(itv, args);
+	mutex_lock(&itv->serialize_lock);
+	return res;
 }
 
 void ivtv_yuv_close(struct ivtv *itv)
@@ -1146,7 +1188,9 @@ void ivtv_yuv_close(struct ivtv *itv)
 	int h_filter, v_filter_1, v_filter_2;
 
 	IVTV_DEBUG_YUV("ivtv_yuv_close\n");
+	mutex_unlock(&itv->serialize_lock);
 	ivtv_waitq(&itv->vsync_waitq);
+	mutex_lock(&itv->serialize_lock);
 
 	yi->running = 0;
 	atomic_set(&yi->next_dma_frame, -1);

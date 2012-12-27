@@ -1,9 +1,3 @@
-# For a description of the syntax of this configuration file,
-# see Documentation/kbuild/kconfig-language.txt.
-#
-
-mainmenu "Linux/SPARC Kernel Configuration"
-
 config 64BIT
 	bool "64-bit kernel" if ARCH = "sparc"
 	default ARCH = "sparc64"
@@ -19,6 +13,7 @@ config SPARC
 	bool
 	default y
 	select OF
+	select OF_PROMTREE
 	select HAVE_IDE
 	select HAVE_OPROFILE
 	select HAVE_ARCH_KGDB if !SMP || SPARC64
@@ -26,13 +21,20 @@ config SPARC
 	select ARCH_WANT_OPTIONAL_GPIOLIB
 	select RTC_CLASS
 	select RTC_DRV_M48T59
-	select HAVE_PERF_EVENTS
-	select PERF_USE_VMALLOC
+	select HAVE_IRQ_WORK
 	select HAVE_DMA_ATTRS
 	select HAVE_DMA_API_DEBUG
+	select HAVE_ARCH_JUMP_LABEL
+	select HAVE_GENERIC_HARDIRQS
+	select GENERIC_IRQ_SHOW
+	select USE_GENERIC_SMP_HELPERS if SMP
+	select GENERIC_PCI_IOMAP
+	select HAVE_NMI_WATCHDOG if SPARC64
 
 config SPARC32
 	def_bool !64BIT
+	select GENERIC_ATOMIC64
+	select CLZ_TAB
 
 config SPARC64
 	def_bool 64BIT
@@ -43,18 +45,22 @@ config SPARC64
 	select HAVE_FUNCTION_TRACE_MCOUNT_TEST
 	select HAVE_KRETPROBES
 	select HAVE_KPROBES
+	select HAVE_RCU_TABLE_FREE if SMP
 	select HAVE_MEMBLOCK
+	select HAVE_MEMBLOCK_NODE_MAP
 	select HAVE_SYSCALL_WRAPPERS
 	select HAVE_DYNAMIC_FTRACE
 	select HAVE_FTRACE_MCOUNT_RECORD
 	select HAVE_SYSCALL_TRACEPOINTS
-	select USE_GENERIC_SMP_HELPERS if SMP
 	select RTC_DRV_CMOS
 	select RTC_DRV_BQ4802
 	select RTC_DRV_SUN4V
 	select RTC_DRV_STARFIRE
 	select HAVE_PERF_EVENTS
 	select PERF_USE_VMALLOC
+	select IRQ_PREFLOW_FASTEOI
+	select ARCH_HAVE_NMI_SAFE_CMPXCHG
+	select HAVE_C_RECORDMCOUNT
 
 config ARCH_DEFCONFIG
 	string
@@ -83,10 +89,6 @@ config IOMMU_HELPER
 	bool
 	default y if SPARC64
 
-config QUICKLIST
-	bool
-	default y if SPARC64
-
 config STACKTRACE_SUPPORT
 	bool
 	default y if SPARC64
@@ -110,10 +112,6 @@ config NEED_PER_CPU_EMBED_FIRST_CHUNK
 	def_bool y if SPARC64
 
 config NEED_PER_CPU_PAGE_FIRST_CHUNK
-	def_bool y if SPARC64
-
-config GENERIC_HARDIRQS_NO__DO_IRQ
-	bool
 	def_bool y if SPARC64
 
 config MMU
@@ -194,10 +192,6 @@ config RWSEM_GENERIC_SPINLOCK
 config RWSEM_XCHGADD_ALGORITHM
 	bool
 	default y if SPARC64
-
-config GENERIC_FIND_NEXT_BIT
-	bool
-	default y
 
 config GENERIC_HWEIGHT
 	bool
@@ -281,10 +275,6 @@ config HOTPLUG_CPU
 	  can be controlled through /sys/devices/system/cpu/cpu#.
 	  Say N if you want to disable CPU hotplug.
 
-config GENERIC_HARDIRQS
-	bool
-	default y if SPARC64
-
 source "kernel/time/Kconfig"
 
 if SPARC64
@@ -367,9 +357,6 @@ config NODES_SPAN_OTHER_NODES
 	def_bool y
 	depends on NEED_MULTIPLE_NODES
 
-config ARCH_POPULATES_NODE_MAP
-	def_bool y if SPARC64
-
 config ARCH_SELECT_MEMORY_MODEL
 	def_bool y if SPARC64
 
@@ -400,9 +387,7 @@ config SCHED_MC
 	  making when dealing with multi-core CPU chips at a cost of slightly
 	  increased overhead in some places. If unsure say N here.
 
-if SPARC64
 source "kernel/Kconfig.preempt"
-endif
 
 config CMDLINE_BOOL
 	bool "Default bootloader kernel arguments"
@@ -472,6 +457,39 @@ config SPARC_LEON
 	  from www.gaisler.com. You can download a sparc-linux cross-compilation
 	  toolchain at www.gaisler.com.
 
+if SPARC_LEON
+menu "U-Boot options"
+
+config UBOOT_LOAD_ADDR
+	hex "uImage Load Address"
+	default 0x40004000
+	---help---
+	 U-Boot kernel load address, the address in physical address space
+	 where u-boot will place the Linux kernel before booting it.
+	 This address is normally the base address of main memory + 0x4000.
+
+config UBOOT_FLASH_ADDR
+	hex "uImage.o Load Address"
+	default 0x00080000
+	---help---
+	 Optional setting only affecting the uImage.o ELF-image used to
+	 download the uImage file to the target using a ELF-loader other than
+	 U-Boot. It may for example be used to download an uImage to FLASH with
+	 the GRMON utility before even starting u-boot.
+
+config UBOOT_ENTRY_ADDR
+	hex "uImage Entry Address"
+	default 0xf0004000
+	---help---
+	 Do not change this unless you know what you're doing. This is
+	 hardcoded by the SPARC32 and LEON port.
+
+	 This is the virtual address u-boot jumps to when booting the Linux
+	 Kernel.
+
+endmenu
+endif
+
 endmenu
 
 menu "Bus options (PCI etc.)"
@@ -508,6 +526,23 @@ config PCI_DOMAINS
 config PCI_SYSCALL
 	def_bool PCI
 
+config PCIC_PCI
+	bool
+	depends on PCI && SPARC32 && !SPARC_LEON
+	default y
+
+config LEON_PCI
+	bool
+	depends on PCI && SPARC_LEON
+	default y
+
+config GRPCI2
+	bool "GRPCI2 Host Bridge Support"
+	depends on LEON_PCI
+	default y
+	help
+	  Say Y here to include the GRPCI2 Host Bridge Driver.
+
 source "drivers/pci/Kconfig"
 
 source "drivers/pcmcia/Kconfig"
@@ -525,12 +560,7 @@ config SUN_OPENPROMFS
 	  Only choose N if you know in advance that you will not need to modify
 	  OpenPROM settings on the running system.
 
-# Makefile helpers
-config SPARC32_PCI
-	bool
-	default y
-	depends on SPARC32 && PCI
-
+# Makefile helper
 config SPARC64_PCI
 	bool
 	default y
@@ -547,6 +577,7 @@ config COMPAT
 	depends on SPARC64
 	default y
 	select COMPAT_BINFMT_ELF
+	select ARCH_WANT_OLD_COMPAT_IPC
 
 config SYSVIPC_COMPAT
 	bool

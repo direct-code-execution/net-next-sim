@@ -68,7 +68,6 @@
 #include <net/checksum.h>
 
 #include <asm/io.h>
-#include <asm/system.h>
 
 #include "3c359.h"
 
@@ -208,7 +207,7 @@ static void print_rx_state(struct net_device *dev)
  *	passing/getting the next value from the nic. As with all requests
  *	on this nic it has to be done in two stages, a) tell the nic which
  *	memory address you want to access and b) pass/get the value from the nic.
- *	With the EEProm, you have to wait before and inbetween access a) and b).
+ *	With the EEProm, you have to wait before and between access a) and b).
  *	As this is only read at initialization time and the wait period is very 
  *	small we shouldn't have to worry about scheduling issues.
  */
@@ -282,7 +281,7 @@ static const struct net_device_ops xl_netdev_ops = {
 	.ndo_stop		= xl_close,
 	.ndo_start_xmit		= xl_xmit,
 	.ndo_change_mtu		= xl_change_mtu,
-	.ndo_set_multicast_list = xl_set_rx_mode,
+	.ndo_set_rx_mode	= xl_set_rx_mode,
 	.ndo_set_mac_address	= xl_set_mac_address,
 };
  
@@ -304,7 +303,7 @@ static int __devinit xl_probe(struct pci_dev *pdev,
 
 	if ((i = pci_request_regions(pdev,"3c359"))) { 
 		return i ; 
-	} ; 
+	}
 
 	/* 
 	 * Allowing init_trdev to allocate the private data will align
@@ -674,15 +673,11 @@ static int xl_open(struct net_device *dev)
 	/* These MUST be on 8 byte boundaries */
 	xl_priv->xl_tx_ring = kzalloc((sizeof(struct xl_tx_desc) * XL_TX_RING_SIZE) + 7, GFP_DMA | GFP_KERNEL);
 	if (xl_priv->xl_tx_ring == NULL) {
-		printk(KERN_WARNING "%s: Not enough memory to allocate tx buffers.\n",
-				     dev->name);
 		free_irq(dev->irq,dev);
 		return -ENOMEM;
 	}
 	xl_priv->xl_rx_ring = kzalloc((sizeof(struct xl_rx_desc) * XL_RX_RING_SIZE) +7, GFP_DMA | GFP_KERNEL);
 	if (xl_priv->xl_rx_ring == NULL) {
-		printk(KERN_WARNING "%s: Not enough memory to allocate rx buffers.\n",
-				     dev->name);
 		free_irq(dev->irq,dev);
 		kfree(xl_priv->xl_tx_ring);
 		return -ENOMEM;
@@ -1251,7 +1246,7 @@ static netdev_tx_t xl_xmit(struct sk_buff *skb, struct net_device *dev)
 /* 
  * The NIC has told us that a packet has been downloaded onto the card, we must
  * find out which packet it has done, clear the skb and information for the packet
- * then advance around the ring for all tranmitted packets
+ * then advance around the ring for all transmitted packets
  */
 
 static void xl_dn_comp(struct net_device *dev) 
@@ -1568,7 +1563,7 @@ static void xl_arb_cmd(struct net_device *dev)
 			if (lan_status_diff & LSC_SOFT_ERR)
 					printk(KERN_WARNING "%s: Adapter transmitted Soft Error Report Mac Frame\n",dev->name);
 			if (lan_status_diff & LSC_TRAN_BCN) 
-					printk(KERN_INFO "%s: We are tranmitting the beacon, aaah\n",dev->name);
+					printk(KERN_INFO "%s: We are transmitting the beacon, aaah\n",dev->name);
 			if (lan_status_diff & LSC_SS) 
 					printk(KERN_INFO "%s: Single Station on the ring\n", dev->name);
 			if (lan_status_diff & LSC_RING_REC)
@@ -1773,7 +1768,9 @@ static void xl_wait_misr_flags(struct net_device *dev)
 	if (readb(xl_mmio + MMIO_MACDATA) != 0) {  /* Misr not clear */
 		for (i=0; i<6; i++) { 
 			writel(MEM_BYTE_READ | 0xDFFE0 | i, xl_mmio + MMIO_MAC_ACCESS_CMD) ; 
-			while (readb(xl_mmio + MMIO_MACDATA) != 0 ) {} ; /* Empty Loop */
+			while (readb(xl_mmio + MMIO_MACDATA) != 0) {
+				;	/* Empty Loop */
+			}
 		} 
 	}
 

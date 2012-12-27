@@ -562,6 +562,9 @@ static int ctcm_transmit_skb(struct channel *ch, struct sk_buff *skb)
 		skb_queue_tail(&ch->io_queue, skb);
 		ccw_idx = 3;
 	}
+	if (do_debug_ccw)
+		ctcmpc_dumpit((char *)&ch->ccw[ccw_idx],
+					sizeof(struct ccw1) * 3);
 	ch->retry = 0;
 	fsm_newstate(ch->fsm, CTC_STATE_TX);
 	fsm_addtimer(&ch->timer, CTCM_TIME_5_SEC, CTC_EVENT_TIMER, ch);
@@ -671,7 +674,6 @@ static int ctcmpc_transmit_skb(struct channel *ch, struct sk_buff *skb)
 	int ccw_idx;
 	unsigned long hi;
 	unsigned long saveflags = 0;	/* avoids compiler warning */
-	__u16 block_len;
 
 	CTCM_PR_DEBUG("Enter %s: %s, cp=%i ch=0x%p id=%s state=%s\n",
 			__func__, dev->name, smp_processor_id(), ch,
@@ -718,7 +720,6 @@ static int ctcmpc_transmit_skb(struct channel *ch, struct sk_buff *skb)
 	 */
 	atomic_inc(&skb->users);
 
-	block_len = skb->len + TH_HEADER_LENGTH + PDU_HEADER_LENGTH;
 	/*
 	 * IDAL support in CTCM is broken, so we have to
 	 * care about skb's above 2G ourselves.
@@ -1762,16 +1763,21 @@ static struct ccw_device_id ctcm_ids[] = {
 MODULE_DEVICE_TABLE(ccw, ctcm_ids);
 
 static struct ccw_driver ctcm_ccw_driver = {
-	.owner	= THIS_MODULE,
-	.name	= "ctcm",
+	.driver = {
+		.owner	= THIS_MODULE,
+		.name	= "ctcm",
+	},
 	.ids	= ctcm_ids,
 	.probe	= ccwgroup_probe_ccwdev,
 	.remove	= ccwgroup_remove_ccwdev,
+	.int_class = IOINT_CTC,
 };
 
 static struct ccwgroup_driver ctcm_group_driver = {
-	.owner       = THIS_MODULE,
-	.name        = CTC_DRIVER_NAME,
+	.driver = {
+		.owner	= THIS_MODULE,
+		.name	= CTC_DRIVER_NAME,
+	},
 	.max_slaves  = 2,
 	.driver_id   = 0xC3E3C3D4,	/* CTCM */
 	.probe       = ctcm_probe_device,

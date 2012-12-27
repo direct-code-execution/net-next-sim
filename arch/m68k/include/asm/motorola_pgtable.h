@@ -8,6 +8,7 @@
 #define _PAGE_PRESENT	0x001
 #define _PAGE_SHORT	0x002
 #define _PAGE_RONLY	0x004
+#define _PAGE_READWRITE	0x000
 #define _PAGE_ACCESSED	0x008
 #define _PAGE_DIRTY	0x010
 #define _PAGE_SUPER	0x080	/* 68040 supervisor only */
@@ -221,9 +222,7 @@ static inline pte_t *pte_offset_kernel(pmd_t *pmdp, unsigned long address)
 }
 
 #define pte_offset_map(pmdp,address) ((pte_t *)__pmd_page(*pmdp) + (((address) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1)))
-#define pte_offset_map_nested(pmdp, address) pte_offset_map(pmdp, address)
 #define pte_unmap(pte)		((void)0)
-#define pte_unmap_nested(pte)	((void)0)
 
 /*
  * Allocate and free page tables. The xxx_kernel() versions are

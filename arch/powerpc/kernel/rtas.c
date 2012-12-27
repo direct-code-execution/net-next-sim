@@ -15,7 +15,7 @@
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/spinlock.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/init.h>
 #include <linux/capability.h>
 #include <linux/delay.h>
@@ -24,6 +24,7 @@
 #include <linux/cpumask.h>
 #include <linux/memblock.h>
 #include <linux/slab.h>
+#include <linux/reboot.h>
 
 #include <asm/prom.h>
 #include <asm/rtas.h>
@@ -32,15 +33,16 @@
 #include <asm/firmware.h>
 #include <asm/page.h>
 #include <asm/param.h>
-#include <asm/system.h>
 #include <asm/delay.h>
 #include <asm/uaccess.h>
 #include <asm/udbg.h>
 #include <asm/syscalls.h>
 #include <asm/smp.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/time.h>
 #include <asm/mmu.h>
+#include <asm/topology.h>
+#include <asm/pSeries_reconfig.h>
 
 struct rtas_t rtas = {
 	.lock = __ARCH_SPIN_LOCK_UNLOCKED
@@ -493,7 +495,7 @@ unsigned int rtas_busy_delay(int status)
 
 	might_sleep();
 	ms = rtas_busy_delay_time(status);
-	if (ms)
+	if (ms && need_resched())
 		msleep(ms);
 
 	return ms;
@@ -728,6 +730,7 @@ static int __rtas_suspend_last_cpu(struct rtas_suspend_me_data *data, int wake_w
 		rc = atomic_read(&data->error);
 
 	atomic_set(&data->error, rc);
+	pSeries_coalesce_init();
 
 	if (wake_when_done) {
 		atomic_set(&data->done, 1);
@@ -805,7 +808,7 @@ static void rtas_percpu_suspend_me(void *info)
 	__rtas_suspend_cpu((struct rtas_suspend_me_data *)info, 1);
 }
 
-static int rtas_ibm_suspend_me(struct rtas_args *args)
+int rtas_ibm_suspend_me(struct rtas_args *args)
 {
 	long state;
 	long rc;
@@ -840,6 +843,7 @@ static int rtas_ibm_suspend_me(struct rtas_args *args)
 	atomic_set(&data.error, 0);
 	data.token = rtas_token("ibm,suspend-me");
 	data.complete = &done;
+	stop_topology_update();
 
 	/* Call function on all CPUs.  One of us will make the
 	 * rtas call
@@ -852,14 +856,50 @@ static int rtas_ibm_suspend_me(struct rtas_args *args)
 	if (atomic_read(&data.error) != 0)
 		printk(KERN_ERR "Error doing global join\n");
 
+	start_topology_update();
+
 	return atomic_read(&data.error);
 }
 #else /* CONFIG_PPC_PSERIES */
-static int rtas_ibm_suspend_me(struct rtas_args *args)
+int rtas_ibm_suspend_me(struct rtas_args *args)
 {
 	return -ENOSYS;
 }
 #endif
+
+/**
+ * Find a specific pseries error log in an RTAS extended event log.
+ * @log: RTAS error/event log
+ * @section_id: two character section identifier
+ *
+ * Returns a pointer to the specified errorlog or NULL if not found.
+ */
+struct pseries_errorlog *get_pseries_errorlog(struct rtas_error_log *log,
+					      uint16_t section_id)
+{
+	struct rtas_ext_event_log_v6 *ext_log =
+		(struct rtas_ext_event_log_v6 *)log->buffer;
+	struct pseries_errorlog *sect;
+	unsigned char *p, *log_end;
+
+	/* Check that we understand the format */
+	if (log->extended_log_length < sizeof(struct rtas_ext_event_log_v6) ||
+	    ext_log->log_format != RTAS_V6EXT_LOG_FORMAT_EVENT_LOG ||
+	    ext_log->company_id != RTAS_V6EXT_COMPANY_ID_IBM)
+		return NULL;
+
+	log_end = log->buffer + log->extended_log_length;
+	p = ext_log->vendor_log;
+
+	while (p < log_end) {
+		sect = (struct pseries_errorlog *)p;
+		if (sect->id == section_id)
+			return sect;
+		p += sect->length;
+	}
+
+	return NULL;
+}
 
 asmlinkage int ppc_rtas(struct rtas_args __user *uargs)
 {
@@ -969,7 +1009,7 @@ void __init rtas_initialize(void)
 	 */
 #ifdef CONFIG_PPC64
 	if (machine_is(pseries) && firmware_has_feature(FW_FEATURE_LPAR)) {
-		rtas_region = min(memblock.rmo_size, RTAS_INSTANTIATE_MAX);
+		rtas_region = min(ppc64_rma_size, RTAS_INSTANTIATE_MAX);
 		ibm_suspend_me_token = rtas_token("ibm,suspend-me");
 	}
 #endif

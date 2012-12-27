@@ -20,6 +20,7 @@
 #include <linux/delay.h>
 #include <linux/smp.h>
 #include <linux/kernel_stat.h>
+#include <linux/sched.h>
 
 #include <asm/mmu_context.h>
 #include <asm/io.h>
@@ -137,7 +138,7 @@ static void __cpuinit bcm1480_boot_secondary(int cpu, struct task_struct *idle)
 
 /*
  * Use CFE to find out how many CPUs are available, setting up
- * cpu_possible_map and the logical/physical mappings.
+ * cpu_possible_mask and the logical/physical mappings.
  * XXXKW will the boot CPU ever not be physical 0?
  *
  * Common setup before any secondaries are started
@@ -146,14 +147,13 @@ static void __init bcm1480_smp_setup(void)
 {
 	int i, num;
 
-	cpus_clear(cpu_possible_map);
-	cpu_set(0, cpu_possible_map);
+	init_cpu_possible(cpumask_of(0));
 	__cpu_number_map[0] = 0;
 	__cpu_logical_map[0] = 0;
 
 	for (i = 1, num = 0; i < NR_CPUS; i++) {
 		if (cfe_cpu_stop(i) == 0) {
-			cpu_set(i, cpu_possible_map);
+			set_cpu_possible(i, true);
 			__cpu_number_map[i] = ++num;
 			__cpu_logical_map[num] = i;
 		}
@@ -189,10 +189,8 @@ void bcm1480_mailbox_interrupt(void)
 	/* Clear the mailbox to clear the interrupt */
 	__raw_writeq(((u64)action)<<48, mailbox_0_clear_regs[cpu]);
 
-	/*
-	 * Nothing to do for SMP_RESCHEDULE_YOURSELF; returning from the
-	 * interrupt will do the reschedule for us
-	 */
+	if (action & SMP_RESCHEDULE_YOURSELF)
+		scheduler_ipi();
 
 	if (action & SMP_CALL_FUNCTION)
 		smp_call_function_interrupt();

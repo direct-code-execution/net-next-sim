@@ -19,7 +19,7 @@ static void trampoline (void *context)
   enum hrtimer_restart restart = timer->function (timer);
   if (restart == HRTIMER_RESTART)
     {
-      void *event = sim_event_schedule_ns (ktime_to_ns (timer->_expires),
+      void *event = sim_event_schedule_ns (ktime_to_ns (timer->_softexpires),
 						  &trampoline, timer);
       timer->base = event;
     }
@@ -50,7 +50,6 @@ int __hrtimer_start_range_ns(struct hrtimer *timer, ktime_t tim,
     {
       ns -= sim_current_ns ();
     }
-  timer->_expires = ns_to_ktime (ns);
   timer->_softexpires = ns_to_ktime (ns);
   void *event = sim_event_schedule_ns (ns, &trampoline, timer);
   timer->base = event;

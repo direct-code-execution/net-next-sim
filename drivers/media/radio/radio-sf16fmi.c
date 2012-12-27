@@ -16,7 +16,6 @@
  * Converted to V4L2 API by Mauro Carvalho Chehab <mchehab@infradead.org>
  */
 
-#include <linux/version.h>
 #include <linux/kernel.h>	/* __setup			*/
 #include <linux/module.h>	/* Modules 			*/
 #include <linux/init.h>		/* Initdata			*/
@@ -32,6 +31,7 @@
 MODULE_AUTHOR("Petr Vandrovec, vandrove@vc.cvut.cz and M. Kirkwood");
 MODULE_DESCRIPTION("A driver for the SF16-FMI and SF16-FMP radio.");
 MODULE_LICENSE("GPL");
+MODULE_VERSION("0.0.3");
 
 static int io = -1;
 static int radio_nr = -1;
@@ -39,8 +39,6 @@ static int radio_nr = -1;
 module_param(io, int, 0);
 MODULE_PARM_DESC(io, "I/O address of the SF16-FMI or SF16-FMP card (0x284 or 0x384)");
 module_param(radio_nr, int, 0);
-
-#define RADIO_VERSION KERNEL_VERSION(0, 0, 2)
 
 struct fmi
 {
@@ -134,7 +132,6 @@ static int vidioc_querycap(struct file *file, void  *priv,
 	strlcpy(v->driver, "radio-sf16fmi", sizeof(v->driver));
 	strlcpy(v->card, "SF16-FMx radio", sizeof(v->card));
 	strlcpy(v->bus_info, "ISA", sizeof(v->bus_info));
-	v->version = RADIO_VERSION;
 	v->capabilities = V4L2_CAP_TUNER | V4L2_CAP_RADIO;
 	return 0;
 }
@@ -260,7 +257,7 @@ static int vidioc_s_audio(struct file *file, void *priv,
 
 static const struct v4l2_file_operations fmi_fops = {
 	.owner		= THIS_MODULE,
-	.ioctl		= video_ioctl2,
+	.unlocked_ioctl	= video_ioctl2,
 };
 
 static const struct v4l2_ioctl_ops fmi_ioctl_ops = {
@@ -382,6 +379,9 @@ static int __init fmi_init(void)
 
 	mutex_init(&fmi->lock);
 
+	/* mute card - prevents noisy bootups */
+	fmi_mute(fmi);
+
 	if (video_register_device(&fmi->vdev, VFL_TYPE_RADIO, radio_nr) < 0) {
 		v4l2_device_unregister(v4l2_dev);
 		release_region(fmi->io, 2);
@@ -391,8 +391,6 @@ static int __init fmi_init(void)
 	}
 
 	v4l2_info(v4l2_dev, "card driver at 0x%x\n", fmi->io);
-	/* mute card - prevents noisy bootups */
-	fmi_mute(fmi);
 	return 0;
 }
 

@@ -4,7 +4,7 @@
  * User space memory access functions
  *
  * These routines provide basic accessing functions to the user memory
- * space for the kernel. This header file provides fuctions such as:
+ * space for the kernel. This header file provides functions such as:
  *
  * This file is subject to the terms and conditions of the GNU General Public
  * License.  See the file "COPYING" in the main directory of this archive
@@ -17,6 +17,10 @@
 #define _XTENSA_UACCESS_H
 
 #include <linux/errno.h>
+#ifndef __ASSEMBLY__
+#include <linux/prefetch.h>
+#endif
+#include <asm/types.h>
 
 #define VERIFY_READ    0
 #define VERIFY_WRITE   1
@@ -26,7 +30,6 @@
 #include <asm/current.h>
 #include <asm/asm-offsets.h>
 #include <asm/processor.h>
-#include <asm/types.h>
 
 /*
  * These assembly macros mirror the C macros that follow below.  They
@@ -157,7 +160,6 @@
 #else /* __ASSEMBLY__ not defined */
 
 #include <linux/sched.h>
-#include <asm/types.h>
 
 /*
  * The fs value determines whether argument validity checking should

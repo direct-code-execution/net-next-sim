@@ -462,14 +462,14 @@ static int __devinit sdh_probe(struct platform_device *pdev)
 		goto out;
 	}
 
-	mmc = mmc_alloc_host(sizeof(*mmc), &pdev->dev);
+	mmc = mmc_alloc_host(sizeof(struct sdh_host), &pdev->dev);
 	if (!mmc) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
 	mmc->ops = &sdh_ops;
-	mmc->max_phys_segs = 32;
+	mmc->max_segs = 32;
 	mmc->max_seg_size = 1 << 16;
 	mmc->max_blk_size = 1 << 11;
 	mmc->max_blk_count = 1 << 11;
@@ -627,17 +627,7 @@ static struct platform_driver sdh_driver = {
 	},
 };
 
-static int __init sdh_init(void)
-{
-	return platform_driver_register(&sdh_driver);
-}
-module_init(sdh_init);
-
-static void __exit sdh_exit(void)
-{
-	platform_driver_unregister(&sdh_driver);
-}
-module_exit(sdh_exit);
+module_platform_driver(sdh_driver);
 
 MODULE_DESCRIPTION("Blackfin Secure Digital Host Driver");
 MODULE_AUTHOR("Cliff Cai, Roy Huang");

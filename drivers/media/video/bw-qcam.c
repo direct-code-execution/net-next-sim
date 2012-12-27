@@ -71,7 +71,6 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <linux/mm.h>
 #include <linux/parport.h>
 #include <linux/sched.h>
-#include <linux/version.h>
 #include <linux/videodev2.h>
 #include <linux/mutex.h>
 #include <asm/uaccess.h>
@@ -647,7 +646,6 @@ static int qcam_querycap(struct file *file, void  *priv,
 	strlcpy(vcap->driver, qcam->v4l2_dev.name, sizeof(vcap->driver));
 	strlcpy(vcap->card, "B&W Quickcam", sizeof(vcap->card));
 	strlcpy(vcap->bus_info, "parport", sizeof(vcap->bus_info));
-	vcap->version = KERNEL_VERSION(0, 0, 2);
 	vcap->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_READWRITE;
 	return 0;
 }
@@ -860,7 +858,7 @@ static ssize_t qcam_read(struct file *file, char __user *buf,
 
 static const struct v4l2_file_operations qcam_fops = {
 	.owner		= THIS_MODULE,
-	.ioctl          = video_ioctl2,
+	.unlocked_ioctl = video_ioctl2,
 	.read		= qcam_read,
 };
 
@@ -895,6 +893,7 @@ static struct qcam *qcam_init(struct parport *port)
 
 	if (v4l2_device_register(NULL, v4l2_dev) < 0) {
 		v4l2_err(v4l2_dev, "Could not register v4l2_device\n");
+		kfree(qcam);
 		return NULL;
 	}
 
@@ -1092,3 +1091,4 @@ module_init(init_bw_qcams);
 module_exit(exit_bw_qcams);
 
 MODULE_LICENSE("GPL");
+MODULE_VERSION("0.0.3");

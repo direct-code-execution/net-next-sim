@@ -4,7 +4,7 @@
 
 #include <linux/time.h>
 #include <linux/fs.h>
-#include <linux/reiserfs_fs.h>
+#include "reiserfs.h"
 #include <linux/string.h>
 #include <linux/buffer_head.h>
 
@@ -329,7 +329,7 @@ void reiserfs_debug(struct super_block *s, int level, const char *fmt, ...)
     Numbering scheme for panic used by Vladimir and Anatoly( Hans completely ignores this scheme, and considers it
     pointless complexity):
 
-    panics in reiserfs_fs.h have numbers from 1000 to 1999
+    panics in reiserfs.h have numbers from 1000 to 1999
     super.c				        2000 to 2999
     preserve.c (unused)			    3000 to 3999
     bitmap.c				    4000 to 4999
@@ -586,12 +586,12 @@ void print_block(struct buffer_head *bh, ...)	//int print_mode, int first, int l
 	va_list args;
 	int mode, first, last;
 
-	va_start(args, bh);
-
 	if (!bh) {
 		printk("print_block: buffer is NULL\n");
 		return;
 	}
+
+	va_start(args, bh);
 
 	mode = va_arg(args, int);
 	first = va_arg(args, int);

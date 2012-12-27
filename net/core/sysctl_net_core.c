@@ -17,6 +17,7 @@
 
 #include <net/ip.h>
 #include <net/sock.h>
+#include <net/net_ratelimit.h>
 
 #ifdef CONFIG_RPS
 static int rps_sock_flow_sysctl(ctl_table *table, int write,
@@ -34,7 +35,8 @@ static int rps_sock_flow_sysctl(ctl_table *table, int write,
 
 	mutex_lock(&sock_flow_mutex);
 
-	orig_sock_table = rps_sock_flow_table;
+	orig_sock_table = rcu_dereference_protected(rps_sock_flow_table,
+					lockdep_is_held(&sock_flow_mutex));
 	size = orig_size = orig_sock_table ? orig_sock_table->mask + 1 : 0;
 
 	ret = proc_dointvec(&tmp, write, buffer, lenp, ppos);
@@ -66,8 +68,13 @@ static int rps_sock_flow_sysctl(ctl_table *table, int write,
 
 		if (sock_table != orig_sock_table) {
 			rcu_assign_pointer(rps_sock_flow_table, sock_table);
-			synchronize_rcu();
-			vfree(orig_sock_table);
+			if (sock_table)
+				static_key_slow_inc(&rps_needed);
+			if (orig_sock_table) {
+				static_key_slow_dec(&rps_needed);
+				synchronize_rcu();
+				vfree(orig_sock_table);
+			}
 		}
 	}
 
@@ -121,6 +128,15 @@ static struct ctl_table net_core_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec
 	},
+#ifdef CONFIG_BPF_JIT
+	{
+		.procname	= "bpf_jit_enable",
+		.data		= &bpf_jit_enable,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec
+	},
+#endif
 	{
 		.procname	= "netdev_tstamp_prequeue",
 		.data		= &netdev_tstamp_prequeue,

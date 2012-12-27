@@ -89,8 +89,8 @@ static void xdr_decode_AFSFetchStatus(const __be32 **_bp,
 			i_size_write(&vnode->vfs_inode, size);
 			vnode->vfs_inode.i_uid = status->owner;
 			vnode->vfs_inode.i_gid = status->group;
-			vnode->vfs_inode.i_version = vnode->fid.unique;
-			vnode->vfs_inode.i_nlink = status->nlink;
+			vnode->vfs_inode.i_generation = vnode->fid.unique;
+			set_nlink(&vnode->vfs_inode, status->nlink);
 
 			mode = vnode->vfs_inode.i_mode;
 			mode &= ~S_IALLUGO;
@@ -102,6 +102,7 @@ static void xdr_decode_AFSFetchStatus(const __be32 **_bp,
 		vnode->vfs_inode.i_ctime.tv_sec	= status->mtime_server;
 		vnode->vfs_inode.i_mtime	= vnode->vfs_inode.i_ctime;
 		vnode->vfs_inode.i_atime	= vnode->vfs_inode.i_ctime;
+		vnode->vfs_inode.i_version	= data_version;
 	}
 
 	expected_version = status->data_version;
@@ -364,10 +365,10 @@ static int afs_deliver_fs_fetch_data(struct afs_call *call,
 		_debug("extract data");
 		if (call->count > 0) {
 			page = call->reply3;
-			buffer = kmap_atomic(page, KM_USER0);
+			buffer = kmap_atomic(page);
 			ret = afs_extract_data(call, skb, last, buffer,
 					       call->count);
-			kunmap_atomic(buffer, KM_USER0);
+			kunmap_atomic(buffer);
 			switch (ret) {
 			case 0:		break;
 			case -EAGAIN:	return 0;
@@ -410,9 +411,9 @@ static int afs_deliver_fs_fetch_data(struct afs_call *call,
 	if (call->count < PAGE_SIZE) {
 		_debug("clear");
 		page = call->reply3;
-		buffer = kmap_atomic(page, KM_USER0);
+		buffer = kmap_atomic(page);
 		memset(buffer + call->count, 0, PAGE_SIZE - call->count);
-		kunmap_atomic(buffer, KM_USER0);
+		kunmap_atomic(buffer);
 	}
 
 	_leave(" = 0 [done]");

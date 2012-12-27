@@ -1,6 +1,7 @@
 #include <linux/virtio.h>
 #include <linux/spinlock.h>
 #include <linux/virtio_config.h>
+#include <linux/module.h>
 
 /* Unique numbering for virtio devices. */
 static unsigned int dev_index;
@@ -9,19 +10,19 @@ static ssize_t device_show(struct device *_d,
 			   struct device_attribute *attr, char *buf)
 {
 	struct virtio_device *dev = container_of(_d,struct virtio_device,dev);
-	return sprintf(buf, "%hu", dev->id.device);
+	return sprintf(buf, "0x%04x\n", dev->id.device);
 }
 static ssize_t vendor_show(struct device *_d,
 			   struct device_attribute *attr, char *buf)
 {
 	struct virtio_device *dev = container_of(_d,struct virtio_device,dev);
-	return sprintf(buf, "%hu", dev->id.vendor);
+	return sprintf(buf, "0x%04x\n", dev->id.vendor);
 }
 static ssize_t status_show(struct device *_d,
 			   struct device_attribute *attr, char *buf)
 {
 	struct virtio_device *dev = container_of(_d,struct virtio_device,dev);
-	return sprintf(buf, "0x%08x", dev->config->get_status(dev));
+	return sprintf(buf, "0x%08x\n", dev->config->get_status(dev));
 }
 static ssize_t modalias_show(struct device *_d,
 			     struct device_attribute *attr, char *buf)

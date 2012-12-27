@@ -25,6 +25,7 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/init.h>
+#include <linux/module.h>
 #include <sound/core.h>
 #include <sound/control.h>
 #include <sound/tlv.h>
@@ -878,7 +879,7 @@ static int build_deemphasis(struct snd_akm4xxx *ak, int num_emphs)
 static void proc_regs_read(struct snd_info_entry *entry,
 		struct snd_info_buffer *buffer)
 {
-	struct snd_akm4xxx *ak = (struct snd_akm4xxx *)entry->private_data;
+	struct snd_akm4xxx *ak = entry->private_data;
 	int reg, val, chip;
 	for (chip = 0; chip < ak->num_chips; chip++) {
 		for (reg = 0; reg < ak->total_regs; reg++) {

@@ -1,7 +1,7 @@
 /*
  * ip22-mc.c: Routines for manipulating SGI Memory Controller.
  *
- * Copyright (C) 1996 David S. Miller (dm@engr.sgi.com)
+ * Copyright (C) 1996 David S. Miller (davem@davemloft.net)
  * Copyright (C) 1999 Andrew R. Baker (andrewb@uab.edu) - Indigo2 changes
  * Copyright (C) 2003 Ladislav Michl  (ladis@linux-mips.org)
  * Copyright (C) 2004 Peter Fuerst    (pf@net.alphadv.de) - IP28
@@ -139,11 +139,11 @@ void __init sgimc_init(void)
 	 *         zero.
 	 */
 	/* don't touch parity settings for IP28 */
-#ifndef CONFIG_SGI_IP28
 	tmp = sgimc->cpuctrl0;
-	tmp |= (SGIMC_CCTRL0_EPERRGIO | SGIMC_CCTRL0_EPERRMEM |
-		SGIMC_CCTRL0_R4KNOCHKPARR);
+#ifndef CONFIG_SGI_IP28
+	tmp |= SGIMC_CCTRL0_EPERRGIO | SGIMC_CCTRL0_EPERRMEM;
 #endif
+	tmp |= SGIMC_CCTRL0_R4KNOCHKPARR;
 	sgimc->cpuctrl0 = tmp;
 
 	/* Step 3: Setup the MC write buffer depth, this is controlled
@@ -178,7 +178,8 @@ void __init sgimc_init(void)
 	 */
 
 	/* First the basic invariants across all GIO64 implementations. */
-	tmp = SGIMC_GIOPAR_HPC64;	/* All 1st HPC's interface at 64bits */
+	tmp = sgimc->giopar & SGIMC_GIOPAR_GFX64; /* keep gfx 64bit settings */
+	tmp |= SGIMC_GIOPAR_HPC64;	/* All 1st HPC's interface at 64bits */
 	tmp |= SGIMC_GIOPAR_ONEBUS;	/* Only one physical GIO bus exists */
 
 	if (ip22_is_fullhouse()) {
@@ -193,7 +194,6 @@ void __init sgimc_init(void)
 			tmp |= SGIMC_GIOPAR_PLINEEXP0;	/* exp[01] pipelined */
 			tmp |= SGIMC_GIOPAR_PLINEEXP1;
 			tmp |= SGIMC_GIOPAR_MASTEREISA;	/* EISA masters */
-			tmp |= SGIMC_GIOPAR_GFX64;	/* GFX at 64 bits */
 		}
 	} else {
 		/* Guiness specific settings. */

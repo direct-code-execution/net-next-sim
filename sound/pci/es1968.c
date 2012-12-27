@@ -102,7 +102,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
 #include <linux/gameport.h>
-#include <linux/moduleparam.h>
+#include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/input.h>
 
@@ -111,6 +111,10 @@
 #include <sound/mpu401.h>
 #include <sound/ac97_codec.h>
 #include <sound/initval.h>
+
+#ifdef CONFIG_SND_ES1968_RADIO
+#include <sound/tea575x-tuner.h>
+#endif
 
 #define CARD_NAME "ESS Maestro1/2"
 #define DRIVER_NAME "ES1968"
@@ -128,7 +132,7 @@ MODULE_SUPPORTED_DEVICE("{{ESS,Maestro 2e},"
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 1-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
-static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;	/* Enable this card */
+static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;	/* Enable this card */
 static int total_bufsize[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 1024 };
 static int pcm_substreams_p[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 4 };
 static int pcm_substreams_c[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 1 };
@@ -136,8 +140,9 @@ static int clock[SNDRV_CARDS];
 static int use_pm[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 2};
 static int enable_mpu[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 2};
 #ifdef SUPPORT_JOYSTICK
-static int joystick[SNDRV_CARDS];
+static bool joystick[SNDRV_CARDS];
 #endif
+static int radio_nr[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = -1};
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for " CARD_NAME " soundcard.");
@@ -161,6 +166,9 @@ MODULE_PARM_DESC(enable_mpu, "Enable MPU401.  (0 = off, 1 = on, 2 = auto)");
 module_param_array(joystick, bool, NULL, 0444);
 MODULE_PARM_DESC(joystick, "Enable joystick.");
 #endif
+module_param_array(radio_nr, int, NULL, 0444);
+MODULE_PARM_DESC(radio_nr, "Radio device numbers");
+
 
 
 #define NR_APUS			64
@@ -220,7 +228,7 @@ MODULE_PARM_DESC(joystick, "Enable joystick.");
 #define	RINGB_EN_2CODEC		0x0020
 #define RINGB_SING_BIT_DUAL	0x0040
 
-/* ****Port Adresses**** */
+/* ****Port Addresses**** */
 
 /*   Write & Read */
 #define ESM_INDEX		0x02
@@ -550,8 +558,12 @@ struct es1968 {
 #else
 	struct snd_kcontrol *master_switch; /* for h/w volume control */
 	struct snd_kcontrol *master_volume;
-	spinlock_t ac97_lock;
-	struct tasklet_struct hwvol_tq;
+#endif
+	struct work_struct hwvol_work;
+
+#ifdef CONFIG_SND_ES1968_RADIO
+	struct v4l2_device v4l2_dev;
+	struct snd_tea575x tea;
 #endif
 };
 
@@ -638,38 +650,23 @@ static int snd_es1968_ac97_wait_poll(struct es1968 *chip)
 static void snd_es1968_ac97_write(struct snd_ac97 *ac97, unsigned short reg, unsigned short val)
 {
 	struct es1968 *chip = ac97->private_data;
-#ifndef CONFIG_SND_ES1968_INPUT
-	unsigned long flags;
-#endif
 
 	snd_es1968_ac97_wait(chip);
 
 	/* Write the bus */
-#ifndef CONFIG_SND_ES1968_INPUT
-	spin_lock_irqsave(&chip->ac97_lock, flags);
-#endif
 	outw(val, chip->io_port + ESM_AC97_DATA);
 	/*msleep(1);*/
 	outb(reg, chip->io_port + ESM_AC97_INDEX);
 	/*msleep(1);*/
-#ifndef CONFIG_SND_ES1968_INPUT
-	spin_unlock_irqrestore(&chip->ac97_lock, flags);
-#endif
 }
 
 static unsigned short snd_es1968_ac97_read(struct snd_ac97 *ac97, unsigned short reg)
 {
 	u16 data = 0;
 	struct es1968 *chip = ac97->private_data;
-#ifndef CONFIG_SND_ES1968_INPUT
-	unsigned long flags;
-#endif
 
 	snd_es1968_ac97_wait(chip);
 
-#ifndef CONFIG_SND_ES1968_INPUT
-	spin_lock_irqsave(&chip->ac97_lock, flags);
-#endif
 	outb(reg | 0x80, chip->io_port + ESM_AC97_INDEX);
 	/*msleep(1);*/
 
@@ -677,9 +674,6 @@ static unsigned short snd_es1968_ac97_read(struct snd_ac97 *ac97, unsigned short
 		data = inw(chip->io_port + ESM_AC97_DATA);
 		/*msleep(1);*/
 	}
-#ifndef CONFIG_SND_ES1968_INPUT
-	spin_unlock_irqrestore(&chip->ac97_lock, flags);
-#endif
 
 	return data;
 }
@@ -1896,13 +1890,10 @@ static void snd_es1968_update_pcm(struct es1968 *chip, struct esschan *es)
    (without wrap around) in response to volume button presses and then
    generating an interrupt. The pair of counters is stored in bits 1-3 and 5-7
    of a byte wide register. The meaning of bits 0 and 4 is unknown. */
-static void es1968_update_hw_volume(unsigned long private_data)
+static void es1968_update_hw_volume(struct work_struct *work)
 {
-	struct es1968 *chip = (struct es1968 *) private_data;
+	struct es1968 *chip = container_of(work, struct es1968, hwvol_work);
 	int x, val;
-#ifndef CONFIG_SND_ES1968_INPUT
-	unsigned long flags;
-#endif
 
 	/* Figure out which volume control button was pushed,
 	   based on differences from the default register
@@ -1921,18 +1912,11 @@ static void es1968_update_hw_volume(unsigned long private_data)
 	if (! chip->master_switch || ! chip->master_volume)
 		return;
 
-	/* FIXME: we can't call snd_ac97_* functions since here is in tasklet. */
-	spin_lock_irqsave(&chip->ac97_lock, flags);
-	val = chip->ac97->regs[AC97_MASTER];
+	val = snd_ac97_read(chip->ac97, AC97_MASTER);
 	switch (x) {
 	case 0x88:
 		/* mute */
 		val ^= 0x8000;
-		chip->ac97->regs[AC97_MASTER] = val;
-		outw(val, chip->io_port + ESM_AC97_DATA);
-		outb(AC97_MASTER, chip->io_port + ESM_AC97_INDEX);
-		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
-			       &chip->master_switch->id);
 		break;
 	case 0xaa:
 		/* volume up */
@@ -1940,11 +1924,6 @@ static void es1968_update_hw_volume(unsigned long private_data)
 			val--;
 		if ((val & 0x7f00) > 0)
 			val -= 0x0100;
-		chip->ac97->regs[AC97_MASTER] = val;
-		outw(val, chip->io_port + ESM_AC97_DATA);
-		outb(AC97_MASTER, chip->io_port + ESM_AC97_INDEX);
-		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
-			       &chip->master_volume->id);
 		break;
 	case 0x66:
 		/* volume down */
@@ -1952,14 +1931,11 @@ static void es1968_update_hw_volume(unsigned long private_data)
 			val++;
 		if ((val & 0x7f00) < 0x1f00)
 			val += 0x0100;
-		chip->ac97->regs[AC97_MASTER] = val;
-		outw(val, chip->io_port + ESM_AC97_DATA);
-		outb(AC97_MASTER, chip->io_port + ESM_AC97_INDEX);
-		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
-			       &chip->master_volume->id);
 		break;
 	}
-	spin_unlock_irqrestore(&chip->ac97_lock, flags);
+	if (snd_ac97_update(chip->ac97, AC97_MASTER, val))
+		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
+			       &chip->master_volume->id);
 #else
 	if (!chip->input_dev)
 		return;
@@ -2005,11 +1981,7 @@ static irqreturn_t snd_es1968_interrupt(int irq, void *dev_id)
 	outw(inw(chip->io_port + 4) & 1, chip->io_port + 4);
 
 	if (event & ESM_HWVOL_IRQ)
-#ifdef CONFIG_SND_ES1968_INPUT
-		es1968_update_hw_volume((unsigned long)chip);
-#else
-		tasklet_schedule(&chip->hwvol_tq); /* we'll do this later */
-#endif
+		schedule_work(&chip->hwvol_work);
 
 	/* else ack 'em all, i imagine */
 	outb(0xFF, chip->io_port + 0x1A);
@@ -2418,6 +2390,7 @@ static int es1968_suspend(struct pci_dev *pci, pm_message_t state)
 		return 0;
 
 	chip->in_suspend = 1;
+	cancel_work_sync(&chip->hwvol_work);
 	snd_power_change_state(card, SNDRV_CTL_POWER_D3hot);
 	snd_pcm_suspend_all(chip->pcm);
 	snd_ac97_suspend(chip->ac97);
@@ -2571,8 +2544,66 @@ static int __devinit snd_es1968_input_register(struct es1968 *chip)
 }
 #endif /* CONFIG_SND_ES1968_INPUT */
 
+#ifdef CONFIG_SND_ES1968_RADIO
+#define GPIO_DATA	0x60
+#define IO_MASK		4      /* mask      register offset from GPIO_DATA
+				bits 1=unmask write to given bit */
+#define IO_DIR		8      /* direction register offset from GPIO_DATA
+				bits 0/1=read/write direction */
+/* mask bits for GPIO lines */
+#define STR_DATA	0x0040 /* GPIO6 */
+#define STR_CLK		0x0080 /* GPIO7 */
+#define STR_WREN	0x0100 /* GPIO8 */
+#define STR_MOST	0x0200 /* GPIO9 */
+
+static void snd_es1968_tea575x_set_pins(struct snd_tea575x *tea, u8 pins)
+{
+	struct es1968 *chip = tea->private_data;
+	unsigned long io = chip->io_port + GPIO_DATA;
+	u16 val = 0;
+
+	val |= (pins & TEA575X_DATA) ? STR_DATA : 0;
+	val |= (pins & TEA575X_CLK)  ? STR_CLK  : 0;
+	val |= (pins & TEA575X_WREN) ? STR_WREN : 0;
+
+	outw(val, io);
+}
+
+static u8 snd_es1968_tea575x_get_pins(struct snd_tea575x *tea)
+{
+	struct es1968 *chip = tea->private_data;
+	unsigned long io = chip->io_port + GPIO_DATA;
+	u16 val = inw(io);
+
+	return  (val & STR_DATA) ? TEA575X_DATA : 0 |
+		(val & STR_MOST) ? TEA575X_MOST : 0;
+}
+
+static void snd_es1968_tea575x_set_direction(struct snd_tea575x *tea, bool output)
+{
+	struct es1968 *chip = tea->private_data;
+	unsigned long io = chip->io_port + GPIO_DATA;
+	u16 odir = inw(io + IO_DIR);
+
+	if (output) {
+		outw(~(STR_DATA | STR_CLK | STR_WREN), io + IO_MASK);
+		outw(odir | STR_DATA | STR_CLK | STR_WREN, io + IO_DIR);
+	} else {
+		outw(~(STR_CLK | STR_WREN | STR_DATA | STR_MOST), io + IO_MASK);
+		outw((odir & ~(STR_DATA | STR_MOST)) | STR_CLK | STR_WREN, io + IO_DIR);
+	}
+}
+
+static struct snd_tea575x_ops snd_es1968_tea_ops = {
+	.set_pins = snd_es1968_tea575x_set_pins,
+	.get_pins = snd_es1968_tea575x_get_pins,
+	.set_direction = snd_es1968_tea575x_set_direction,
+};
+#endif
+
 static int snd_es1968_free(struct es1968 *chip)
 {
+	cancel_work_sync(&chip->hwvol_work);
 #ifdef CONFIG_SND_ES1968_INPUT
 	if (chip->input_dev)
 		input_unregister_device(chip->input_dev);
@@ -2584,6 +2615,11 @@ static int snd_es1968_free(struct es1968 *chip)
 		outw(1, chip->io_port + 0x04); /* clear WP interrupts */
 		outw(0, chip->io_port + ESM_PORT_HOST_IRQ); /* disable IRQ */
 	}
+
+#ifdef CONFIG_SND_ES1968_RADIO
+	snd_tea575x_exit(&chip->tea);
+	v4l2_device_unregister(&chip->v4l2_dev);
+#endif
 
 	if (chip->irq >= 0)
 		free_irq(chip->irq, chip);
@@ -2625,6 +2661,7 @@ static int __devinit snd_es1968_create(struct snd_card *card,
 				       int capt_streams,
 				       int chip_type,
 				       int do_pm,
+				       int radio_nr,
 				       struct es1968 **chip_ret)
 {
 	static struct snd_device_ops ops = {
@@ -2659,10 +2696,7 @@ static int __devinit snd_es1968_create(struct snd_card *card,
 	INIT_LIST_HEAD(&chip->buf_list);
 	INIT_LIST_HEAD(&chip->substream_list);
 	mutex_init(&chip->memory_mutex);
-#ifndef CONFIG_SND_ES1968_INPUT
-	spin_lock_init(&chip->ac97_lock);
-	tasklet_init(&chip->hwvol_tq, es1968_update_hw_volume, (unsigned long)chip);
-#endif
+	INIT_WORK(&chip->hwvol_work, es1968_update_hw_volume);
 	chip->card = card;
 	chip->pci = pci;
 	chip->irq = -1;
@@ -2677,7 +2711,7 @@ static int __devinit snd_es1968_create(struct snd_card *card,
 	}
 	chip->io_port = pci_resource_start(pci, 0);
 	if (request_irq(pci->irq, snd_es1968_interrupt, IRQF_SHARED,
-			"ESS Maestro", chip)) {
+			KBUILD_MODNAME, chip)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_es1968_free(chip);
 		return -EBUSY;
@@ -2723,6 +2757,22 @@ static int __devinit snd_es1968_create(struct snd_card *card,
 
 	snd_card_set_dev(card, &pci->dev);
 
+#ifdef CONFIG_SND_ES1968_RADIO
+	err = v4l2_device_register(&pci->dev, &chip->v4l2_dev);
+	if (err < 0) {
+		snd_es1968_free(chip);
+		return err;
+	}
+	chip->tea.v4l2_dev = &chip->v4l2_dev;
+	chip->tea.private_data = chip;
+	chip->tea.radio_nr = radio_nr;
+	chip->tea.ops = &snd_es1968_tea_ops;
+	strlcpy(chip->tea.card, "SF64-PCE2", sizeof(chip->tea.card));
+	sprintf(chip->tea.bus_info, "PCI:%s", pci_name(pci));
+	if (!snd_tea575x_init(&chip->tea))
+		printk(KERN_INFO "es1968: detected TEA575x radio\n");
+#endif
+
 	*chip_ret = chip;
 
 	return 0;
@@ -2761,6 +2811,7 @@ static int __devinit snd_es1968_probe(struct pci_dev *pci,
 				     pcm_substreams_c[dev],
 				     pci_id->driver_data,
 				     use_pm[dev],
+				     radio_nr[dev],
 				     &chip)) < 0) {
 		snd_card_free(card);
 		return err;
@@ -2807,8 +2858,9 @@ static int __devinit snd_es1968_probe(struct pci_dev *pci,
 	if (enable_mpu[dev]) {
 		if ((err = snd_mpu401_uart_new(card, 0, MPU401_HW_MPU401,
 					       chip->io_port + ESM_MPU401_PORT,
-					       MPU401_INFO_INTEGRATED,
-					       chip->irq, 0, &chip->rmidi)) < 0) {
+					       MPU401_INFO_INTEGRATED |
+					       MPU401_INFO_IRQ_HOOK,
+					       -1, &chip->rmidi)) < 0) {
 			printk(KERN_WARNING "es1968: skipping MPU-401 MIDI support..\n");
 		}
 	}
@@ -2847,7 +2899,7 @@ static void __devexit snd_es1968_remove(struct pci_dev *pci)
 }
 
 static struct pci_driver driver = {
-	.name = "ES1968 (ESS Maestro)",
+	.name = KBUILD_MODNAME,
 	.id_table = snd_es1968_ids,
 	.probe = snd_es1968_probe,
 	.remove = __devexit_p(snd_es1968_remove),

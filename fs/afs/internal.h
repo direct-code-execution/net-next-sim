@@ -109,7 +109,7 @@ struct afs_call {
 	unsigned		reply_size;	/* current size of reply */
 	unsigned		first_offset;	/* offset into mapping[first] */
 	unsigned		last_to;	/* amount of mapping[last] */
-	unsigned short		offset;		/* offset into received data store */
+	unsigned		offset;		/* offset into received data store */
 	unsigned char		unmarshall;	/* unmarshalling phase */
 	bool			incoming;	/* T if incoming call */
 	bool			send_pages;	/* T if data from mapping should be sent */
@@ -486,6 +486,7 @@ extern bool afs_cm_incoming_call(struct afs_call *);
  * dir.c
  */
 extern const struct inode_operations afs_dir_inode_operations;
+extern const struct dentry_operations afs_fs_dentry_operations;
 extern const struct file_operations afs_dir_file_operations;
 
 /*
@@ -576,6 +577,7 @@ extern int afs_drop_inode(struct inode *);
 /*
  * main.c
  */
+extern struct workqueue_struct *afs_wq;
 extern struct afs_uuid afs_uuid;
 
 /*
@@ -590,6 +592,7 @@ extern const struct inode_operations afs_mntpt_inode_operations;
 extern const struct inode_operations afs_autocell_inode_operations;
 extern const struct file_operations afs_mntpt_file_operations;
 
+extern struct vfsmount *afs_d_automount(struct path *);
 extern int afs_mntpt_check_symlink(struct afs_vnode *, struct key *);
 extern void afs_mntpt_kill_timer(void);
 
@@ -747,7 +750,7 @@ extern void afs_pages_written_back(struct afs_vnode *, struct afs_call *);
 extern ssize_t afs_file_write(struct kiocb *, const struct iovec *,
 			      unsigned long, loff_t);
 extern int afs_writeback_all(struct afs_vnode *);
-extern int afs_fsync(struct file *, int);
+extern int afs_fsync(struct file *, loff_t, loff_t, int);
 
 
 /*****************************************************************************/

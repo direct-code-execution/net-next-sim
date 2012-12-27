@@ -27,6 +27,7 @@
 #include <asm/processor.h>
 #include <asm/ucontext.h>
 #include <asm/uaccess.h>
+#include <arch/system.h>
 
 #define DEBUG_SIG 0
 
@@ -537,7 +538,7 @@ void do_signal(int canrestart, struct pt_regs *regs)
 			RESTART_CRIS_SYS(regs);
 		}
 		if (regs->r10 == -ERESTART_RESTARTBLOCK) {
-			regs->r10 = __NR_restart_syscall;
+			regs->r9 = __NR_restart_syscall;
 			regs->irp -= 2;
 		}
 	}

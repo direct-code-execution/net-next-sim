@@ -163,7 +163,7 @@ _transport_set_identify(struct MPT2SAS_ADAPTER *ioc, u16 handle,
 		return -EIO;
 	}
 
-	memset(identify, 0, sizeof(identify));
+	memset(identify, 0, sizeof(*identify));
 	device_info = le32_to_cpu(sas_device_pg0.DeviceInfo);
 
 	/* sas_address */
@@ -299,7 +299,6 @@ _transport_expander_report_manufacture(struct MPT2SAS_ADAPTER *ioc,
 	void *data_out = NULL;
 	dma_addr_t data_out_dma;
 	u32 sz;
-	u64 *sas_address_le;
 	u16 wait_state_count;
 
 	if (ioc->shost_recovery || ioc->pci_error_recovery) {
@@ -372,8 +371,7 @@ _transport_expander_report_manufacture(struct MPT2SAS_ADAPTER *ioc,
 	mpi_request->PhysicalPort = 0xFF;
 	mpi_request->VF_ID = 0; /* TODO */
 	mpi_request->VP_ID = 0;
-	sas_address_le = (u64 *)&mpi_request->SASAddress;
-	*sas_address_le = cpu_to_le64(sas_address);
+	mpi_request->SASAddress = cpu_to_le64(sas_address);
 	mpi_request->RequestDataLength =
 	    cpu_to_le16(sizeof(struct rep_manu_request));
 	psge = &mpi_request->SGL;
@@ -400,8 +398,8 @@ _transport_expander_report_manufacture(struct MPT2SAS_ADAPTER *ioc,
 	dtransportprintk(ioc, printk(MPT2SAS_INFO_FMT "report_manufacture - "
 	    "send to sas_addr(0x%016llx)\n", ioc->name,
 	    (unsigned long long)sas_address));
-	mpt2sas_base_put_smid_default(ioc, smid);
 	init_completion(&ioc->transport_cmds.done);
+	mpt2sas_base_put_smid_default(ioc, smid);
 	timeleft = wait_for_completion_timeout(&ioc->transport_cmds.done,
 	    10*HZ);
 
@@ -465,62 +463,149 @@ _transport_expander_report_manufacture(struct MPT2SAS_ADAPTER *ioc,
 	return rc;
 }
 
-
 /**
- * _transport_delete_duplicate_port - (see below description)
+ * _transport_delete_port - helper function to removing a port
  * @ioc: per adapter object
- * @sas_node: sas node object (either expander or sas host)
- * @sas_address: sas address of device being added
- * @phy_num: phy number
+ * @mpt2sas_port: mpt2sas per port object
  *
- * This function is called when attempting to add a new port that is claiming
- * the same phy resources already in use by another port.  If we don't release
- * the claimed phy resources, the sas transport layer will hang from the BUG
- * in sas_port_add_phy.
- *
- * The reason we would hit this issue is becuase someone is changing the
- * sas address of a device on the fly, meanwhile controller firmware sends
- * EVENTs out of order when removing the previous instance of the device.
+ * Returns nothing.
  */
 static void
-_transport_delete_duplicate_port(struct MPT2SAS_ADAPTER *ioc,
-    struct _sas_node *sas_node, u64 sas_address, int phy_num)
+_transport_delete_port(struct MPT2SAS_ADAPTER *ioc,
+	struct _sas_port *mpt2sas_port)
 {
-	struct _sas_port *mpt2sas_port, *mpt2sas_port_duplicate;
-	struct _sas_phy *mpt2sas_phy;
+	u64 sas_address = mpt2sas_port->remote_identify.sas_address;
+	enum sas_device_type device_type =
+	    mpt2sas_port->remote_identify.device_type;
 
-	printk(MPT2SAS_ERR_FMT "new device located at sas_addr(0x%016llx), "
-	    "phy_id(%d)\n", ioc->name, (unsigned long long)sas_address,
-	    phy_num);
+	dev_printk(KERN_INFO, &mpt2sas_port->port->dev,
+	    "remove: sas_addr(0x%016llx)\n",
+	    (unsigned long long) sas_address);
 
-	mpt2sas_port_duplicate = NULL;
-	list_for_each_entry(mpt2sas_port, &sas_node->sas_port_list, port_list) {
-		dev_printk(KERN_ERR, &mpt2sas_port->port->dev,
-		    "existing device at sas_addr(0x%016llx), num_phys(%d)\n",
-		    (unsigned long long)
-		    mpt2sas_port->remote_identify.sas_address,
-		    mpt2sas_port->num_phys);
-		list_for_each_entry(mpt2sas_phy, &mpt2sas_port->phy_list,
-		    port_siblings) {
-			dev_printk(KERN_ERR, &mpt2sas_phy->phy->dev,
-			    "phy_number(%d)\n", mpt2sas_phy->phy_id);
-			if (mpt2sas_phy->phy_id == phy_num)
-				mpt2sas_port_duplicate = mpt2sas_port;
-		}
-	}
+	ioc->logging_level |= MPT_DEBUG_TRANSPORT;
+	if (device_type == SAS_END_DEVICE)
+		mpt2sas_device_remove(ioc, sas_address);
+	else if (device_type == SAS_EDGE_EXPANDER_DEVICE ||
+	    device_type == SAS_FANOUT_EXPANDER_DEVICE)
+		mpt2sas_expander_remove(ioc, sas_address);
+	ioc->logging_level &= ~MPT_DEBUG_TRANSPORT;
+}
 
-	if (!mpt2sas_port_duplicate)
+/**
+ * _transport_delete_phy - helper function to removing single phy from port
+ * @ioc: per adapter object
+ * @mpt2sas_port: mpt2sas per port object
+ * @mpt2sas_phy: mpt2sas per phy object
+ *
+ * Returns nothing.
+ */
+static void
+_transport_delete_phy(struct MPT2SAS_ADAPTER *ioc,
+	struct _sas_port *mpt2sas_port, struct _sas_phy *mpt2sas_phy)
+{
+	u64 sas_address = mpt2sas_port->remote_identify.sas_address;
+
+	dev_printk(KERN_INFO, &mpt2sas_phy->phy->dev,
+	    "remove: sas_addr(0x%016llx), phy(%d)\n",
+	    (unsigned long long) sas_address, mpt2sas_phy->phy_id);
+
+	list_del(&mpt2sas_phy->port_siblings);
+	mpt2sas_port->num_phys--;
+	sas_port_delete_phy(mpt2sas_port->port, mpt2sas_phy->phy);
+	mpt2sas_phy->phy_belongs_to_port = 0;
+}
+
+/**
+ * _transport_add_phy - helper function to adding single phy to port
+ * @ioc: per adapter object
+ * @mpt2sas_port: mpt2sas per port object
+ * @mpt2sas_phy: mpt2sas per phy object
+ *
+ * Returns nothing.
+ */
+static void
+_transport_add_phy(struct MPT2SAS_ADAPTER *ioc, struct _sas_port *mpt2sas_port,
+	struct _sas_phy *mpt2sas_phy)
+{
+	u64 sas_address = mpt2sas_port->remote_identify.sas_address;
+
+	dev_printk(KERN_INFO, &mpt2sas_phy->phy->dev,
+	    "add: sas_addr(0x%016llx), phy(%d)\n", (unsigned long long)
+	    sas_address, mpt2sas_phy->phy_id);
+
+	list_add_tail(&mpt2sas_phy->port_siblings, &mpt2sas_port->phy_list);
+	mpt2sas_port->num_phys++;
+	sas_port_add_phy(mpt2sas_port->port, mpt2sas_phy->phy);
+	mpt2sas_phy->phy_belongs_to_port = 1;
+}
+
+/**
+ * _transport_add_phy_to_an_existing_port - adding new phy to existing port
+ * @ioc: per adapter object
+ * @sas_node: sas node object (either expander or sas host)
+ * @mpt2sas_phy: mpt2sas per phy object
+ * @sas_address: sas address of device/expander were phy needs to be added to
+ *
+ * Returns nothing.
+ */
+static void
+_transport_add_phy_to_an_existing_port(struct MPT2SAS_ADAPTER *ioc,
+struct _sas_node *sas_node, struct _sas_phy *mpt2sas_phy, u64 sas_address)
+{
+	struct _sas_port *mpt2sas_port;
+	struct _sas_phy *phy_srch;
+
+	if (mpt2sas_phy->phy_belongs_to_port == 1)
 		return;
 
-	dev_printk(KERN_ERR, &mpt2sas_port_duplicate->port->dev,
-	    "deleting duplicate device at sas_addr(0x%016llx), phy(%d)!!!!\n",
-	    (unsigned long long)
-	    mpt2sas_port_duplicate->remote_identify.sas_address, phy_num);
-	ioc->logging_level |= MPT_DEBUG_TRANSPORT;
-	mpt2sas_transport_port_remove(ioc,
-	    mpt2sas_port_duplicate->remote_identify.sas_address,
-	    sas_node->sas_address);
-	ioc->logging_level &= ~MPT_DEBUG_TRANSPORT;
+	list_for_each_entry(mpt2sas_port, &sas_node->sas_port_list,
+	    port_list) {
+		if (mpt2sas_port->remote_identify.sas_address !=
+		    sas_address)
+			continue;
+		list_for_each_entry(phy_srch, &mpt2sas_port->phy_list,
+		    port_siblings) {
+			if (phy_srch == mpt2sas_phy)
+				return;
+		}
+		_transport_add_phy(ioc, mpt2sas_port, mpt2sas_phy);
+			return;
+	}
+
+}
+
+/**
+ * _transport_del_phy_from_an_existing_port - delete phy from existing port
+ * @ioc: per adapter object
+ * @sas_node: sas node object (either expander or sas host)
+ * @mpt2sas_phy: mpt2sas per phy object
+ *
+ * Returns nothing.
+ */
+static void
+_transport_del_phy_from_an_existing_port(struct MPT2SAS_ADAPTER *ioc,
+	struct _sas_node *sas_node, struct _sas_phy *mpt2sas_phy)
+{
+	struct _sas_port *mpt2sas_port, *next;
+	struct _sas_phy *phy_srch;
+
+	if (mpt2sas_phy->phy_belongs_to_port == 0)
+		return;
+
+	list_for_each_entry_safe(mpt2sas_port, next, &sas_node->sas_port_list,
+	    port_list) {
+		list_for_each_entry(phy_srch, &mpt2sas_port->phy_list,
+		    port_siblings) {
+			if (phy_srch != mpt2sas_phy)
+				continue;
+			if (mpt2sas_port->num_phys == 1)
+				_transport_delete_port(ioc, mpt2sas_port);
+			else
+				_transport_delete_phy(ioc, mpt2sas_port,
+				    mpt2sas_phy);
+			return;
+		}
+	}
 }
 
 /**
@@ -537,11 +622,13 @@ _transport_sanity_check(struct MPT2SAS_ADAPTER *ioc, struct _sas_node *sas_node,
 {
 	int i;
 
-	for (i = 0; i < sas_node->num_phys; i++)
-		if (sas_node->phy[i].remote_identify.sas_address == sas_address)
-			if (sas_node->phy[i].phy_belongs_to_port)
-				_transport_delete_duplicate_port(ioc, sas_node,
-					sas_address, i);
+	for (i = 0; i < sas_node->num_phys; i++) {
+		if (sas_node->phy[i].remote_identify.sas_address != sas_address)
+			continue;
+		if (sas_node->phy[i].phy_belongs_to_port == 1)
+			_transport_del_phy_from_an_existing_port(ioc, sas_node,
+			    &sas_node->phy[i]);
+	}
 }
 
 /**
@@ -905,10 +992,12 @@ mpt2sas_transport_update_links(struct MPT2SAS_ADAPTER *ioc,
 
 	mpt2sas_phy = &sas_node->phy[phy_number];
 	mpt2sas_phy->attached_handle = handle;
-	if (handle && (link_rate >= MPI2_SAS_NEG_LINK_RATE_1_5))
+	if (handle && (link_rate >= MPI2_SAS_NEG_LINK_RATE_1_5)) {
 		_transport_set_identify(ioc, handle,
 		    &mpt2sas_phy->remote_identify);
-	else
+		_transport_add_phy_to_an_existing_port(ioc, sas_node,
+		    mpt2sas_phy, mpt2sas_phy->remote_identify.sas_address);
+	} else
 		memset(&mpt2sas_phy->remote_identify, 0 , sizeof(struct
 		    sas_identify));
 
@@ -958,14 +1047,14 @@ struct phy_error_log_reply{
 	u8 function; /* 0x11 */
 	u8 function_result;
 	u8 response_length;
-	u16 expander_change_count;
+	__be16 expander_change_count;
 	u8 reserved_1[3];
 	u8 phy_identifier;
 	u8 reserved_2[2];
-	u32 invalid_dword;
-	u32 running_disparity_error;
-	u32 loss_of_dword_sync;
-	u32 phy_reset_problem;
+	__be32 invalid_dword;
+	__be32 running_disparity_error;
+	__be32 loss_of_dword_sync;
+	__be32 phy_reset_problem;
 };
 
 /**
@@ -994,7 +1083,6 @@ _transport_get_expander_phy_error_log(struct MPT2SAS_ADAPTER *ioc,
 	void *data_out = NULL;
 	dma_addr_t data_out_dma;
 	u32 sz;
-	u64 *sas_address_le;
 	u16 wait_state_count;
 
 	if (ioc->shost_recovery || ioc->pci_error_recovery) {
@@ -1069,8 +1157,7 @@ _transport_get_expander_phy_error_log(struct MPT2SAS_ADAPTER *ioc,
 	mpi_request->PhysicalPort = 0xFF;
 	mpi_request->VF_ID = 0; /* TODO */
 	mpi_request->VP_ID = 0;
-	sas_address_le = (u64 *)&mpi_request->SASAddress;
-	*sas_address_le = cpu_to_le64(phy->identify.sas_address);
+	mpi_request->SASAddress = cpu_to_le64(phy->identify.sas_address);
 	mpi_request->RequestDataLength =
 	    cpu_to_le16(sizeof(struct phy_error_log_request));
 	psge = &mpi_request->SGL;
@@ -1097,8 +1184,8 @@ _transport_get_expander_phy_error_log(struct MPT2SAS_ADAPTER *ioc,
 	dtransportprintk(ioc, printk(MPT2SAS_INFO_FMT "phy_error_log - "
 	    "send to sas_addr(0x%016llx), phy(%d)\n", ioc->name,
 	    (unsigned long long)phy->identify.sas_address, phy->number));
-	mpt2sas_base_put_smid_default(ioc, smid);
 	init_completion(&ioc->transport_cmds.done);
+	mpt2sas_base_put_smid_default(ioc, smid);
 	timeleft = wait_for_completion_timeout(&ioc->transport_cmds.done,
 	    10*HZ);
 
@@ -1315,7 +1402,6 @@ _transport_expander_phy_control(struct MPT2SAS_ADAPTER *ioc,
 	void *data_out = NULL;
 	dma_addr_t data_out_dma;
 	u32 sz;
-	u64 *sas_address_le;
 	u16 wait_state_count;
 
 	if (ioc->shost_recovery) {
@@ -1395,8 +1481,7 @@ _transport_expander_phy_control(struct MPT2SAS_ADAPTER *ioc,
 	mpi_request->PhysicalPort = 0xFF;
 	mpi_request->VF_ID = 0; /* TODO */
 	mpi_request->VP_ID = 0;
-	sas_address_le = (u64 *)&mpi_request->SASAddress;
-	*sas_address_le = cpu_to_le64(phy->identify.sas_address);
+	mpi_request->SASAddress = cpu_to_le64(phy->identify.sas_address);
 	mpi_request->RequestDataLength =
 	    cpu_to_le16(sizeof(struct phy_error_log_request));
 	psge = &mpi_request->SGL;
@@ -1424,8 +1509,9 @@ _transport_expander_phy_control(struct MPT2SAS_ADAPTER *ioc,
 	    "send to sas_addr(0x%016llx), phy(%d), opcode(%d)\n", ioc->name,
 	    (unsigned long long)phy->identify.sas_address, phy->number,
 	    phy_operation));
-	mpt2sas_base_put_smid_default(ioc, smid);
+
 	init_completion(&ioc->transport_cmds.done);
+	mpt2sas_base_put_smid_default(ioc, smid);
 	timeleft = wait_for_completion_timeout(&ioc->transport_cmds.done,
 	    10*HZ);
 
@@ -1823,7 +1909,7 @@ _transport_smp_handler(struct Scsi_Host *shost, struct sas_rphy *rphy,
 	mpi_request->PhysicalPort = 0xFF;
 	mpi_request->VF_ID = 0; /* TODO */
 	mpi_request->VP_ID = 0;
-	*((u64 *)&mpi_request->SASAddress) = (rphy) ?
+	mpi_request->SASAddress = (rphy) ?
 	    cpu_to_le64(rphy->identify.sas_address) :
 	    cpu_to_le64(ioc->sas_hba.sas_address);
 	mpi_request->RequestDataLength = cpu_to_le16(blk_rq_bytes(req) - 4);
@@ -1864,8 +1950,8 @@ _transport_smp_handler(struct Scsi_Host *shost, struct sas_rphy *rphy,
 	dtransportprintk(ioc, printk(MPT2SAS_INFO_FMT "%s - "
 	    "sending smp request\n", ioc->name, __func__));
 
-	mpt2sas_base_put_smid_default(ioc, smid);
 	init_completion(&ioc->transport_cmds.done);
+	mpt2sas_base_put_smid_default(ioc, smid);
 	timeleft = wait_for_completion_timeout(&ioc->transport_cmds.done,
 	    10*HZ);
 

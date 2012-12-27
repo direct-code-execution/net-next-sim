@@ -66,7 +66,7 @@
  * have.  Allow 1% either way on the nominal for TVs.
  */
 #define NR_MONTYPES	6
-static struct fb_monspecs monspecs[NR_MONTYPES] __initdata = {
+static struct fb_monspecs monspecs[NR_MONTYPES] __devinitdata = {
 	{	/* TV		*/
 		.hfmin	= 15469,
 		.hfmax	= 15781,
@@ -850,9 +850,10 @@ acornfb_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
 	u_int y_bottom = var->yoffset;
 
 	if (!(var->vmode & FB_VMODE_YWRAP))
-		y_bottom += var->yres;
+		y_bottom += info->var.yres;
 
-	BUG_ON(y_bottom > var->yres_virtual);
+	if (y_bottom > info->var.yres_virtual)
+		return -EINVAL;
 
 	acornfb_update_dma(info, var);
 
@@ -873,7 +874,7 @@ static struct fb_ops acornfb_ops = {
 /*
  * Everything after here is initialisation!!!
  */
-static struct fb_videomode modedb[] __initdata = {
+static struct fb_videomode modedb[] __devinitdata = {
 	{	/* 320x256 @ 50Hz */
 		NULL, 50,  320,  256, 125000,  92,  62,  35, 19,  38, 2,
 		FB_SYNC_COMP_HIGH_ACT,
@@ -925,8 +926,7 @@ static struct fb_videomode modedb[] __initdata = {
 	}
 };
 
-static struct fb_videomode __initdata
-acornfb_default_mode = {
+static struct fb_videomode acornfb_default_mode __devinitdata = {
 	.name =		NULL,
 	.refresh =	60,
 	.xres =		640,
@@ -942,7 +942,7 @@ acornfb_default_mode = {
 	.vmode =	FB_VMODE_NONINTERLACED
 };
 
-static void __init acornfb_init_fbinfo(void)
+static void __devinit acornfb_init_fbinfo(void)
 {
 	static int first = 1;
 
@@ -1018,8 +1018,7 @@ static void __init acornfb_init_fbinfo(void)
  *	size can optionally be followed by 'M' or 'K' for
  *	MB or KB respectively.
  */
-static void __init
-acornfb_parse_mon(char *opt)
+static void __devinit acornfb_parse_mon(char *opt)
 {
 	char *p = opt;
 
@@ -1066,8 +1065,7 @@ bad:
 	current_par.montype = -1;
 }
 
-static void __init
-acornfb_parse_montype(char *opt)
+static void __devinit acornfb_parse_montype(char *opt)
 {
 	current_par.montype = -2;
 
@@ -1108,8 +1106,7 @@ acornfb_parse_montype(char *opt)
 	}
 }
 
-static void __init
-acornfb_parse_dram(char *opt)
+static void __devinit acornfb_parse_dram(char *opt)
 {
 	unsigned int size;
 
@@ -1134,15 +1131,14 @@ acornfb_parse_dram(char *opt)
 static struct options {
 	char *name;
 	void (*parse)(char *opt);
-} opt_table[] __initdata = {
+} opt_table[] __devinitdata = {
 	{ "mon",     acornfb_parse_mon     },
 	{ "montype", acornfb_parse_montype },
 	{ "dram",    acornfb_parse_dram    },
 	{ NULL, NULL }
 };
 
-int __init
-acornfb_setup(char *options)
+static int __devinit acornfb_setup(char *options)
 {
 	struct options *optp;
 	char *opt;
@@ -1179,8 +1175,7 @@ acornfb_setup(char *options)
  * Detect type of monitor connected
  *  For now, we just assume SVGA
  */
-static int __init
-acornfb_detect_monitortype(void)
+static int __devinit acornfb_detect_monitortype(void)
 {
 	return 4;
 }

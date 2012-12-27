@@ -18,13 +18,13 @@
 #include <asm/processor.h>
 #include <asm/uaccess.h>
 #include <asm/page.h>
-#include <asm/system.h>
 #include <asm/cacheflush.h>
 #include <asm/cache.h>
 #include <asm/elf.h>
 #include <asm/io.h>
 #include <asm/smp.h>
 #include <asm/sh_bios.h>
+#include <asm/setup.h>
 
 #ifdef CONFIG_SH_FPU
 #define cpu_has_fpu	1
@@ -339,6 +339,8 @@ asmlinkage void __cpuinit cpu_init(void)
 	 * TLB flushing routines depend on this being setup.
 	 */
 	current_cpu_data.asid_cache = NO_CONTEXT;
+
+	current_cpu_data.phys_bits = __in_29bit_mode() ? 29 : 32;
 
 	speculative_execution_init();
 	expmask_init();

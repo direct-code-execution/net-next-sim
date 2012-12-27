@@ -30,11 +30,9 @@
 #include <linux/ioctl.h>
 #include <asm/uaccess.h>
 #include <linux/i2c.h>
-#include <linux/i2c-id.h>
 #include <linux/videodev2.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-chip-ident.h>
-#include <media/v4l2-i2c-drv.h>
 
 MODULE_DESCRIPTION("Analog Devices ADV7175 video encoder driver");
 MODULE_AUTHOR("Dave Perks");
@@ -62,6 +60,11 @@ static inline struct adv7175 *to_adv7175(struct v4l2_subdev *sd)
 }
 
 static char *inputs[] = { "pass_through", "play_back", "color_bar" };
+
+static enum v4l2_mbus_pixelcode adv7175_codes[] = {
+	V4L2_MBUS_FMT_UYVY8_2X8,
+	V4L2_MBUS_FMT_UYVY8_1X16,
+};
 
 /* ----------------------------------------------------------------------- */
 
@@ -298,6 +301,60 @@ static int adv7175_s_routing(struct v4l2_subdev *sd,
 	return 0;
 }
 
+static int adv7175_enum_fmt(struct v4l2_subdev *sd, unsigned int index,
+				enum v4l2_mbus_pixelcode *code)
+{
+	if (index >= ARRAY_SIZE(adv7175_codes))
+		return -EINVAL;
+
+	*code = adv7175_codes[index];
+	return 0;
+}
+
+static int adv7175_g_fmt(struct v4l2_subdev *sd,
+				struct v4l2_mbus_framefmt *mf)
+{
+	u8 val = adv7175_read(sd, 0x7);
+
+	if ((val & 0x40) == (1 << 6))
+		mf->code = V4L2_MBUS_FMT_UYVY8_1X16;
+	else
+		mf->code = V4L2_MBUS_FMT_UYVY8_2X8;
+
+	mf->colorspace  = V4L2_COLORSPACE_SMPTE170M;
+	mf->width       = 0;
+	mf->height      = 0;
+	mf->field       = V4L2_FIELD_ANY;
+
+	return 0;
+}
+
+static int adv7175_s_fmt(struct v4l2_subdev *sd,
+				struct v4l2_mbus_framefmt *mf)
+{
+	u8 val = adv7175_read(sd, 0x7);
+	int ret;
+
+	switch (mf->code) {
+	case V4L2_MBUS_FMT_UYVY8_2X8:
+		val &= ~0x40;
+		break;
+
+	case V4L2_MBUS_FMT_UYVY8_1X16:
+		val |= 0x40;
+		break;
+
+	default:
+		v4l2_dbg(1, debug, sd,
+			"illegal v4l2_mbus_framefmt code: %d\n", mf->code);
+		return -EINVAL;
+	}
+
+	ret = adv7175_write(sd, 0x7, val);
+
+	return ret;
+}
+
 static int adv7175_g_chip_ident(struct v4l2_subdev *sd, struct v4l2_dbg_chip_ident *chip)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
@@ -305,16 +362,30 @@ static int adv7175_g_chip_ident(struct v4l2_subdev *sd, struct v4l2_dbg_chip_ide
 	return v4l2_chip_ident_i2c_client(client, chip, V4L2_IDENT_ADV7175, 0);
 }
 
+static int adv7175_s_power(struct v4l2_subdev *sd, int on)
+{
+	if (on)
+		adv7175_write(sd, 0x01, 0x00);
+	else
+		adv7175_write(sd, 0x01, 0x78);
+
+	return 0;
+}
+
 /* ----------------------------------------------------------------------- */
 
 static const struct v4l2_subdev_core_ops adv7175_core_ops = {
 	.g_chip_ident = adv7175_g_chip_ident,
 	.init = adv7175_init,
+	.s_power = adv7175_s_power,
 };
 
 static const struct v4l2_subdev_video_ops adv7175_video_ops = {
 	.s_std_output = adv7175_s_std_output,
 	.s_routing = adv7175_s_routing,
+	.s_mbus_fmt = adv7175_s_fmt,
+	.g_mbus_fmt = adv7175_g_fmt,
+	.enum_mbus_fmt  = adv7175_enum_fmt,
 };
 
 static const struct v4l2_subdev_ops adv7175_ops = {
@@ -376,9 +447,14 @@ static const struct i2c_device_id adv7175_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, adv7175_id);
 
-static struct v4l2_i2c_driver_data v4l2_i2c_data = {
-	.name = "adv7175",
-	.probe = adv7175_probe,
-	.remove = adv7175_remove,
-	.id_table = adv7175_id,
+static struct i2c_driver adv7175_driver = {
+	.driver = {
+		.owner	= THIS_MODULE,
+		.name	= "adv7175",
+	},
+	.probe		= adv7175_probe,
+	.remove		= adv7175_remove,
+	.id_table	= adv7175_id,
 };
+
+module_i2c_driver(adv7175_driver);

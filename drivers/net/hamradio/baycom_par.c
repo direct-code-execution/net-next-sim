@@ -86,7 +86,6 @@
 #include <linux/bitops.h>
 #include <linux/jiffies.h>
 
-#include <asm/system.h>
 #include <asm/uaccess.h>
 
 /* --------------------------------------------------------------------- */
@@ -102,7 +101,7 @@
 
 static const char bc_drvname[] = "baycom_par";
 static const char bc_drvinfo[] = KERN_INFO "baycom_par: (C) 1996-2000 Thomas Sailer, HB9JNX/AE4WA\n"
-"baycom_par: version 0.9 compiled " __TIME__ " " __DATE__ "\n";
+"baycom_par: version 0.9\n";
 
 /* --------------------------------------------------------------------- */
 
@@ -477,7 +476,7 @@ static int baycom_ioctl(struct net_device *dev, struct ifreq *ifr,
 /*
  * command line settable parameters
  */
-static const char *mode[NR_PORTS] = { "picpar", };
+static char *mode[NR_PORTS] = { "picpar", };
 static int iobase[NR_PORTS] = { 0x378, };
 
 module_param_array(mode, charp, NULL, 0);

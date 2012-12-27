@@ -30,14 +30,15 @@
 #include <linux/io.h>
 #include <linux/input.h>
 #include <linux/input/sh_keysc.h>
-#include <linux/mfd/sh_mobile_sdhi.h>
+#include <linux/mmc/host.h>
+#include <linux/mmc/sh_mobile_sdhi.h>
 #include <linux/gpio.h>
+#include <linux/dma-mapping.h>
+#include <mach/irqs.h>
 #include <mach/sh7377.h>
 #include <mach/common.h>
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
-#include <asm/mach/map.h>
-#include <asm/mach/time.h>
 
 /*
  * SDHI
@@ -196,11 +197,15 @@ static struct platform_device keysc_device = {
 };
 
 /* SDHI */
+static struct sh_mobile_sdhi_info sdhi0_info = {
+	.tmio_caps	= MMC_CAP_SDIO_IRQ,
+};
+
 static struct resource sdhi0_resources[] = {
 	[0] = {
 		.name	= "SDHI0",
 		.start  = 0xe6d50000,
-		.end    = 0xe6d501ff,
+		.end    = 0xe6d500ff,
 		.flags  = IORESOURCE_MEM,
 	},
 	[1] = {
@@ -214,13 +219,20 @@ static struct platform_device sdhi0_device = {
 	.num_resources  = ARRAY_SIZE(sdhi0_resources),
 	.resource       = sdhi0_resources,
 	.id             = 0,
+	.dev	= {
+		.platform_data	= &sdhi0_info,
+	},
+};
+
+static struct sh_mobile_sdhi_info sdhi1_info = {
+	.tmio_caps	= MMC_CAP_NONREMOVABLE | MMC_CAP_SDIO_IRQ,
 };
 
 static struct resource sdhi1_resources[] = {
 	[0] = {
 		.name	= "SDHI1",
 		.start  = 0xe6d60000,
-		.end    = 0xe6d601ff,
+		.end    = 0xe6d600ff,
 		.flags  = IORESOURCE_MEM,
 	},
 	[1] = {
@@ -234,6 +246,9 @@ static struct platform_device sdhi1_device = {
 	.num_resources  = ARRAY_SIZE(sdhi1_resources),
 	.resource       = sdhi1_resources,
 	.id             = 1,
+	.dev	= {
+		.platform_data	= &sdhi1_info,
+	},
 };
 
 static struct platform_device *g4evm_devices[] __initdata = {
@@ -243,27 +258,6 @@ static struct platform_device *g4evm_devices[] __initdata = {
 	&sdhi0_device,
 	&sdhi1_device,
 };
-
-static struct map_desc g4evm_io_desc[] __initdata = {
-	/* create a 1:1 entity map for 0xe6xxxxxx
-	 * used by CPGA, INTC and PFC.
-	 */
-	{
-		.virtual	= 0xe6000000,
-		.pfn		= __phys_to_pfn(0xe6000000),
-		.length		= 256 << 20,
-		.type		= MT_DEVICE_NONSHARED
-	},
-};
-
-static void __init g4evm_map_io(void)
-{
-	iotable_init(g4evm_io_desc, ARRAY_SIZE(g4evm_io_desc));
-
-	/* setup early devices and console here as well */
-	sh7377_add_early_devices();
-	shmobile_setup_console();
-}
 
 #define GPIO_SDHID0_D0	0xe60520fc
 #define GPIO_SDHID0_D1	0xe60520fd
@@ -381,21 +375,11 @@ static void __init g4evm_init(void)
 	platform_add_devices(g4evm_devices, ARRAY_SIZE(g4evm_devices));
 }
 
-static void __init g4evm_timer_init(void)
-{
-	sh7377_clock_init();
-	shmobile_timer.init();
-}
-
-static struct sys_timer g4evm_timer = {
-	.init		= g4evm_timer_init,
-};
-
 MACHINE_START(G4EVM, "g4evm")
-	.phys_io	= 0xe6000000,
-	.io_pg_offst	= ((0xe6000000) >> 18) & 0xfffc,
-	.map_io		= g4evm_map_io,
+	.map_io		= sh7377_map_io,
+	.init_early	= sh7377_add_early_devices,
 	.init_irq	= sh7377_init_irq,
+	.handle_irq	= shmobile_handle_irq_intc,
 	.init_machine	= g4evm_init,
-	.timer		= &g4evm_timer,
+	.timer		= &shmobile_timer,
 MACHINE_END

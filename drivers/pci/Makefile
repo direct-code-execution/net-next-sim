@@ -29,11 +29,7 @@ obj-$(CONFIG_PCI_MSI) += msi.o
 # Build the Hypertransport interrupt support
 obj-$(CONFIG_HT_IRQ) += htirq.o
 
-# Build Intel IOMMU support
-obj-$(CONFIG_DMAR) += dmar.o iova.o intel-iommu.o
-
-obj-$(CONFIG_INTR_REMAP) += dmar.o intr_remapping.o
-
+obj-$(CONFIG_PCI_ATS) += ats.o
 obj-$(CONFIG_PCI_IOV) += iov.o
 
 #
@@ -42,21 +38,26 @@ obj-$(CONFIG_PCI_IOV) += iov.o
 obj-$(CONFIG_X86) += setup-bus.o
 obj-$(CONFIG_ALPHA) += setup-bus.o setup-irq.o
 obj-$(CONFIG_ARM) += setup-bus.o setup-irq.o
+obj-$(CONFIG_UNICORE32) += setup-bus.o setup-irq.o
 obj-$(CONFIG_PARISC) += setup-bus.o
 obj-$(CONFIG_SUPERH) += setup-bus.o setup-irq.o
 obj-$(CONFIG_PPC) += setup-bus.o
+obj-$(CONFIG_FRV) += setup-bus.o
 obj-$(CONFIG_MIPS) += setup-bus.o setup-irq.o
 obj-$(CONFIG_X86_VISWS) += setup-irq.o
 obj-$(CONFIG_MN10300) += setup-bus.o
 obj-$(CONFIG_MICROBLAZE) += setup-bus.o
+obj-$(CONFIG_TILE) += setup-bus.o setup-irq.o
+obj-$(CONFIG_SPARC_LEON) += setup-bus.o setup-irq.o
 
 #
 # ACPI Related PCI FW Functions
+# ACPI _DSM provided firmware instance and string name
 #
 obj-$(CONFIG_ACPI)    += pci-acpi.o
 
 # SMBIOS provided firmware instance and labels
-obj-$(CONFIG_DMI)    += pci-label.o
+obj-$(CONFIG_PCI_LABEL) += pci-label.o
 
 # Cardbus & CompactPCI use setup-bus
 obj-$(CONFIG_HOTPLUG) += setup-bus.o
@@ -65,6 +66,8 @@ obj-$(CONFIG_PCI_SYSCALL) += syscall.o
 
 obj-$(CONFIG_PCI_STUB) += pci-stub.o
 
-ifeq ($(CONFIG_PCI_DEBUG),y)
-EXTRA_CFLAGS += -DDEBUG
-endif
+obj-$(CONFIG_XEN_PCIDEV_FRONTEND) += xen-pcifront.o
+
+obj-$(CONFIG_OF) += of.o
+
+ccflags-$(CONFIG_PCI_DEBUG) := -DDEBUG

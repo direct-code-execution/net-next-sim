@@ -59,7 +59,6 @@
 #include <net/ip.h>
 #include <net/dsa.h>
 #include <asm/uaccess.h>
-#include <asm/system.h>
 
 __setup("ether=", netdev_boot_setup);
 
@@ -231,11 +230,11 @@ EXPORT_SYMBOL(eth_header_parse);
  * eth_header_cache - fill cache entry from neighbour
  * @neigh: source neighbour
  * @hh: destination cache entry
+ * @type: Ethernet type field
  * Create an Ethernet header template from the neighbour.
  */
-int eth_header_cache(const struct neighbour *neigh, struct hh_cache *hh)
+int eth_header_cache(const struct neighbour *neigh, struct hh_cache *hh, __be16 type)
 {
-	__be16 type = hh->hh_type;
 	struct ethhdr *eth;
 	const struct net_device *dev = neigh->dev;
 
@@ -288,6 +287,8 @@ int eth_mac_addr(struct net_device *dev, void *p)
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
 	memcpy(dev->dev_addr, addr->sa_data, ETH_ALEN);
+	/* if device marked as NET_ADDR_RANDOM, reset it */
+	dev->addr_assign_type &= ~NET_ADDR_RANDOM;
 	return 0;
 }
 EXPORT_SYMBOL(eth_mac_addr);
@@ -340,6 +341,7 @@ void ether_setup(struct net_device *dev)
 	dev->addr_len		= ETH_ALEN;
 	dev->tx_queue_len	= 1000;	/* Ethernet wants good queues */
 	dev->flags		= IFF_BROADCAST|IFF_MULTICAST;
+	dev->priv_flags		|= IFF_TX_SKB_SHARING;
 
 	memset(dev->broadcast, 0xFF, ETH_ALEN);
 
@@ -347,10 +349,11 @@ void ether_setup(struct net_device *dev)
 EXPORT_SYMBOL(ether_setup);
 
 /**
- * alloc_etherdev_mq - Allocates and sets up an Ethernet device
+ * alloc_etherdev_mqs - Allocates and sets up an Ethernet device
  * @sizeof_priv: Size of additional driver-private structure to be allocated
  *	for this Ethernet device
- * @queue_count: The number of queues this device has.
+ * @txqs: The number of TX queues this device has.
+ * @rxqs: The number of RX queues this device has.
  *
  * Fill in the fields of the device structure with Ethernet-generic
  * values. Basically does everything except registering the device.
@@ -360,14 +363,15 @@ EXPORT_SYMBOL(ether_setup);
  * this private data area.
  */
 
-struct net_device *alloc_etherdev_mq(int sizeof_priv, unsigned int queue_count)
+struct net_device *alloc_etherdev_mqs(int sizeof_priv, unsigned int txqs,
+				      unsigned int rxqs)
 {
-	return alloc_netdev_mq(sizeof_priv, "eth%d", ether_setup, queue_count);
+	return alloc_netdev_mqs(sizeof_priv, "eth%d", ether_setup, txqs, rxqs);
 }
-EXPORT_SYMBOL(alloc_etherdev_mq);
+EXPORT_SYMBOL(alloc_etherdev_mqs);
 
 static size_t _format_mac_addr(char *buf, int buflen,
-				const unsigned char *addr, int len)
+			       const unsigned char *addr, int len)
 {
 	int i;
 	char *cp = buf;
@@ -376,7 +380,7 @@ static size_t _format_mac_addr(char *buf, int buflen,
 		cp += scnprintf(cp, buflen - (cp - buf), "%02x", addr[i]);
 		if (i == len - 1)
 			break;
-		cp += strlcpy(cp, ":", buflen - (cp - buf));
+		cp += scnprintf(cp, buflen - (cp - buf), ":");
 	}
 	return cp - buf;
 }
@@ -386,7 +390,7 @@ ssize_t sysfs_format_mac(char *buf, const unsigned char *addr, int len)
 	size_t l;
 
 	l = _format_mac_addr(buf, PAGE_SIZE, addr, len);
-	l += strlcpy(buf + l, "\n", PAGE_SIZE - l);
-	return ((ssize_t) l);
+	l += scnprintf(buf + l, PAGE_SIZE - l, "\n");
+	return (ssize_t)l;
 }
 EXPORT_SYMBOL(sysfs_format_mac);

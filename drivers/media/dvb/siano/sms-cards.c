@@ -19,6 +19,7 @@
 
 #include "sms-cards.h"
 #include "smsir.h"
+#include <linux/module.h>
 
 static int sms_dbg;
 module_param_named(cards_dbg, sms_dbg, int, 0644);
@@ -64,7 +65,7 @@ static struct sms_board sms_boards[] = {
 		.type	= SMS_NOVA_B0,
 		.fw[DEVICE_MODE_ISDBT_BDA] = "sms1xxx-hcw-55xxx-isdbt-02.fw",
 		.fw[DEVICE_MODE_DVBT_BDA] = "sms1xxx-hcw-55xxx-dvbt-02.fw",
-		.rc_codes = RC_MAP_RC5_HAUPPAUGE_NEW,
+		.rc_codes = RC_MAP_HAUPPAUGE,
 		.board_cfg.leds_power = 26,
 		.board_cfg.led0 = 27,
 		.board_cfg.led1 = 28,

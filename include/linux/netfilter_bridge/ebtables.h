@@ -92,7 +92,7 @@ struct ebt_entries {
 
 /* This is a hack to make a difference between an ebt_entry struct and an
  * ebt_entries struct when traversing the entries from start to end.
- * Using this simplifies the code alot, while still being able to use
+ * Using this simplifies the code a lot, while still being able to use
  * ebt_entries.
  * Contrary, iptables doesn't use something like ebt_entries and therefore uses
  * different techniques for naming the policy and such. So, iptables doesn't
@@ -285,8 +285,8 @@ struct ebt_table {
 	struct module *me;
 };
 
-#define EBT_ALIGN(s) (((s) + (__alignof__(struct ebt_replace)-1)) & \
-		     ~(__alignof__(struct ebt_replace)-1))
+#define EBT_ALIGN(s) (((s) + (__alignof__(struct _xt_align)-1)) & \
+		     ~(__alignof__(struct _xt_align)-1))
 extern struct ebt_table *ebt_register_table(struct net *net,
 					    const struct ebt_table *table);
 extern void ebt_unregister_table(struct net *net, struct ebt_table *table);

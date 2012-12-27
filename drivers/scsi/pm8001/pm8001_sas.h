@@ -50,11 +50,11 @@
 #include <linux/dma-mapping.h>
 #include <linux/pci.h>
 #include <linux/interrupt.h>
-#include <linux/smp_lock.h>
+#include <linux/workqueue.h>
 #include <scsi/libsas.h>
 #include <scsi/scsi_tcq.h>
 #include <scsi/sas_ata.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include "pm8001_defs.h"
 
 #define DRV_NAME		"pm8001"
@@ -235,6 +235,7 @@ struct pm8001_ccb_info {
 	struct pm8001_device	*device;
 	struct pm8001_prd	buf_prd[PM8001_MAX_DMA_SG];
 	struct fw_control_ex	*fw_control_context;
+	u8			open_retry;
 };
 
 struct mpi_mem {
@@ -380,18 +381,16 @@ struct pm8001_hba_info {
 #ifdef PM8001_USE_TASKLET
 	struct tasklet_struct	tasklet;
 #endif
-	struct list_head 	wq_list;
 	u32			logging_level;
 	u32			fw_status;
 	const struct firmware 	*fw_image;
 };
 
-struct pm8001_wq {
-	struct delayed_work work_q;
+struct pm8001_work {
+	struct work_struct work;
 	struct pm8001_hba_info *pm8001_ha;
 	void *data;
 	int handler;
-	struct list_head entry;
 };
 
 struct pm8001_fw_image_header {
@@ -447,7 +446,7 @@ struct fw_control_info {
 struct fw_control_ex {
 	struct fw_control_info *fw_control;
 	void			*buffer;/* keep buffer pointer to be
-	freed when the responce comes*/
+	freed when the response comes*/
 	void			*virtAddr;/* keep virtual address of the data */
 	void			*usrAddr;/* keep virtual address of the
 	user data */
@@ -461,6 +460,9 @@ struct fw_control_ex {
 	void			*param3;
 };
 
+/* pm8001 workqueue */
+extern struct workqueue_struct *pm8001_wq;
+
 /******************** function prototype *********************/
 int pm8001_tag_alloc(struct pm8001_hba_info *pm8001_ha, u32 *tag_out);
 void pm8001_tag_init(struct pm8001_hba_info *pm8001_ha);
@@ -470,8 +472,6 @@ void pm8001_ccb_task_free(struct pm8001_hba_info *pm8001_ha,
 	struct sas_task *task, struct pm8001_ccb_info *ccb, u32 ccb_idx);
 int pm8001_phy_control(struct asd_sas_phy *sas_phy, enum phy_func func,
 	void *funcdata);
-int pm8001_slave_alloc(struct scsi_device *scsi_dev);
-int pm8001_slave_configure(struct scsi_device *sdev);
 void pm8001_scan_start(struct Scsi_Host *shost);
 int pm8001_scan_finished(struct Scsi_Host *shost, unsigned long time);
 int pm8001_queue_command(struct sas_task *task, const int num,
@@ -485,10 +485,15 @@ void pm8001_dev_gone(struct domain_device *dev);
 int pm8001_lu_reset(struct domain_device *dev, u8 *lun);
 int pm8001_I_T_nexus_reset(struct domain_device *dev);
 int pm8001_query_task(struct sas_task *task);
+void pm8001_open_reject_retry(
+	struct pm8001_hba_info *pm8001_ha,
+	struct sas_task *task_to_close,
+	struct pm8001_device *device_to_close);
 int pm8001_mem_alloc(struct pci_dev *pdev, void **virt_addr,
 	dma_addr_t *pphys_addr, u32 *pphys_addr_hi, u32 *pphys_addr_lo,
 	u32 mem_size, u32 align);
 
+int pm8001_bar4_shift(struct pm8001_hba_info *pm8001_ha, u32 shiftValue);
 
 /* ctl shared API */
 extern struct device_attribute *pm8001_host_attrs[];

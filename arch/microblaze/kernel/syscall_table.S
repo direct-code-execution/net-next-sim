@@ -173,7 +173,7 @@ ENTRY(sys_call_table)
 	.long sys_ni_syscall		/* sys_vm86 */
 	.long sys_ni_syscall		/* Old sys_query_module */
 	.long sys_poll
-	.long sys_nfsservctl
+	.long sys_ni_syscall		/* old nfsservctl */
 	.long sys_setresgid		/* 170 */
 	.long sys_getresgid
 	.long sys_prctl
@@ -372,3 +372,14 @@ ENTRY(sys_call_table)
 	.long sys_rt_tgsigqueueinfo	/* 365 */
 	.long sys_perf_event_open
 	.long sys_recvmmsg
+	.long sys_fanotify_init
+	.long sys_fanotify_mark
+	.long sys_prlimit64	/* 370 */
+	.long sys_name_to_handle_at
+	.long sys_open_by_handle_at
+	.long sys_clock_adjtime
+	.long sys_syncfs
+	.long sys_setns			/* 375 */
+	.long sys_sendmmsg
+	.long sys_process_vm_readv
+	.long sys_process_vm_writev

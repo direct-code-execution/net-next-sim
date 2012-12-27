@@ -251,62 +251,6 @@ static int jz_nand_correct_ecc_rs(struct mtd_info *mtd, uint8_t *dat,
 	return 0;
 }
 
-
-/* Copy paste of nand_read_page_hwecc_oob_first except for different eccpos
- * handling. The ecc area is for 4k chips 72 bytes long and thus does not fit
- * into the eccpos array. */
-static int jz_nand_read_page_hwecc_oob_first(struct mtd_info *mtd,
-	struct nand_chip *chip, uint8_t *buf, int page)
-{
-	int i, eccsize = chip->ecc.size;
-	int eccbytes = chip->ecc.bytes;
-	int eccsteps = chip->ecc.steps;
-	uint8_t *p = buf;
-	unsigned int ecc_offset = chip->page_shift;
-
-	/* Read the OOB area first */
-	chip->cmdfunc(mtd, NAND_CMD_READOOB, 0, page);
-	chip->read_buf(mtd, chip->oob_poi, mtd->oobsize);
-	chip->cmdfunc(mtd, NAND_CMD_READ0, 0, page);
-
-	for (i = ecc_offset; eccsteps; eccsteps--, i += eccbytes, p += eccsize) {
-		int stat;
-
-		chip->ecc.hwctl(mtd, NAND_ECC_READ);
-		chip->read_buf(mtd, p, eccsize);
-
-		stat = chip->ecc.correct(mtd, p, &chip->oob_poi[i], NULL);
-		if (stat < 0)
-			mtd->ecc_stats.failed++;
-		else
-			mtd->ecc_stats.corrected += stat;
-	}
-	return 0;
-}
-
-/* Copy-and-paste of nand_write_page_hwecc with different eccpos handling. */
-static void jz_nand_write_page_hwecc(struct mtd_info *mtd,
-	struct nand_chip *chip, const uint8_t *buf)
-{
-	int i, eccsize = chip->ecc.size;
-	int eccbytes = chip->ecc.bytes;
-	int eccsteps = chip->ecc.steps;
-	const uint8_t *p = buf;
-	unsigned int ecc_offset = chip->page_shift;
-
-	for (i = ecc_offset; eccsteps; eccsteps--, i += eccbytes, p += eccsize) {
-		chip->ecc.hwctl(mtd, NAND_ECC_WRITE);
-		chip->write_buf(mtd, p, eccsize);
-		chip->ecc.calculate(mtd, p, &chip->oob_poi[i]);
-	}
-
-	chip->write_buf(mtd, chip->oob_poi, mtd->oobsize);
-}
-
-#ifdef CONFIG_MTD_CMDLINE_PARTS
-static const char *part_probes[] = {"cmdline", NULL};
-#endif
-
 static int jz_nand_ioremap_resource(struct platform_device *pdev,
 	const char *name, struct resource **res, void __iomem **base)
 {
@@ -351,10 +295,6 @@ static int __devinit jz_nand_probe(struct platform_device *pdev)
 	struct nand_chip *chip;
 	struct mtd_info *mtd;
 	struct jz_nand_platform_data *pdata = pdev->dev.platform_data;
-#ifdef CONFIG_MTD_PARTITIONS
-	struct mtd_partition *partition_info;
-	int num_partitions = 0;
-#endif
 
 	nand = kzalloc(sizeof(*nand), GFP_KERNEL);
 	if (!nand) {
@@ -392,9 +332,11 @@ static int __devinit jz_nand_probe(struct platform_device *pdev)
 	chip->ecc.mode		= NAND_ECC_HW_OOB_FIRST;
 	chip->ecc.size		= 512;
 	chip->ecc.bytes		= 9;
-
-	chip->ecc.read_page	= jz_nand_read_page_hwecc_oob_first;
-	chip->ecc.write_page	= jz_nand_write_page_hwecc;
+	chip->ecc.strength	= 2;
+	/*
+	 * FIXME: ecc_strength value of 2 bits per 512 bytes of data is a
+	 * conservative guess, given 9 ecc bytes and reed-solomon alg.
+	 */
 
 	if (pdata)
 		chip->ecc.layout = pdata->ecc_layout;
@@ -430,21 +372,9 @@ static int __devinit jz_nand_probe(struct platform_device *pdev)
 		goto err_gpio_free;
 	}
 
-#ifdef CONFIG_MTD_PARTITIONS
-#ifdef CONFIG_MTD_CMDLINE_PARTS
-	num_partitions = parse_mtd_partitions(mtd, part_probes,
-						&partition_info, 0);
-#endif
-	if (num_partitions <= 0 && pdata) {
-		num_partitions = pdata->num_partitions;
-		partition_info = pdata->partitions;
-	}
-
-	if (num_partitions > 0)
-		ret = add_mtd_partitions(mtd, partition_info, num_partitions);
-	else
-#endif
-	ret = add_mtd_device(mtd);
+	ret = mtd_device_parse_register(mtd, NULL, NULL,
+					pdata ? pdata->partitions : NULL,
+					pdata ? pdata->num_partitions : 0);
 
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to add mtd device\n");
@@ -489,7 +419,7 @@ static int __devexit jz_nand_remove(struct platform_device *pdev)
 	return 0;
 }
 
-struct platform_driver jz_nand_driver = {
+static struct platform_driver jz_nand_driver = {
 	.probe = jz_nand_probe,
 	.remove = __devexit_p(jz_nand_remove),
 	.driver = {
@@ -498,17 +428,7 @@ struct platform_driver jz_nand_driver = {
 	},
 };
 
-static int __init jz_nand_init(void)
-{
-	return platform_driver_register(&jz_nand_driver);
-}
-module_init(jz_nand_init);
-
-static void __exit jz_nand_exit(void)
-{
-	platform_driver_unregister(&jz_nand_driver);
-}
-module_exit(jz_nand_exit);
+module_platform_driver(jz_nand_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Lars-Peter Clausen <lars@metafoo.de>");

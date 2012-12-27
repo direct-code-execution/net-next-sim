@@ -62,8 +62,8 @@ struct pt_regs {
 	pt_reg_t lr;		/* aliases regs[TREG_LR] */
 
 	/* Saved special registers. */
-	pt_reg_t pc;		/* stored in EX_CONTEXT_1_0 */
-	pt_reg_t ex1;		/* stored in EX_CONTEXT_1_1 (PL and ICS bit) */
+	pt_reg_t pc;		/* stored in EX_CONTEXT_K_0 */
+	pt_reg_t ex1;		/* stored in EX_CONTEXT_K_1 (PL and ICS bit) */
 	pt_reg_t faultnum;	/* fault number (INT_SWINT_1 for syscall) */
 	pt_reg_t orig_r0;	/* r0 at syscall entry, else zero */
 	pt_reg_t flags;		/* flags (see below) */
@@ -112,8 +112,6 @@ struct pt_regs *get_pt_regs(struct pt_regs *);
 /* Trace the current syscall. */
 extern void do_syscall_trace(void);
 
-extern void show_regs(struct pt_regs *);
-
 #define arch_has_single_step()	(1)
 
 /*
@@ -140,6 +138,9 @@ struct single_step_state {
 
 /* Single-step the instruction at regs->pc */
 extern void single_step_once(struct pt_regs *regs);
+
+/* Clean up after execve(). */
+extern void single_step_execve(void);
 
 struct task_struct;
 

@@ -58,13 +58,12 @@ struct configfs_dirent {
 extern struct mutex configfs_symlink_mutex;
 extern spinlock_t configfs_dirent_lock;
 
-extern struct vfsmount * configfs_mount;
 extern struct kmem_cache *configfs_dir_cachep;
 
 extern int configfs_is_root(struct config_item *item);
 
-extern struct inode * configfs_new_inode(mode_t mode, struct configfs_dirent *);
-extern int configfs_create(struct dentry *, int mode, int (*init)(struct inode *));
+extern struct inode * configfs_new_inode(umode_t mode, struct configfs_dirent *, struct super_block *);
+extern int configfs_create(struct dentry *, umode_t mode, int (*init)(struct inode *));
 extern int configfs_inode_init(void);
 extern void configfs_inode_exit(void);
 
@@ -80,16 +79,17 @@ extern const unsigned char * configfs_get_name(struct configfs_dirent *sd);
 extern void configfs_drop_dentry(struct configfs_dirent *sd, struct dentry *parent);
 extern int configfs_setattr(struct dentry *dentry, struct iattr *iattr);
 
-extern int configfs_pin_fs(void);
+extern struct dentry *configfs_pin_fs(void);
 extern void configfs_release_fs(void);
 
 extern struct rw_semaphore configfs_rename_sem;
-extern struct super_block * configfs_sb;
 extern const struct file_operations configfs_dir_operations;
 extern const struct file_operations configfs_file_operations;
 extern const struct file_operations bin_fops;
 extern const struct inode_operations configfs_dir_inode_operations;
+extern const struct inode_operations configfs_root_inode_operations;
 extern const struct inode_operations configfs_symlink_inode_operations;
+extern const struct dentry_operations configfs_dentry_ops;
 
 extern int configfs_symlink(struct inode *dir, struct dentry *dentry,
 			    const char *symname);
@@ -120,7 +120,7 @@ static inline struct config_item *configfs_get_config_item(struct dentry *dentry
 {
 	struct config_item * item = NULL;
 
-	spin_lock(&dcache_lock);
+	spin_lock(&dentry->d_lock);
 	if (!d_unhashed(dentry)) {
 		struct configfs_dirent * sd = dentry->d_fsdata;
 		if (sd->s_type & CONFIGFS_ITEM_LINK) {
@@ -129,7 +129,7 @@ static inline struct config_item *configfs_get_config_item(struct dentry *dentry
 		} else
 			item = config_item_get(sd->s_element);
 	}
-	spin_unlock(&dcache_lock);
+	spin_unlock(&dentry->d_lock);
 
 	return item;
 }

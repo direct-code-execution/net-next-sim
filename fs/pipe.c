@@ -13,6 +13,7 @@
 #include <linux/fs.h>
 #include <linux/log2.h>
 #include <linux/mount.h>
+#include <linux/magic.h>
 #include <linux/pipe_fs_i.h>
 #include <linux/uio.h>
 #include <linux/highmem.h>
@@ -230,7 +231,7 @@ void *generic_pipe_buf_map(struct pipe_inode_info *pipe,
 {
 	if (atomic) {
 		buf->flags |= PIPE_BUF_FLAG_ATOMIC;
-		return kmap_atomic(buf->page, KM_USER0);
+		return kmap_atomic(buf->page);
 	}
 
 	return kmap(buf->page);
@@ -251,7 +252,7 @@ void generic_pipe_buf_unmap(struct pipe_inode_info *pipe,
 {
 	if (buf->flags & PIPE_BUF_FLAG_ATOMIC) {
 		buf->flags &= ~PIPE_BUF_FLAG_ATOMIC;
-		kunmap_atomic(map_data, KM_USER0);
+		kunmap_atomic(map_data);
 	} else
 		kunmap(buf->page);
 }
@@ -345,6 +346,16 @@ static const struct pipe_buf_operations anon_pipe_buf_ops = {
 	.get = generic_pipe_buf_get,
 };
 
+static const struct pipe_buf_operations packet_pipe_buf_ops = {
+	.can_merge = 0,
+	.map = generic_pipe_buf_map,
+	.unmap = generic_pipe_buf_unmap,
+	.confirm = generic_pipe_buf_confirm,
+	.release = anon_pipe_buf_release,
+	.steal = generic_pipe_buf_steal,
+	.get = generic_pipe_buf_get,
+};
+
 static ssize_t
 pipe_read(struct kiocb *iocb, const struct iovec *_iov,
 	   unsigned long nr_segs, loff_t pos)
@@ -382,7 +393,7 @@ pipe_read(struct kiocb *iocb, const struct iovec *_iov,
 			error = ops->confirm(pipe, buf);
 			if (error) {
 				if (!ret)
-					error = ret;
+					ret = error;
 				break;
 			}
 
@@ -406,6 +417,13 @@ redo:
 			ret += chars;
 			buf->offset += chars;
 			buf->len -= chars;
+
+			/* Was it a packet buffer? Clean up and exit */
+			if (buf->flags & PIPE_BUF_FLAG_PACKET) {
+				total_len = chars;
+				buf->len = 0;
+			}
+
 			if (!buf->len) {
 				buf->ops = NULL;
 				ops->release(pipe, buf);
@@ -441,7 +459,7 @@ redo:
 			break;
 		}
 		if (do_wakeup) {
-			wake_up_interruptible_sync(&pipe->wait);
+			wake_up_interruptible_sync_poll(&pipe->wait, POLLOUT | POLLWRNORM);
  			kill_fasync(&pipe->fasync_writers, SIGIO, POLL_OUT);
 		}
 		pipe_wait(pipe);
@@ -450,12 +468,17 @@ redo:
 
 	/* Signal writers asynchronously that there is more room. */
 	if (do_wakeup) {
-		wake_up_interruptible_sync(&pipe->wait);
+		wake_up_interruptible_sync_poll(&pipe->wait, POLLOUT | POLLWRNORM);
 		kill_fasync(&pipe->fasync_writers, SIGIO, POLL_OUT);
 	}
 	if (ret > 0)
 		file_accessed(filp);
 	return ret;
+}
+
+static inline int is_packetized(struct file *file)
+{
+	return (file->f_flags & O_DIRECT) != 0;
 }
 
 static ssize_t
@@ -565,14 +588,14 @@ redo1:
 			iov_fault_in_pages_read(iov, chars);
 redo2:
 			if (atomic)
-				src = kmap_atomic(page, KM_USER0);
+				src = kmap_atomic(page);
 			else
 				src = kmap(page);
 
 			error = pipe_iov_copy_from_user(src, iov, chars,
 							atomic);
 			if (atomic)
-				kunmap_atomic(src, KM_USER0);
+				kunmap_atomic(src);
 			else
 				kunmap(page);
 
@@ -592,6 +615,11 @@ redo2:
 			buf->ops = &anon_pipe_buf_ops;
 			buf->offset = 0;
 			buf->len = chars;
+			buf->flags = 0;
+			if (is_packetized(filp)) {
+				buf->ops = &packet_pipe_buf_ops;
+				buf->flags = PIPE_BUF_FLAG_PACKET;
+			}
 			pipe->nrbufs = ++bufs;
 			pipe->tmp_page = NULL;
 
@@ -612,7 +640,7 @@ redo2:
 			break;
 		}
 		if (do_wakeup) {
-			wake_up_interruptible_sync(&pipe->wait);
+			wake_up_interruptible_sync_poll(&pipe->wait, POLLIN | POLLRDNORM);
 			kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
 			do_wakeup = 0;
 		}
@@ -623,7 +651,7 @@ redo2:
 out:
 	mutex_unlock(&inode->i_mutex);
 	if (do_wakeup) {
-		wake_up_interruptible_sync(&pipe->wait);
+		wake_up_interruptible_sync_poll(&pipe->wait, POLLIN | POLLRDNORM);
 		kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
 	}
 	if (ret > 0)
@@ -715,7 +743,7 @@ pipe_release(struct inode *inode, int decr, int decw)
 	if (!pipe->readers && !pipe->writers) {
 		free_pipe_info(inode);
 	} else {
-		wake_up_interruptible_sync(&pipe->wait);
+		wake_up_interruptible_sync_poll(&pipe->wait, POLLIN | POLLOUT | POLLRDNORM | POLLWRNORM | POLLERR | POLLHUP);
 		kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
 		kill_fasync(&pipe->fasync_writers, SIGIO, POLL_OUT);
 	}
@@ -948,11 +976,13 @@ static const struct dentry_operations pipefs_dentry_operations = {
 
 static struct inode * get_pipe_inode(void)
 {
-	struct inode *inode = new_inode(pipe_mnt->mnt_sb);
+	struct inode *inode = new_inode_pseudo(pipe_mnt->mnt_sb);
 	struct pipe_inode_info *pipe;
 
 	if (!inode)
 		goto fail_inode;
+
+	inode->i_ino = get_next_ino();
 
 	pipe = alloc_pipe_info(inode);
 	if (!pipe)
@@ -997,12 +1027,11 @@ struct file *create_write_pipe(int flags)
 		goto err;
 
 	err = -ENOMEM;
-	path.dentry = d_alloc(pipe_mnt->mnt_sb->s_root, &name);
+	path.dentry = d_alloc_pseudo(pipe_mnt->mnt_sb, &name);
 	if (!path.dentry)
 		goto err_inode;
 	path.mnt = mntget(pipe_mnt);
 
-	path.dentry->d_op = &pipefs_dentry_operations;
 	d_instantiate(path.dentry, inode);
 
 	err = -ENFILE;
@@ -1011,7 +1040,7 @@ struct file *create_write_pipe(int flags)
 		goto err_dentry;
 	f->f_mapping = inode->i_mapping;
 
-	f->f_flags = O_WRONLY | (flags & O_NONBLOCK);
+	f->f_flags = O_WRONLY | (flags & (O_NONBLOCK | O_DIRECT));
 	f->f_version = 0;
 
 	return f;
@@ -1055,7 +1084,7 @@ int do_pipe_flags(int *fd, int flags)
 	int error;
 	int fdw, fdr;
 
-	if (flags & ~(O_CLOEXEC | O_NONBLOCK))
+	if (flags & ~(O_CLOEXEC | O_NONBLOCK | O_DIRECT))
 		return -EINVAL;
 
 	fw = create_write_pipe(flags);
@@ -1136,7 +1165,7 @@ static long pipe_set_size(struct pipe_inode_info *pipe, unsigned long nr_pages)
 	if (nr_pages < pipe->nrbufs)
 		return -EBUSY;
 
-	bufs = kcalloc(nr_pages, sizeof(struct pipe_buffer), GFP_KERNEL);
+	bufs = kcalloc(nr_pages, sizeof(*bufs), GFP_KERNEL | __GFP_NOWARN);
 	if (unlikely(!bufs))
 		return -ENOMEM;
 
@@ -1197,12 +1226,24 @@ int pipe_proc_fn(struct ctl_table *table, int write, void __user *buf,
 	return ret;
 }
 
+/*
+ * After the inode slimming patch, i_pipe/i_bdev/i_cdev share the same
+ * location, so checking ->i_pipe is not enough to verify that this is a
+ * pipe.
+ */
+struct pipe_inode_info *get_pipe_info(struct file *file)
+{
+	struct inode *i = file->f_path.dentry->d_inode;
+
+	return S_ISFIFO(i->i_mode) ? i->i_pipe : NULL;
+}
+
 long pipe_fcntl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct pipe_inode_info *pipe;
 	long ret;
 
-	pipe = file->f_path.dentry->d_inode->i_pipe;
+	pipe = get_pipe_info(file);
 	if (!pipe)
 		return -EBADF;
 
@@ -1239,22 +1280,27 @@ out:
 	return ret;
 }
 
+static const struct super_operations pipefs_ops = {
+	.destroy_inode = free_inode_nonrcu,
+	.statfs = simple_statfs,
+};
+
 /*
  * pipefs should _never_ be mounted by userland - too much of security hassle,
  * no real gain from having the whole whorehouse mounted. So we don't need
  * any operations on the root directory. However, we need a non-trivial
  * d_name - pipe: will go nicely and kill the special-casing in procfs.
  */
-static int pipefs_get_sb(struct file_system_type *fs_type,
-			 int flags, const char *dev_name, void *data,
-			 struct vfsmount *mnt)
+static struct dentry *pipefs_mount(struct file_system_type *fs_type,
+			 int flags, const char *dev_name, void *data)
 {
-	return get_sb_pseudo(fs_type, "pipe:", NULL, PIPEFS_MAGIC, mnt);
+	return mount_pseudo(fs_type, "pipe:", &pipefs_ops,
+			&pipefs_dentry_operations, PIPEFS_MAGIC);
 }
 
 static struct file_system_type pipe_fs_type = {
 	.name		= "pipefs",
-	.get_sb		= pipefs_get_sb,
+	.mount		= pipefs_mount,
 	.kill_sb	= kill_anon_super,
 };
 
@@ -1272,11 +1318,4 @@ static int __init init_pipe_fs(void)
 	return err;
 }
 
-static void __exit exit_pipe_fs(void)
-{
-	unregister_filesystem(&pipe_fs_type);
-	mntput(pipe_mnt);
-}
-
 fs_initcall(init_pipe_fs);
-module_exit(exit_pipe_fs);

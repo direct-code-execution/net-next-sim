@@ -16,7 +16,7 @@
 
 #include <asm/uaccess.h>
 #include <asm/io.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 
 #include <linux/list.h>
 #include <linux/interrupt.h>
@@ -281,7 +281,8 @@ const struct file_operations cryptocop_fops = {
 	.owner		= THIS_MODULE,
 	.open		= cryptocop_open,
 	.release	= cryptocop_release,
-	.unlocked_ioctl = cryptocop_ioctl
+	.unlocked_ioctl = cryptocop_ioctl,
+	.llseek		= noop_llseek,
 };
 
 
@@ -3139,9 +3140,9 @@ cryptocop_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
        struct inode *inode = file->f_path.dentry->d_inode;
        long ret;
 
-       lock_kernel();
+       mutex_lock(&cryptocop_mutex);
        ret = cryptocop_ioctl_unlocked(inode, filp, cmd, arg);
-       unlock_kernel();
+       mutex_unlock(&cryptocop_mutex);
 
        return ret;
 }

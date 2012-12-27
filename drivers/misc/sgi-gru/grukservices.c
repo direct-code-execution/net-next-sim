@@ -31,6 +31,7 @@
 #include <linux/interrupt.h>
 #include <linux/uaccess.h>
 #include <linux/delay.h>
+#include <linux/export.h>
 #include <asm/io_apic.h>
 #include "gru.h"
 #include "grulib.h"
@@ -229,7 +230,7 @@ again:
 	bid = blade_id < 0 ? uv_numa_blade_id() : blade_id;
 	bs = gru_base[bid];
 
-	/* Handle the case where migration occured while waiting for the sema */
+	/* Handle the case where migration occurred while waiting for the sema */
 	down_read(&bs->bs_kgts_sema);
 	if (blade_id < 0 && bid != uv_numa_blade_id()) {
 		up_read(&bs->bs_kgts_sema);

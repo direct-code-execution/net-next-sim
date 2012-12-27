@@ -10,7 +10,6 @@
  */
 
 #include <linux/platform_device.h>
-#include <linux/sysdev.h>
 #include <linux/irq.h>
 #include <linux/gpio.h>
 #include <linux/delay.h>
@@ -19,12 +18,12 @@
 #include <video/mbxfb.h>
 
 #include <linux/spi/spi.h>
+#include <linux/spi/pxa2xx_spi.h>
 #include <linux/spi/libertas_spi.h>
 
 #include <mach/pxa27x.h>
 #include <mach/ohci.h>
 #include <mach/mmc.h>
-#include <mach/pxa2xx_spi.h>
 
 #include "generic.h"
 
@@ -34,7 +33,7 @@
 /* GPIO IRQ usage */
 #define GPIO83_MMC_IRQ		(83)
 
-#define CMX270_MMC_IRQ		IRQ_GPIO(GPIO83_MMC_IRQ)
+#define CMX270_MMC_IRQ		PXA_GPIO_TO_IRQ(GPIO83_MMC_IRQ)
 
 /* MMC power enable */
 #define GPIO105_MMC_POWER	(105)
@@ -381,7 +380,7 @@ static struct spi_board_info cm_x270_spi_devices[] __initdata = {
 		.modalias		= "libertas_spi",
 		.max_speed_hz		= 13000000,
 		.bus_num		= 2,
-		.irq			= gpio_to_irq(95),
+		.irq			= PXA_GPIO_TO_IRQ(95),
 		.chip_select		= 0,
 		.controller_data	= &cm_x270_libertas_chip,
 		.platform_data		= &cm_x270_libertas_pdata,

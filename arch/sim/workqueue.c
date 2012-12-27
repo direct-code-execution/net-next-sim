@@ -58,7 +58,7 @@ static int flush_entry (struct list_head *prev)
   if (!list_empty(&g_work))
     {
       active = 1;
-      INIT_WORK_ON_STACK(&barr.work, &workqueue_barrier_fn);
+      INIT_WORK_ONSTACK(&barr.work, &workqueue_barrier_fn);
       __set_bit(WORK_STRUCT_PENDING, work_data_bits(&barr.work));
       list_add(&barr.work.entry, prev);
       sim_task_wakeup (workqueue_task ());
@@ -99,11 +99,11 @@ void flush_scheduled_work(void)
 {
   flush_entry (g_work.prev);
 }
-int flush_work(struct work_struct *work)
+bool flush_work(struct work_struct *work)
 {
   return flush_entry (&work->entry);
 }
-int cancel_work_sync(struct work_struct *work)
+bool cancel_work_sync(struct work_struct *work)
 {
   int retval = 0;
   if (!test_and_set_bit(WORK_STRUCT_PENDING, work_data_bits(work)))
@@ -141,4 +141,12 @@ int schedule_delayed_work(struct delayed_work *dwork, unsigned long delay)
       ret = 1;
     }
   return ret;
+}
+struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
+					       unsigned int flags,
+					       int max_active,
+					       struct lock_class_key *key,
+					       const char *lock_name, ...)
+{
+	return 0;
 }

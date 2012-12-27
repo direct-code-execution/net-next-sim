@@ -11,7 +11,7 @@
  * DM644X-EVM board. It has:
  * 	DM6446M02 module with 256MB NAND, 256MB RAM, TLV320AIC32 AIC,
  * 	USB, Ethernet, SD/MMC, UART, THS8200, TVP7000 for video.
- * 	Additionaly realtime clock, IR remote control receiver,
+ * 	Additionally realtime clock, IR remote control receiver,
  * 	IR Blaster based on MSP430 (firmware although is different
  * 	from used in DM644X-EVM), internal ATA-6 3.5” HDD drive
  * 	with PATA interface, two muxed red-green leds.
@@ -30,7 +30,6 @@
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 
-#include <mach/dm644x.h>
 #include <mach/common.h>
 #include <mach/i2c.h>
 #include <mach/serial.h>
@@ -39,9 +38,9 @@
 #include <mach/mmc.h>
 #include <mach/usb.h>
 
-#define NEUROS_OSD2_PHY_MASK		0x2
-#define NEUROS_OSD2_MDIO_FREQUENCY	2200000 /* PHY bus frequency */
+#include "davinci.h"
 
+#define NEUROS_OSD2_PHY_ID		"davinci_mdio-0:01"
 #define LXT971_PHY_ID			0x001378e2
 #define LXT971_PHY_MASK			0xfffffff0
 
@@ -89,7 +88,7 @@ static struct davinci_nand_pdata davinci_ntosd2_nandflash_data = {
 	.parts		= davinci_ntosd2_nandflash_partition,
 	.nr_parts	= ARRAY_SIZE(davinci_ntosd2_nandflash_partition),
 	.ecc_mode	= NAND_ECC_HW,
-	.options	= NAND_USE_FLASH_BBT,
+	.bbt_options	= NAND_BBT_USE_FLASH,
 };
 
 static struct resource davinci_ntosd2_nandflash_resource[] = {
@@ -252,8 +251,7 @@ static __init void davinci_ntosd2_init(void)
 	davinci_serial_init(&uart_config);
 	dm644x_init_asp(&dm644x_ntosd2_snd_data);
 
-	soc_info->emac_pdata->phy_mask = NEUROS_OSD2_PHY_MASK;
-	soc_info->emac_pdata->mdio_max_freq = NEUROS_OSD2_MDIO_FREQUENCY;
+	soc_info->emac_pdata->phy_id = NEUROS_OSD2_PHY_ID;
 
 	davinci_setup_usb(1000, 8);
 	/*
@@ -275,11 +273,11 @@ static __init void davinci_ntosd2_init(void)
 
 MACHINE_START(NEUROS_OSD2, "Neuros OSD2")
 	/* Maintainer: Neuros Technologies <neuros@groups.google.com> */
-	.phys_io	= IO_PHYS,
-	.io_pg_offst	= (__IO_ADDRESS(IO_PHYS) >> 18) & 0xfffc,
-	.boot_params	= (DAVINCI_DDR_BASE + 0x100),
+	.atag_offset	= 0x100,
 	.map_io		 = davinci_ntosd2_map_io,
 	.init_irq	= davinci_irq_init,
 	.timer		= &davinci_timer,
 	.init_machine = davinci_ntosd2_init,
+	.dma_zone_size	= SZ_128M,
+	.restart	= davinci_restart,
 MACHINE_END

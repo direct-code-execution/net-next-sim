@@ -191,11 +191,11 @@ static void iterate_recursive (const struct SimSysIterator *iter, struct ctl_tab
   iterate_table_recursive (iter, table);
   for (cur = root; cur != 0; cur = sysctl_head_next (cur))
     {
-      if (cur->attached_to != table)
+      if (cur->set != table)
 	{
 	  continue;
 	}
-      iterate_table_recursive (iter, cur->attached_by);
+      iterate_table_recursive (iter, cur->root);
     }
 
 }
@@ -204,6 +204,9 @@ static void iterate_recursive (const struct SimSysIterator *iter, struct ctl_tab
 
 void sim_sys_iterate_files (const struct SimSysIterator *iter)
 {
+  /* FIXME !!! */
+//	sim_assert (0);
+	return;
   struct ctl_table_header *root = sysctl_head_next (NULL);
   iterate_recursive (iter, root->ctl_table);
 }

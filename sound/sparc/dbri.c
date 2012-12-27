@@ -69,7 +69,8 @@
 
 #include <linux/of.h>
 #include <linux/of_device.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
+#include <linux/module.h>
 
 MODULE_AUTHOR("Rudolf Koenig, Brent Baccala and Martin Habets");
 MODULE_DESCRIPTION("Sun DBRI");
@@ -79,7 +80,7 @@ MODULE_SUPPORTED_DEVICE("{{Sun,DBRI}}");
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
 /* Enable this card */
-static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
+static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for Sun DBRI soundcard.");
@@ -2592,7 +2593,7 @@ static void snd_dbri_free(struct snd_dbri *dbri)
 				  (void *)dbri->dma, dbri->dma_dvma);
 }
 
-static int __devinit dbri_probe(struct platform_device *op, const struct of_device_id *match)
+static int __devinit dbri_probe(struct platform_device *op)
 {
 	struct snd_dbri *dbri;
 	struct resource *rp;
@@ -2686,7 +2687,7 @@ static const struct of_device_id dbri_match[] = {
 
 MODULE_DEVICE_TABLE(of, dbri_match);
 
-static struct of_platform_driver dbri_sbus_driver = {
+static struct platform_driver dbri_sbus_driver = {
 	.driver = {
 		.name = "dbri",
 		.owner = THIS_MODULE,
@@ -2696,16 +2697,4 @@ static struct of_platform_driver dbri_sbus_driver = {
 	.remove		= __devexit_p(dbri_remove),
 };
 
-/* Probe for the dbri chip and then attach the driver. */
-static int __init dbri_init(void)
-{
-	return of_register_platform_driver(&dbri_sbus_driver);
-}
-
-static void __exit dbri_exit(void)
-{
-	of_unregister_platform_driver(&dbri_sbus_driver);
-}
-
-module_init(dbri_init);
-module_exit(dbri_exit);
+module_platform_driver(dbri_sbus_driver);

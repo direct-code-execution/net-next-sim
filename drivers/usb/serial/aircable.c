@@ -16,7 +16,7 @@
  * When reading the process is almost equal except that the header starts with
  * 0x00 0x20.
  *
- * The device simply need some stuff to understand data comming from the usb
+ * The device simply need some stuff to understand data coming from the usb
  * buffer: The First and Second byte is used for a Header, the Third and Fourth
  * tells the  device the amount of information the package holds.
  * Packages are 60 bytes long Header Stuff.
@@ -30,7 +30,7 @@
  * one.
  *
  * The driver registers himself with the USB-serial core and the USB Core. I had
- * to implement a probe function agains USB-serial, because other way, the
+ * to implement a probe function against USB-serial, because other way, the
  * driver was attaching himself to both interfaces. I have tryed with different
  * configurations of usb_serial_driver with out exit, only the probe function
  * could handle this correctly.
@@ -47,11 +47,12 @@
 #include <asm/unaligned.h>
 #include <linux/tty.h>
 #include <linux/slab.h>
+#include <linux/module.h>
 #include <linux/tty_flip.h>
 #include <linux/usb.h>
 #include <linux/usb/serial.h>
 
-static int debug;
+static bool debug;
 
 /* Vendor and Product ID */
 #define AIRCABLE_VID		0x16CA
@@ -174,7 +175,6 @@ static struct usb_driver aircable_driver = {
 	.probe =	usb_serial_probe,
 	.disconnect =	usb_serial_disconnect,
 	.id_table =	id_table,
-	.no_dynamic_id =	1,
 };
 
 static struct usb_serial_driver aircable_device = {
@@ -182,7 +182,6 @@ static struct usb_serial_driver aircable_device = {
 		.owner =	THIS_MODULE,
 		.name =		"aircable",
 	},
-	.usb_driver = 		&aircable_driver,
 	.id_table = 		id_table,
 	.num_ports =		1,
 	.bulk_out_size =	HCI_COMPLETE_FRAME,
@@ -193,36 +192,16 @@ static struct usb_serial_driver aircable_device = {
 	.unthrottle =		usb_serial_generic_unthrottle,
 };
 
-static int __init aircable_init(void)
-{
-	int retval;
-	retval = usb_serial_register(&aircable_device);
-	if (retval)
-		goto failed_serial_register;
-	retval = usb_register(&aircable_driver);
-	if (retval)
-		goto failed_usb_register;
-	return 0;
+static struct usb_serial_driver * const serial_drivers[] = {
+	&aircable_device, NULL
+};
 
-failed_usb_register:
-	usb_serial_deregister(&aircable_device);
-failed_serial_register:
-	return retval;
-}
-
-static void __exit aircable_exit(void)
-{
-	usb_deregister(&aircable_driver);
-	usb_serial_deregister(&aircable_device);
-}
+module_usb_serial_driver(aircable_driver, serial_drivers);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");
-
-module_init(aircable_init);
-module_exit(aircable_exit);
 
 module_param(debug, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(debug, "Debug enabled or not");

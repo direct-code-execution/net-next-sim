@@ -20,6 +20,7 @@
 
 #ifndef __ASSEMBLY__
 #include <linux/compiler.h>
+#include <linux/cache.h>
 #include <asm/ptrace.h>
 #include <asm/types.h>
 
@@ -118,17 +119,16 @@ extern struct task_struct *last_task_used_spe;
 #define TASK_UNMAPPED_BASE_USER32 (PAGE_ALIGN(TASK_SIZE_USER32 / 4))
 #define TASK_UNMAPPED_BASE_USER64 (PAGE_ALIGN(TASK_SIZE_USER64 / 4))
 
-#define TASK_UNMAPPED_BASE ((test_thread_flag(TIF_32BIT)) ? \
+#define TASK_UNMAPPED_BASE ((is_32bit_task()) ? \
 		TASK_UNMAPPED_BASE_USER32 : TASK_UNMAPPED_BASE_USER64 )
 #endif
 
-#ifdef __KERNEL__
 #ifdef __powerpc64__
 
 #define STACK_TOP_USER64 TASK_SIZE_USER64
 #define STACK_TOP_USER32 TASK_SIZE_USER32
 
-#define STACK_TOP (test_thread_flag(TIF_32BIT) ? \
+#define STACK_TOP (is_32bit_task() ? \
 		   STACK_TOP_USER32 : STACK_TOP_USER64)
 
 #define STACK_TOP_MAX STACK_TOP_USER64
@@ -139,7 +139,6 @@ extern struct task_struct *last_task_used_spe;
 #define STACK_TOP_MAX	STACK_TOP
 
 #endif /* __powerpc64__ */
-#endif /* __KERNEL__ */
 
 typedef struct {
 	unsigned long seg;
@@ -158,6 +157,10 @@ struct thread_struct {
 #endif
 	struct pt_regs	*regs;		/* Pointer to saved register state */
 	mm_segment_t	fs;		/* for get_fs() validation */
+#ifdef CONFIG_BOOKE
+	/* BookE base exception scratch space; align on cacheline */
+	unsigned long	normsave[8] ____cacheline_aligned;
+#endif
 #ifdef CONFIG_PPC32
 	void		*pgdir;		/* root of page-table tree */
 #endif
@@ -240,6 +243,10 @@ struct thread_struct {
 #ifdef CONFIG_KVM_BOOK3S_32_HANDLER
 	void*		kvm_shadow_vcpu; /* KVM internal data */
 #endif /* CONFIG_KVM_BOOK3S_32_HANDLER */
+#ifdef CONFIG_PPC64
+	unsigned long	dscr;
+	int		dscr_inherit;
+#endif
 };
 
 #define ARCH_MIN_TASKALIGN 16
@@ -373,6 +380,39 @@ static inline unsigned long get_clean_sp(struct pt_regs *regs, int is_32)
 {
 	return regs->gpr[1];
 }
+#endif
+
+extern unsigned long cpuidle_disable;
+enum idle_boot_override {IDLE_NO_OVERRIDE = 0, IDLE_POWERSAVE_OFF};
+
+extern int powersave_nap;	/* set if nap mode can be used in idle loop */
+void cpu_idle_wait(void);
+
+#ifdef CONFIG_PSERIES_IDLE
+extern void update_smt_snooze_delay(int snooze);
+extern int pseries_notify_cpuidle_add_cpu(int cpu);
+#else
+static inline void update_smt_snooze_delay(int snooze) {}
+static inline int pseries_notify_cpuidle_add_cpu(int cpu) { return 0; }
+#endif
+
+extern void flush_instruction_cache(void);
+extern void hard_reset_now(void);
+extern void poweroff_now(void);
+extern int fix_alignment(struct pt_regs *);
+extern void cvt_fd(float *from, double *to);
+extern void cvt_df(double *from, float *to);
+extern void _nmask_and_or_msr(unsigned long nmask, unsigned long or_val);
+
+#ifdef CONFIG_PPC64
+/*
+ * We handle most unaligned accesses in hardware. On the other hand 
+ * unaligned DMA can be very expensive on some ppc64 IO chips (it does
+ * powers of 2 writes until it reaches sufficient alignment).
+ *
+ * Based on this we disable the IP header alignment in network drivers.
+ */
+#define NET_IP_ALIGN	0
 #endif
 
 #endif /* __KERNEL__ */

@@ -13,7 +13,7 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-
+#include <linux/gpio.h>
 #include <linux/types.h>
 #include <linux/init.h>
 #include <linux/major.h>
@@ -30,25 +30,25 @@
 #include <linux/spi/spi.h>
 #include <linux/i2c/tps65010.h>
 #include <linux/smc91x.h>
+#include <linux/omapfb.h>
 
 #include <asm/setup.h>
 #include <asm/page.h>
-#include <mach/hardware.h>
-#include <asm/gpio.h>
-
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 
-#include <mach/irqs.h>
 #include <plat/mux.h>
 #include <plat/tc.h>
 #include <plat/usb.h>
 #include <plat/keypad.h>
 #include <plat/dma.h>
-#include <plat/common.h>
 #include <plat/flash.h>
 
+#include <mach/hardware.h>
+#include <mach/irqs.h>
+
+#include "common.h"
 #include "board-h3.h"
 
 /* In OMAP1710 H3 the Ethernet is directly connected to CS1 */
@@ -56,43 +56,42 @@
 
 #define H3_TS_GPIO	48
 
-static int h3_keymap[] = {
+static const unsigned int h3_keymap[] = {
 	KEY(0, 0, KEY_LEFT),
-	KEY(0, 1, KEY_RIGHT),
-	KEY(0, 2, KEY_3),
-	KEY(0, 3, KEY_F10),
-	KEY(0, 4, KEY_F5),
-	KEY(0, 5, KEY_9),
-	KEY(1, 0, KEY_DOWN),
+	KEY(1, 0, KEY_RIGHT),
+	KEY(2, 0, KEY_3),
+	KEY(3, 0, KEY_F10),
+	KEY(4, 0, KEY_F5),
+	KEY(5, 0, KEY_9),
+	KEY(0, 1, KEY_DOWN),
 	KEY(1, 1, KEY_UP),
-	KEY(1, 2, KEY_2),
-	KEY(1, 3, KEY_F9),
-	KEY(1, 4, KEY_F7),
-	KEY(1, 5, KEY_0),
-	KEY(2, 0, KEY_ENTER),
-	KEY(2, 1, KEY_6),
+	KEY(2, 1, KEY_2),
+	KEY(3, 1, KEY_F9),
+	KEY(4, 1, KEY_F7),
+	KEY(5, 1, KEY_0),
+	KEY(0, 2, KEY_ENTER),
+	KEY(1, 2, KEY_6),
 	KEY(2, 2, KEY_1),
-	KEY(2, 3, KEY_F2),
-	KEY(2, 4, KEY_F6),
-	KEY(2, 5, KEY_HOME),
-	KEY(3, 0, KEY_8),
-	KEY(3, 1, KEY_5),
-	KEY(3, 2, KEY_F12),
+	KEY(3, 2, KEY_F2),
+	KEY(4, 2, KEY_F6),
+	KEY(5, 2, KEY_HOME),
+	KEY(0, 3, KEY_8),
+	KEY(1, 3, KEY_5),
+	KEY(2, 3, KEY_F12),
 	KEY(3, 3, KEY_F3),
-	KEY(3, 4, KEY_F8),
-	KEY(3, 5, KEY_END),
-	KEY(4, 0, KEY_7),
-	KEY(4, 1, KEY_4),
-	KEY(4, 2, KEY_F11),
-	KEY(4, 3, KEY_F1),
+	KEY(4, 3, KEY_F8),
+	KEY(5, 3, KEY_END),
+	KEY(0, 4, KEY_7),
+	KEY(1, 4, KEY_4),
+	KEY(2, 4, KEY_F11),
+	KEY(3, 4, KEY_F1),
 	KEY(4, 4, KEY_F4),
-	KEY(4, 5, KEY_ESC),
-	KEY(5, 0, KEY_F13),
-	KEY(5, 1, KEY_F14),
-	KEY(5, 2, KEY_F15),
-	KEY(5, 3, KEY_F16),
-	KEY(5, 4, KEY_SLEEP),
-	0
+	KEY(5, 4, KEY_ESC),
+	KEY(0, 5, KEY_F13),
+	KEY(1, 5, KEY_F14),
+	KEY(2, 5, KEY_F15),
+	KEY(3, 5, KEY_F16),
+	KEY(4, 5, KEY_SLEEP),
 };
 
 
@@ -205,7 +204,7 @@ static int nand_dev_ready(struct mtd_info *mtd)
 
 static const char *part_probes[] = { "cmdlinepart", NULL };
 
-struct platform_nand_data nand_platdata = {
+static struct platform_nand_data nand_platdata = {
 	.chip	= {
 		.nr_chips		= 1,
 		.chip_offset		= 0,
@@ -248,8 +247,6 @@ static struct resource smc91x_resources[] = {
 		.flags	= IORESOURCE_MEM,
 	},
 	[1] = {
-		.start	= OMAP_GPIO_IRQ(40),
-		.end	= OMAP_GPIO_IRQ(40),
 		.flags	= IORESOURCE_IRQ | IORESOURCE_IRQ_LOWEDGE,
 	},
 };
@@ -263,6 +260,15 @@ static struct platform_device smc91x_device = {
 	.num_resources	= ARRAY_SIZE(smc91x_resources),
 	.resource	= smc91x_resources,
 };
+
+static void __init h3_init_smc91x(void)
+{
+	omap_cfg_reg(W15_1710_GPIO40);
+	if (gpio_request(40, "SMC91x irq") < 0) {
+		printk("Error requesting gpio 40 for smc91x irq\n");
+		return;
+	}
+}
 
 #define GPTIMER_BASE		0xFFFB1400
 #define GPTIMER_REGS(x)	(0xFFFB1400 + (x * 0x800))
@@ -296,14 +302,18 @@ static struct resource h3_kp_resources[] = {
 	},
 };
 
+static const struct matrix_keymap_data h3_keymap_data = {
+	.keymap		= h3_keymap,
+	.keymap_size	= ARRAY_SIZE(h3_keymap),
+};
+
 static struct omap_kp_platform_data h3_kp_data = {
 	.rows		= 8,
 	.cols		= 8,
-	.keymap		= h3_keymap,
-	.keymapsize	= ARRAY_SIZE(h3_keymap),
-	.rep		= 1,
+	.keymap_data	= &h3_keymap_data,
+	.rep		= true,
 	.delay		= 9,
-	.dbounce	= 1,
+	.dbounce	= true,
 };
 
 static struct platform_device h3_kp_device = {
@@ -326,7 +336,6 @@ static struct spi_board_info h3_spi_board_info[] __initdata = {
 		.modalias	= "tsc2101",
 		.bus_num	= 2,
 		.chip_select	= 0,
-		.irq		= OMAP_GPIO_IRQ(H3_TS_GPIO),
 		.max_speed_hz	= 16000000,
 		/* .platform_data	= &tsc_platform_data, */
 	},
@@ -359,23 +368,19 @@ static struct omap_lcd_config h3_lcd_config __initdata = {
 	.ctrl_name	= "internal",
 };
 
-static struct omap_board_config_kernel h3_config[] __initdata = {
-	{ OMAP_TAG_LCD,		&h3_lcd_config },
-};
-
 static struct i2c_board_info __initdata h3_i2c_board_info[] = {
        {
 		I2C_BOARD_INFO("tps65013", 0x48),
-               /* .irq         = OMAP_GPIO_IRQ(??), */
        },
 	{
 		I2C_BOARD_INFO("isp1301_omap", 0x2d),
-		.irq		= OMAP_GPIO_IRQ(14),
 	},
 };
 
 static void __init h3_init(void)
 {
+	h3_init_smc91x();
+
 	/* Here we assume the NOR boot config:  NOR on CS3 (possibly swapped
 	 * to address 0 by a dip switch), NAND on CS2B.  The NAND driver will
 	 * notice whether a NAND chip is enabled at probe time.
@@ -410,48 +415,30 @@ static void __init h3_init(void)
 	omap_cfg_reg(E19_1610_KBR4);
 	omap_cfg_reg(N19_1610_KBR5);
 
+	smc91x_resources[1].start = gpio_to_irq(40);
+	smc91x_resources[1].end = gpio_to_irq(40);
 	platform_add_devices(devices, ARRAY_SIZE(devices));
+	h3_spi_board_info[0].irq = gpio_to_irq(H3_TS_GPIO);
 	spi_register_board_info(h3_spi_board_info,
 				ARRAY_SIZE(h3_spi_board_info));
-	omap_board_config = h3_config;
-	omap_board_config_size = ARRAY_SIZE(h3_config);
 	omap_serial_init();
+	h3_i2c_board_info[1].irq = gpio_to_irq(14);
 	omap_register_i2c_bus(1, 100, h3_i2c_board_info,
 			      ARRAY_SIZE(h3_i2c_board_info));
 	omap1_usb_init(&h3_usb_config);
 	h3_mmc_init();
-}
 
-static void __init h3_init_smc91x(void)
-{
-	omap_cfg_reg(W15_1710_GPIO40);
-	if (gpio_request(40, "SMC91x irq") < 0) {
-		printk("Error requesting gpio 40 for smc91x irq\n");
-		return;
-	}
-}
-
-static void __init h3_init_irq(void)
-{
-	omap1_init_common_hw();
-	omap_init_irq();
-	omap_gpio_init();
-	h3_init_smc91x();
-}
-
-static void __init h3_map_io(void)
-{
-	omap1_map_common_io();
+	omapfb_set_lcd_config(&h3_lcd_config);
 }
 
 MACHINE_START(OMAP_H3, "TI OMAP1710 H3 board")
 	/* Maintainer: Texas Instruments, Inc. */
-	.phys_io	= 0xfff00000,
-	.io_pg_offst	= ((0xfef00000) >> 18) & 0xfffc,
-	.boot_params	= 0x10000100,
-	.map_io		= h3_map_io,
+	.atag_offset	= 0x100,
+	.map_io		= omap16xx_map_io,
+	.init_early     = omap1_init_early,
 	.reserve	= omap_reserve,
-	.init_irq	= h3_init_irq,
+	.init_irq	= omap1_init_irq,
 	.init_machine	= h3_init,
-	.timer		= &omap_timer,
+	.timer		= &omap1_timer,
+	.restart	= omap1_restart,
 MACHINE_END

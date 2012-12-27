@@ -149,7 +149,7 @@
  * (with a moved message header to make sure it is size-aligned to
  * 16), TAIL room that was unusable (and thus is marked with a message
  * header that says 'skip this') and at the head of the buffer, an
- * imcomplete message with a couple of payloads.
+ * incomplete message with a couple of payloads.
  *
  * N   ___________________________________________________
  *    |                                                   |
@@ -245,6 +245,7 @@
  */
 #include <linux/netdevice.h>
 #include <linux/slab.h>
+#include <linux/export.h>
 #include "i2400m.h"
 
 
@@ -561,7 +562,7 @@ void i2400m_tx_new(struct i2400m *i2400m)
 {
 	struct device *dev = i2400m_dev(i2400m);
 	struct i2400m_msg_hdr *tx_msg;
-	bool try_head = 0;
+	bool try_head = false;
 	BUG_ON(i2400m->tx_msg != NULL);
 	/*
 	 * In certain situations, TX queue might have enough space to
@@ -579,7 +580,7 @@ try_head:
 	else if (tx_msg == TAIL_FULL) {
 		i2400m_tx_skip_tail(i2400m);
 		d_printf(2, dev, "new TX message: tail full, trying head\n");
-		try_head = 1;
+		try_head = true;
 		goto try_head;
 	}
 	memset(tx_msg, 0, I2400M_TX_PLD_SIZE);
@@ -719,7 +720,7 @@ int i2400m_tx(struct i2400m *i2400m, const void *buf, size_t buf_len,
 	unsigned long flags;
 	size_t padded_len;
 	void *ptr;
-	bool try_head = 0;
+	bool try_head = false;
 	unsigned is_singleton = pl_type == I2400M_PT_RESET_WARM
 		|| pl_type == I2400M_PT_RESET_COLD;
 
@@ -770,7 +771,7 @@ try_new:
 		d_printf(2, dev, "pl append: tail full\n");
 		i2400m_tx_close(i2400m);
 		i2400m_tx_skip_tail(i2400m);
-		try_head = 1;
+		try_head = true;
 		goto try_new;
 	} else if (ptr == NULL) {	/* All full */
 		result = -ENOSPC;
@@ -819,7 +820,7 @@ EXPORT_SYMBOL_GPL(i2400m_tx);
  * the FIF that is ready for transmission.
  *
  * It sets the state in @i2400m to indicate the bus-specific driver is
- * transfering that message (i2400m->tx_msg_size).
+ * transferring that message (i2400m->tx_msg_size).
  *
  * Once the transfer is completed, call i2400m_tx_msg_sent().
  *

@@ -4,11 +4,12 @@ dm-crypt
 Device-Mapper's "crypt" target provides transparent encryption of block devices
 using the kernel crypto API.
 
-Parameters: <cipher> <key> <iv_offset> <device path> <offset>
+Parameters: <cipher> <key> <iv_offset> <device path> \
+	      <offset> [<#opt_params> <opt_params>]
 
 <cipher>
     Encryption cipher and an optional IV generation mode.
-    (In format cipher-chainmode-ivopts:ivmode).
+    (In format cipher[:keycount]-chainmode-ivopts:ivmode).
     Examples:
        des
        aes-cbc-essiv:sha256
@@ -19,6 +20,11 @@ Parameters: <cipher> <key> <iv_offset> <device path> <offset>
 <key>
     Key used for encryption. It is encoded as a hexadecimal number.
     You can only use key sizes that are valid for the selected cipher.
+
+<keycount>
+    Multi-key compatibility mode. You can define <keycount> keys and
+    then sectors are encrypted according to their offsets (sector 0 uses key0;
+    sector 1 uses key1 etc.).  <keycount> must be a power of two.
 
 <iv_offset>
     The IV offset is a sector count that is added to the sector number
@@ -32,11 +38,29 @@ Parameters: <cipher> <key> <iv_offset> <device path> <offset>
 <offset>
     Starting sector within the device where the encrypted data begins.
 
+<#opt_params>
+    Number of optional parameters. If there are no optional parameters,
+    the optional paramaters section can be skipped or #opt_params can be zero.
+    Otherwise #opt_params is the number of following arguments.
+
+    Example of optional parameters section:
+        1 allow_discards
+
+allow_discards
+    Block discard requests (a.k.a. TRIM) are passed through the crypt device.
+    The default is to ignore discard requests.
+
+    WARNING: Assess the specific security risks carefully before enabling this
+    option.  For example, allowing discards on encrypted devices may lead to
+    the leak of information about the ciphertext device (filesystem type,
+    used space etc.) if the discarded blocks can be located easily on the
+    device later.
+
 Example scripts
 ===============
 LUKS (Linux Unified Key Setup) is now the preferred way to set up disk
 encryption with dm-crypt using the 'cryptsetup' utility, see
-http://clemens.endorphin.org/cryptography
+http://code.google.com/p/cryptsetup/
 
 [[
 #!/bin/sh

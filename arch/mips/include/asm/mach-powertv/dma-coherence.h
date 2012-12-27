@@ -13,7 +13,6 @@
 #define __ASM_MACH_POWERTV_DMA_COHERENCE_H
 
 #include <linux/sched.h>
-#include <linux/version.h>
 #include <linux/device.h>
 #include <asm/mach-powertv/asic.h>
 
@@ -48,7 +47,7 @@ static inline unsigned long virt_to_phys_from_pte(void *addr)
 				/* check for a valid page */
 				if (pte_present(pte)) {
 					/* get the physical address the page is
-					 * refering to */
+					 * referring to */
 					phys_addr = (unsigned long)
 						page_to_phys(pte_page(pte));
 					/* add the offset within the page */
@@ -102,7 +101,6 @@ static inline int plat_dma_supported(struct device *dev, u64 mask)
 
 static inline void plat_extra_sync_for_device(struct device *dev)
 {
-	return;
 }
 
 static inline int plat_dma_mapping_error(struct device *dev,

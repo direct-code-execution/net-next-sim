@@ -33,7 +33,6 @@
 #include <asm/pgtable.h>
 #include <asm/mmu.h>
 #include <asm/mmu_context.h>
-#include <asm/system.h>
 #include <linux/uaccess.h>
 #include <asm/exceptions.h>
 
@@ -48,7 +47,7 @@ static int store_updates_sp(struct pt_regs *regs)
 {
 	unsigned int inst;
 
-	if (get_user(inst, (unsigned int *)regs->pc))
+	if (get_user(inst, (unsigned int __user *)regs->pc))
 		return 0;
 	/* check for 1 in the rD field */
 	if (((inst >> 21) & 0x1f) != 1)

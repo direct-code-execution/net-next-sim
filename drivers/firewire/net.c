@@ -7,6 +7,8 @@
  */
 
 #include <linux/bug.h>
+#include <linux/compiler.h>
+#include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/ethtool.h>
 #include <linux/firewire.h>
@@ -27,8 +29,14 @@
 #include <asm/unaligned.h>
 #include <net/arp.h>
 
-#define FWNET_MAX_FRAGMENTS	25	/* arbitrary limit */
-#define FWNET_ISO_PAGE_COUNT	(PAGE_SIZE < 16 * 1024 ? 4 : 2)
+/* rx limits */
+#define FWNET_MAX_FRAGMENTS		30 /* arbitrary, > TX queue depth */
+#define FWNET_ISO_PAGE_COUNT		(PAGE_SIZE < 16*1024 ? 4 : 2)
+
+/* tx limits */
+#define FWNET_MAX_QUEUED_DATAGRAMS	20 /* < 64 = number of tlabels */
+#define FWNET_MIN_QUEUED_DATAGRAMS	10 /* should keep AT DMA busy enough */
+#define FWNET_TX_QUEUE_LEN		FWNET_MAX_QUEUED_DATAGRAMS /* ? */
 
 #define IEEE1394_BROADCAST_CHANNEL	31
 #define IEEE1394_ALL_NODES		(0xffc0 | 0x003f)
@@ -66,7 +74,7 @@ struct rfc2734_arp {
 	__be32 fifo_lo;		/* lo 32bits of sender's FIFO addr	*/
 	__be32 sip;		/* Sender's IP Address			*/
 	__be32 tip;		/* IP Address of requested hw addr	*/
-} __attribute__((packed));
+} __packed;
 
 /* This header format is specific to this driver implementation. */
 #define FWNET_ALEN	8
@@ -74,7 +82,7 @@ struct rfc2734_arp {
 struct fwnet_header {
 	u8 h_dest[FWNET_ALEN];	/* destination address */
 	__be16 h_proto;		/* packet type ID field */
-} __attribute__((packed));
+} __packed;
 
 /* IPv4 and IPv6 encapsulation header */
 struct rfc2734_header {
@@ -170,16 +178,10 @@ struct fwnet_device {
 	struct fw_address_handler handler;
 	u64 local_fifo;
 
-	/* List of packets to be sent */
-	struct list_head packet_list;
-	/*
-	 * List of packets that were broadcasted.  When we get an ISO interrupt
-	 * one of them has been sent
-	 */
-	struct list_head broadcasted_list;
-	/* List of packets that have been sent but not yet acked */
-	struct list_head sent_list;
+	/* Number of tx datagrams that have been queued but not yet acked */
+	int queued_datagrams;
 
+	int peer_count;
 	struct list_head peer_list;
 	struct fw_card *card;
 	struct net_device *netdev;
@@ -190,13 +192,14 @@ struct fwnet_peer {
 	struct fwnet_device *dev;
 	u64 guid;
 	u64 fifo;
+	__be32 ip;
 
 	/* guarded by dev->lock */
 	struct list_head pd_list; /* received partial datagrams */
 	unsigned pdg_size;        /* pd_list size */
 
 	u16 datagram_label;       /* outgoing datagram label */
-	unsigned max_payload;     /* includes RFC2374_FRAG_HDR_SIZE overhead */
+	u16 max_payload;          /* includes RFC2374_FRAG_HDR_SIZE overhead */
 	int node_id;
 	int generation;
 	unsigned speed;
@@ -204,22 +207,18 @@ struct fwnet_peer {
 
 /* This is our task struct. It's used for the packet complete callback.  */
 struct fwnet_packet_task {
-	/*
-	 * ptask can actually be on dev->packet_list, dev->broadcasted_list,
-	 * or dev->sent_list depending on its current state.
-	 */
-	struct list_head pt_link;
 	struct fw_transaction transaction;
 	struct rfc2734_header hdr;
 	struct sk_buff *skb;
 	struct fwnet_device *dev;
 
 	int outstanding_pkts;
-	unsigned max_payload;
 	u64 fifo_addr;
 	u16 dest_node;
+	u16 max_payload;
 	u8 generation;
 	u8 speed;
+	u8 enqueued;
 };
 
 /*
@@ -257,22 +256,22 @@ static int fwnet_header_rebuild(struct sk_buff *skb)
 	if (get_unaligned_be16(&h->h_proto) == ETH_P_IP)
 		return arp_find((unsigned char *)&h->h_dest, skb);
 
-	fw_notify("%s: unable to resolve type %04x addresses\n",
-		  skb->dev->name, be16_to_cpu(h->h_proto));
+	dev_notice(&skb->dev->dev, "unable to resolve type %04x addresses\n",
+		   be16_to_cpu(h->h_proto));
 	return 0;
 }
 
 static int fwnet_header_cache(const struct neighbour *neigh,
-			      struct hh_cache *hh)
+			      struct hh_cache *hh, __be16 type)
 {
 	struct net_device *net;
 	struct fwnet_header *h;
 
-	if (hh->hh_type == cpu_to_be16(ETH_P_802_3))
+	if (type == cpu_to_be16(ETH_P_802_3))
 		return -1;
 	net = neigh->dev;
 	h = (struct fwnet_header *)((u8 *)hh->hh_data + 16 - sizeof(*h));
-	h->h_proto = hh->hh_type;
+	h->h_proto = type;
 	memcpy(h->h_dest, neigh->ha, net->addr_len);
 	hh->hh_len = FWNET_HLEN;
 
@@ -370,7 +369,7 @@ static struct fwnet_fragment_info *fwnet_frag_new(
 
 	new = kmalloc(sizeof(*new), GFP_ATOMIC);
 	if (!new) {
-		fw_error("out of memory\n");
+		dev_err(&pd->skb->dev->dev, "out of memory\n");
 		return NULL;
 	}
 
@@ -415,7 +414,7 @@ fail_w_fi:
 fail_w_new:
 	kfree(new);
 fail:
-	fw_error("out of memory\n");
+	dev_err(&net->dev, "out of memory\n");
 
 	return NULL;
 }
@@ -455,7 +454,7 @@ static bool fwnet_pd_update(struct fwnet_peer *peer,
 	memcpy(pd->pbuf + frag_off, frag_buf, frag_len);
 
 	/*
-	 * Move list entry to beginnig of list so that oldest partial
+	 * Move list entry to beginning of list so that oldest partial
 	 * datagrams percolate to the end of the list
 	 */
 	list_move_tail(&pd->pd_link, &peer->pd_list);
@@ -503,11 +502,7 @@ static struct fwnet_peer *fwnet_peer_find_by_node_id(struct fwnet_device *dev,
 static unsigned fwnet_max_payload(unsigned max_rec, unsigned speed)
 {
 	max_rec = min(max_rec, speed + 8);
-	max_rec = min(max_rec, 0xbU); /* <= 4096 */
-	if (max_rec < 8) {
-		fw_notify("max_rec %x out of range\n", max_rec);
-		max_rec = 8;
-	}
+	max_rec = clamp(max_rec, 8U, 11U); /* 512...4096 */
 
 	return (1 << (max_rec + 1)) - RFC2374_FRAG_HDR_SIZE;
 }
@@ -559,7 +554,7 @@ static int fwnet_finish_incoming_packet(struct net_device *net,
 		sspd = arp1394->sspd;
 		/* Sanity check.  OS X 10.3 PPC reportedly sends 131. */
 		if (sspd > SCODE_3200) {
-			fw_notify("sspd %x out of range\n", sspd);
+			dev_notice(&net->dev, "sspd %x out of range\n", sspd);
 			sspd = SCODE_3200;
 		}
 		max_payload = fwnet_max_payload(arp1394->max_rec, sspd);
@@ -573,12 +568,15 @@ static int fwnet_finish_incoming_packet(struct net_device *net,
 				peer->speed = sspd;
 			if (peer->max_payload > max_payload)
 				peer->max_payload = max_payload;
+
+			peer->ip = arp1394->sip;
 		}
 		spin_unlock_irqrestore(&dev->lock, flags);
 
 		if (!peer) {
-			fw_notify("No peer for ARP packet from %016llx\n",
-				  (unsigned long long)peer_guid);
+			dev_notice(&net->dev,
+				   "no peer for ARP packet from %016llx\n",
+				   (unsigned long long)peer_guid);
 			goto no_peer;
 		}
 
@@ -651,8 +649,6 @@ static int fwnet_finish_incoming_packet(struct net_device *net,
 		net->stats.rx_packets++;
 		net->stats.rx_bytes += skb->len;
 	}
-	if (netif_queue_stopped(net))
-		netif_wake_queue(net);
 
 	return 0;
 
@@ -661,8 +657,6 @@ static int fwnet_finish_incoming_packet(struct net_device *net,
 	net->stats.rx_dropped++;
 
 	dev_kfree_skb_any(skb);
-	if (netif_queue_stopped(net))
-		netif_wake_queue(net);
 
 	return -ENOENT;
 }
@@ -698,7 +692,7 @@ static int fwnet_incoming_packet(struct fwnet_device *dev, __be32 *buf, int len,
 
 		skb = dev_alloc_skb(len + net->hard_header_len + 15);
 		if (unlikely(!skb)) {
-			fw_error("out of memory\n");
+			dev_err(&net->dev, "out of memory\n");
 			net->stats.rx_dropped++;
 
 			return -ENOMEM;
@@ -794,14 +788,9 @@ static int fwnet_incoming_packet(struct fwnet_device *dev, __be32 *buf, int len,
 	 * Datagram is not complete, we're done for the
 	 * moment.
 	 */
-	spin_unlock_irqrestore(&dev->lock, flags);
-
-	return 0;
+	retval = 0;
  fail:
 	spin_unlock_irqrestore(&dev->lock, flags);
-
-	if (netif_queue_stopped(net))
-		netif_wake_queue(net);
 
 	return retval;
 }
@@ -826,7 +815,7 @@ static void fwnet_receive_packet(struct fw_card *card, struct fw_request *r,
 		rcode = RCODE_TYPE_ERROR;
 	else if (fwnet_incoming_packet(dev, payload, length,
 				       source, generation, false) != 0) {
-		fw_error("Incoming packet failure\n");
+		dev_err(&dev->netdev->dev, "incoming packet failure\n");
 		rcode = RCODE_CONFLICT_ERROR;
 	} else
 		rcode = RCODE_COMPLETE;
@@ -890,8 +879,10 @@ static void fwnet_receive_broadcast(struct fw_iso_context *context,
 
 	spin_unlock_irqrestore(&dev->lock, flags);
 
-	if (retval < 0)
-		fw_error("requeue failed\n");
+	if (retval >= 0)
+		fw_iso_context_queue_flush(dev->broadcast_rcv_context);
+	else
+		dev_err(&dev->netdev->dev, "requeue failed\n");
 }
 
 static struct kmem_cache *fwnet_packet_task_cache;
@@ -902,11 +893,19 @@ static void fwnet_free_ptask(struct fwnet_packet_task *ptask)
 	kmem_cache_free(fwnet_packet_task_cache, ptask);
 }
 
+/* Caller must hold dev->lock. */
+static void dec_queued_datagrams(struct fwnet_device *dev)
+{
+	if (--dev->queued_datagrams == FWNET_MIN_QUEUED_DATAGRAMS)
+		netif_wake_queue(dev->netdev);
+}
+
 static int fwnet_send_packet(struct fwnet_packet_task *ptask);
 
 static void fwnet_transmit_packet_done(struct fwnet_packet_task *ptask)
 {
 	struct fwnet_device *dev = ptask->dev;
+	struct sk_buff *skb = ptask->skb;
 	unsigned long flags;
 	bool free;
 
@@ -915,10 +914,14 @@ static void fwnet_transmit_packet_done(struct fwnet_packet_task *ptask)
 	ptask->outstanding_pkts--;
 
 	/* Check whether we or the networking TX soft-IRQ is last user. */
-	free = (ptask->outstanding_pkts == 0 && !list_empty(&ptask->pt_link));
+	free = (ptask->outstanding_pkts == 0 && ptask->enqueued);
+	if (free)
+		dec_queued_datagrams(dev);
 
-	if (ptask->outstanding_pkts == 0)
-		list_del(&ptask->pt_link);
+	if (ptask->outstanding_pkts == 0) {
+		dev->netdev->stats.tx_packets++;
+		dev->netdev->stats.tx_bytes += skb->len;
+	}
 
 	spin_unlock_irqrestore(&dev->lock, flags);
 
@@ -927,7 +930,6 @@ static void fwnet_transmit_packet_done(struct fwnet_packet_task *ptask)
 		u16 fg_off;
 		u16 datagram_label;
 		u16 lf;
-		struct sk_buff *skb;
 
 		/* Update the ptask to point to the next fragment and send it */
 		lf = fwnet_get_hdr_lf(&ptask->hdr);
@@ -935,9 +937,10 @@ static void fwnet_transmit_packet_done(struct fwnet_packet_task *ptask)
 		case RFC2374_HDR_LASTFRAG:
 		case RFC2374_HDR_UNFRAG:
 		default:
-			fw_error("Outstanding packet %x lf %x, header %x,%x\n",
-				 ptask->outstanding_pkts, lf, ptask->hdr.w0,
-				 ptask->hdr.w1);
+			dev_err(&dev->netdev->dev,
+				"outstanding packet %x lf %x, header %x,%x\n",
+				ptask->outstanding_pkts, lf, ptask->hdr.w0,
+				ptask->hdr.w1);
 			BUG();
 
 		case RFC2374_HDR_FIRSTFRAG:
@@ -954,7 +957,7 @@ static void fwnet_transmit_packet_done(struct fwnet_packet_task *ptask)
 			datagram_label = fwnet_get_hdr_dgl(&ptask->hdr);
 			break;
 		}
-		skb = ptask->skb;
+
 		skb_pull(skb, ptask->max_payload);
 		if (ptask->outstanding_pkts > 1) {
 			fwnet_make_sf_hdr(&ptask->hdr, RFC2374_HDR_INTFRAG,
@@ -971,18 +974,53 @@ static void fwnet_transmit_packet_done(struct fwnet_packet_task *ptask)
 		fwnet_free_ptask(ptask);
 }
 
+static void fwnet_transmit_packet_failed(struct fwnet_packet_task *ptask)
+{
+	struct fwnet_device *dev = ptask->dev;
+	unsigned long flags;
+	bool free;
+
+	spin_lock_irqsave(&dev->lock, flags);
+
+	/* One fragment failed; don't try to send remaining fragments. */
+	ptask->outstanding_pkts = 0;
+
+	/* Check whether we or the networking TX soft-IRQ is last user. */
+	free = ptask->enqueued;
+	if (free)
+		dec_queued_datagrams(dev);
+
+	dev->netdev->stats.tx_dropped++;
+	dev->netdev->stats.tx_errors++;
+
+	spin_unlock_irqrestore(&dev->lock, flags);
+
+	if (free)
+		fwnet_free_ptask(ptask);
+}
+
 static void fwnet_write_complete(struct fw_card *card, int rcode,
 				 void *payload, size_t length, void *data)
 {
-	struct fwnet_packet_task *ptask;
+	struct fwnet_packet_task *ptask = data;
+	static unsigned long j;
+	static int last_rcode, errors_skipped;
 
-	ptask = data;
-
-	if (rcode == RCODE_COMPLETE)
+	if (rcode == RCODE_COMPLETE) {
 		fwnet_transmit_packet_done(ptask);
-	else
-		fw_error("fwnet_write_complete: failed: %x\n", rcode);
-		/* ??? error recovery */
+	} else {
+		fwnet_transmit_packet_failed(ptask);
+
+		if (printk_timed_ratelimit(&j,  1000) || rcode != last_rcode) {
+			dev_err(&ptask->dev->netdev->dev,
+				"fwnet_write_complete failed: %x (skipped %d)\n",
+				rcode, errors_skipped);
+
+			errors_skipped = 0;
+			last_rcode = rcode;
+		} else
+			errors_skipped++;
+	}
 }
 
 static int fwnet_send_packet(struct fwnet_packet_task *ptask)
@@ -1040,9 +1078,11 @@ static int fwnet_send_packet(struct fwnet_packet_task *ptask)
 		spin_lock_irqsave(&dev->lock, flags);
 
 		/* If the AT tasklet already ran, we may be last user. */
-		free = (ptask->outstanding_pkts == 0 && list_empty(&ptask->pt_link));
+		free = (ptask->outstanding_pkts == 0 && !ptask->enqueued);
 		if (!free)
-			list_add_tail(&ptask->pt_link, &dev->broadcasted_list);
+			ptask->enqueued = true;
+		else
+			dec_queued_datagrams(dev);
 
 		spin_unlock_irqrestore(&dev->lock, flags);
 
@@ -1057,9 +1097,11 @@ static int fwnet_send_packet(struct fwnet_packet_task *ptask)
 	spin_lock_irqsave(&dev->lock, flags);
 
 	/* If the AT tasklet already ran, we may be last user. */
-	free = (ptask->outstanding_pkts == 0 && list_empty(&ptask->pt_link));
+	free = (ptask->outstanding_pkts == 0 && !ptask->enqueued);
 	if (!free)
-		list_add_tail(&ptask->pt_link, &dev->sent_list);
+		ptask->enqueued = true;
+	else
+		dec_queued_datagrams(dev);
 
 	spin_unlock_irqrestore(&dev->lock, flags);
 
@@ -1082,17 +1124,12 @@ static int fwnet_broadcast_start(struct fwnet_device *dev)
 	unsigned u;
 
 	if (dev->local_fifo == FWNET_NO_FIFO_ADDR) {
-		/* outside OHCI posted write area? */
-		static const struct fw_address_region region = {
-			.start = 0xffff00000000ULL,
-			.end   = CSR_REGISTER_BASE,
-		};
-
 		dev->handler.length = 4096;
 		dev->handler.address_callback = fwnet_receive_packet;
 		dev->handler.callback_data = dev;
 
-		retval = fw_core_add_address_handler(&dev->handler, &region);
+		retval = fw_core_add_address_handler(&dev->handler,
+					&fw_high_memory_region);
 		if (retval < 0)
 			goto failed_initial;
 
@@ -1186,6 +1223,14 @@ static int fwnet_broadcast_start(struct fwnet_device *dev)
 	return retval;
 }
 
+static void set_carrier_state(struct fwnet_device *dev)
+{
+	if (dev->peer_count > 1)
+		netif_carrier_on(dev->netdev);
+	else
+		netif_carrier_off(dev->netdev);
+}
+
 /* ifup */
 static int fwnet_open(struct net_device *net)
 {
@@ -1198,6 +1243,10 @@ static int fwnet_open(struct net_device *net)
 			return ret;
 	}
 	netif_start_queue(net);
+
+	spin_lock_irq(&dev->lock);
+	set_carrier_state(dev);
+	spin_unlock_irq(&dev->lock);
 
 	return 0;
 }
@@ -1225,6 +1274,15 @@ static netdev_tx_t fwnet_tx(struct sk_buff *skb, struct net_device *net)
 	struct fwnet_peer *peer;
 	unsigned long flags;
 
+	spin_lock_irqsave(&dev->lock, flags);
+
+	/* Can this happen? */
+	if (netif_queue_stopped(dev->netdev)) {
+		spin_unlock_irqrestore(&dev->lock, flags);
+
+		return NETDEV_TX_BUSY;
+	}
+
 	ptask = kmem_cache_alloc(fwnet_packet_task_cache, GFP_ATOMIC);
 	if (ptask == NULL)
 		goto fail;
@@ -1242,9 +1300,6 @@ static netdev_tx_t fwnet_tx(struct sk_buff *skb, struct net_device *net)
 
 	proto = hdr_buf.h_proto;
 	dg_size = skb->len;
-
-	/* serialize access to peer, including peer->datagram_label */
-	spin_lock_irqsave(&dev->lock, flags);
 
 	/*
 	 * Set the transmission type for the packet.  ARP packets and IP
@@ -1267,7 +1322,7 @@ static netdev_tx_t fwnet_tx(struct sk_buff *skb, struct net_device *net)
 
 		peer = fwnet_peer_find_by_guid(dev, be64_to_cpu(guid));
 		if (!peer || peer->fifo == FWNET_NO_FIFO_ADDR)
-			goto fail_unlock;
+			goto fail;
 
 		generation         = peer->generation;
 		dest_node          = peer->node_id;
@@ -1321,18 +1376,21 @@ static netdev_tx_t fwnet_tx(struct sk_buff *skb, struct net_device *net)
 		max_payload += RFC2374_FRAG_HDR_SIZE;
 	}
 
+	if (++dev->queued_datagrams == FWNET_MAX_QUEUED_DATAGRAMS)
+		netif_stop_queue(dev->netdev);
+
 	spin_unlock_irqrestore(&dev->lock, flags);
 
 	ptask->max_payload = max_payload;
-	INIT_LIST_HEAD(&ptask->pt_link);
+	ptask->enqueued    = 0;
 
 	fwnet_send_packet(ptask);
 
 	return NETDEV_TX_OK;
 
- fail_unlock:
-	spin_unlock_irqrestore(&dev->lock, flags);
  fail:
+	spin_unlock_irqrestore(&dev->lock, flags);
+
 	if (ptask)
 		kmem_cache_free(fwnet_packet_task_cache, ptask);
 
@@ -1361,15 +1419,8 @@ static int fwnet_change_mtu(struct net_device *net, int new_mtu)
 	return 0;
 }
 
-static void fwnet_get_drvinfo(struct net_device *net,
-			      struct ethtool_drvinfo *info)
-{
-	strcpy(info->driver, KBUILD_MODNAME);
-	strcpy(info->bus_info, "ieee1394");
-}
-
 static const struct ethtool_ops fwnet_ethtool_ops = {
-	.get_drvinfo = fwnet_get_drvinfo,
+	.get_link	= ethtool_op_get_link,
 };
 
 static const struct net_device_ops fwnet_netdev_ops = {
@@ -1389,8 +1440,8 @@ static void fwnet_init_dev(struct net_device *net)
 	net->addr_len		= FWNET_ALEN;
 	net->hard_header_len	= FWNET_HLEN;
 	net->type		= ARPHRD_IEEE1394;
-	net->tx_queue_len	= 10;
-	SET_ETHTOOL_OPS(net, &fwnet_ethtool_ops);
+	net->tx_queue_len	= FWNET_TX_QUEUE_LEN;
+	net->ethtool_ops	= &fwnet_ethtool_ops;
 }
 
 /* caller must hold fwnet_device_mutex */
@@ -1419,6 +1470,7 @@ static int fwnet_add_peer(struct fwnet_device *dev,
 	peer->dev = dev;
 	peer->guid = (u64)device->config_rom[3] << 32 | device->config_rom[4];
 	peer->fifo = FWNET_NO_FIFO_ADDR;
+	peer->ip = 0;
 	INIT_LIST_HEAD(&peer->pd_list);
 	peer->pdg_size = 0;
 	peer->datagram_label = 0;
@@ -1431,6 +1483,8 @@ static int fwnet_add_peer(struct fwnet_device *dev,
 
 	spin_lock_irq(&dev->lock);
 	list_add_tail(&peer->peer_link, &dev->peer_list);
+	dev->peer_count++;
+	set_carrier_state(dev);
 	spin_unlock_irq(&dev->lock);
 
 	return 0;
@@ -1470,14 +1524,9 @@ static int fwnet_probe(struct device *_dev)
 	dev->broadcast_rcv_context = NULL;
 	dev->broadcast_xmt_max_payload = 0;
 	dev->broadcast_xmt_datagramlabel = 0;
-
 	dev->local_fifo = FWNET_NO_FIFO_ADDR;
-
-	INIT_LIST_HEAD(&dev->packet_list);
-	INIT_LIST_HEAD(&dev->broadcasted_list);
-	INIT_LIST_HEAD(&dev->sent_list);
+	dev->queued_datagrams = 0;
 	INIT_LIST_HEAD(&dev->peer_list);
-
 	dev->card = card;
 	dev->netdev = net;
 
@@ -1493,14 +1542,12 @@ static int fwnet_probe(struct device *_dev)
 	put_unaligned_be64(card->guid, net->dev_addr);
 	put_unaligned_be64(~0ULL, net->broadcast);
 	ret = register_netdev(net);
-	if (ret) {
-		fw_error("Cannot register the driver\n");
+	if (ret)
 		goto out;
-	}
 
 	list_add_tail(&dev->dev_link, &fwnet_device_list);
-	fw_notify("%s: IPv4 over FireWire on device %016llx\n",
-		  net->name, (unsigned long long)card->guid);
+	dev_notice(&net->dev, "IPv4 over IEEE 1394 on card %s\n",
+		   dev_name(card->device));
  have_dev:
 	ret = fwnet_add_peer(dev, unit, device);
 	if (ret && allocated_netdev) {
@@ -1516,13 +1563,15 @@ static int fwnet_probe(struct device *_dev)
 	return ret;
 }
 
-static void fwnet_remove_peer(struct fwnet_peer *peer)
+static void fwnet_remove_peer(struct fwnet_peer *peer, struct fwnet_device *dev)
 {
 	struct fwnet_partial_datagram *pd, *pd_next;
 
-	spin_lock_irq(&peer->dev->lock);
+	spin_lock_irq(&dev->lock);
 	list_del(&peer->peer_link);
-	spin_unlock_irq(&peer->dev->lock);
+	dev->peer_count--;
+	set_carrier_state(dev);
+	spin_unlock_irq(&dev->lock);
 
 	list_for_each_entry_safe(pd, pd_next, &peer->pd_list, pd_link)
 		fwnet_pd_delete(pd);
@@ -1535,14 +1584,17 @@ static int fwnet_remove(struct device *_dev)
 	struct fwnet_peer *peer = dev_get_drvdata(_dev);
 	struct fwnet_device *dev = peer->dev;
 	struct net_device *net;
-	struct fwnet_packet_task *ptask, *pt_next;
+	int i;
 
 	mutex_lock(&fwnet_device_mutex);
 
-	fwnet_remove_peer(peer);
+	net = dev->netdev;
+	if (net && peer->ip)
+		arp_invalidate(net, peer->ip);
+
+	fwnet_remove_peer(peer, dev);
 
 	if (list_empty(&dev->peer_list)) {
-		net = dev->netdev;
 		unregister_netdev(net);
 
 		if (dev->local_fifo != FWNET_NO_FIFO_ADDR)
@@ -1553,21 +1605,9 @@ static int fwnet_remove(struct device *_dev)
 					      dev->card);
 			fw_iso_context_destroy(dev->broadcast_rcv_context);
 		}
-		list_for_each_entry_safe(ptask, pt_next,
-					 &dev->packet_list, pt_link) {
-			dev_kfree_skb_any(ptask->skb);
-			kmem_cache_free(fwnet_packet_task_cache, ptask);
-		}
-		list_for_each_entry_safe(ptask, pt_next,
-					 &dev->broadcasted_list, pt_link) {
-			dev_kfree_skb_any(ptask->skb);
-			kmem_cache_free(fwnet_packet_task_cache, ptask);
-		}
-		list_for_each_entry_safe(ptask, pt_next,
-					 &dev->sent_list, pt_link) {
-			dev_kfree_skb_any(ptask->skb);
-			kmem_cache_free(fwnet_packet_task_cache, ptask);
-		}
+		for (i = 0; dev->queued_datagrams && i < 5; i++)
+			ssleep(1);
+		WARN_ON(dev->queued_datagrams);
 		list_del(&dev->dev_link);
 
 		free_netdev(net);
@@ -1609,7 +1649,7 @@ static const struct ieee1394_device_id fwnet_id_table[] = {
 static struct fw_driver fwnet_driver = {
 	.driver = {
 		.owner  = THIS_MODULE,
-		.name   = "net",
+		.name   = KBUILD_MODNAME,
 		.bus    = &fw_bus_type,
 		.probe  = fwnet_probe,
 		.remove = fwnet_remove,

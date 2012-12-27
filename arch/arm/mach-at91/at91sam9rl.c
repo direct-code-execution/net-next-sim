@@ -10,35 +10,22 @@
  */
 
 #include <linux/module.h>
-#include <linux/pm.h>
 
+#include <asm/proc-fns.h>
 #include <asm/irq.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
+#include <asm/system_misc.h>
 #include <mach/cpu.h>
+#include <mach/at91_dbgu.h>
 #include <mach/at91sam9rl.h>
 #include <mach/at91_pmc.h>
 #include <mach/at91_rstc.h>
-#include <mach/at91_shdwc.h>
 
+#include "soc.h"
 #include "generic.h"
 #include "clock.h"
-
-static struct map_desc at91sam9rl_io_desc[] __initdata = {
-	{
-		.virtual	= AT91_VA_BASE_SYS,
-		.pfn		= __phys_to_pfn(AT91_BASE_SYS),
-		.length		= SZ_16K,
-		.type		= MT_DEVICE,
-	},
-};
-
-static struct map_desc at91sam9rl_sram_desc[] __initdata = {
-	{
-		.pfn		= __phys_to_pfn(AT91SAM9RL_SRAM_BASE),
-		.type		= MT_DEVICE,
-	}
-};
+#include "sam9_smc.h"
 
 /* --------------------------------------------------------------------
  *  Clocks
@@ -190,6 +177,28 @@ static struct clk *periph_clocks[] __initdata = {
 	// irq0
 };
 
+static struct clk_lookup periph_clocks_lookups[] = {
+	CLKDEV_CON_DEV_ID("hclk", "atmel_usba_udc", &utmi_clk),
+	CLKDEV_CON_DEV_ID("pclk", "atmel_usba_udc", &udphs_clk),
+	CLKDEV_CON_DEV_ID("t0_clk", "atmel_tcb.0", &tc0_clk),
+	CLKDEV_CON_DEV_ID("t1_clk", "atmel_tcb.0", &tc1_clk),
+	CLKDEV_CON_DEV_ID("t2_clk", "atmel_tcb.0", &tc2_clk),
+	CLKDEV_CON_DEV_ID("pclk", "ssc.0", &ssc0_clk),
+	CLKDEV_CON_DEV_ID("pclk", "ssc.1", &ssc1_clk),
+	CLKDEV_CON_ID("pioA", &pioA_clk),
+	CLKDEV_CON_ID("pioB", &pioB_clk),
+	CLKDEV_CON_ID("pioC", &pioC_clk),
+	CLKDEV_CON_ID("pioD", &pioD_clk),
+};
+
+static struct clk_lookup usart_clocks_lookups[] = {
+	CLKDEV_CON_DEV_ID("usart", "atmel_usart.0", &mck),
+	CLKDEV_CON_DEV_ID("usart", "atmel_usart.1", &usart0_clk),
+	CLKDEV_CON_DEV_ID("usart", "atmel_usart.2", &usart1_clk),
+	CLKDEV_CON_DEV_ID("usart", "atmel_usart.3", &usart2_clk),
+	CLKDEV_CON_DEV_ID("usart", "atmel_usart.4", &usart3_clk),
+};
+
 /*
  * The two programmable clocks.
  * You must configure pin multiplexing to bring these signals out.
@@ -214,59 +223,56 @@ static void __init at91sam9rl_register_clocks(void)
 	for (i = 0; i < ARRAY_SIZE(periph_clocks); i++)
 		clk_register(periph_clocks[i]);
 
+	clkdev_add_table(periph_clocks_lookups,
+			 ARRAY_SIZE(periph_clocks_lookups));
+	clkdev_add_table(usart_clocks_lookups,
+			 ARRAY_SIZE(usart_clocks_lookups));
+
 	clk_register(&pck0);
 	clk_register(&pck1);
+}
+
+static struct clk_lookup console_clock_lookup;
+
+void __init at91sam9rl_set_console_clock(int id)
+{
+	if (id >= ARRAY_SIZE(usart_clocks_lookups))
+		return;
+
+	console_clock_lookup.con_id = "usart";
+	console_clock_lookup.clk = usart_clocks_lookups[id].clk;
+	clkdev_add(&console_clock_lookup);
 }
 
 /* --------------------------------------------------------------------
  *  GPIO
  * -------------------------------------------------------------------- */
 
-static struct at91_gpio_bank at91sam9rl_gpio[] = {
+static struct at91_gpio_bank at91sam9rl_gpio[] __initdata = {
 	{
 		.id		= AT91SAM9RL_ID_PIOA,
-		.offset		= AT91_PIOA,
-		.clock		= &pioA_clk,
+		.regbase	= AT91SAM9RL_BASE_PIOA,
 	}, {
 		.id		= AT91SAM9RL_ID_PIOB,
-		.offset		= AT91_PIOB,
-		.clock		= &pioB_clk,
+		.regbase	= AT91SAM9RL_BASE_PIOB,
 	}, {
 		.id		= AT91SAM9RL_ID_PIOC,
-		.offset		= AT91_PIOC,
-		.clock		= &pioC_clk,
+		.regbase	= AT91SAM9RL_BASE_PIOC,
 	}, {
 		.id		= AT91SAM9RL_ID_PIOD,
-		.offset		= AT91_PIOD,
-		.clock		= &pioD_clk,
+		.regbase	= AT91SAM9RL_BASE_PIOD,
 	}
 };
-
-static void at91sam9rl_reset(void)
-{
-	at91_sys_write(AT91_RSTC_CR, AT91_RSTC_KEY | AT91_RSTC_PROCRST | AT91_RSTC_PERRST);
-}
-
-static void at91sam9rl_poweroff(void)
-{
-	at91_sys_write(AT91_SHDW_CR, AT91_SHDW_KEY | AT91_SHDW_SHDW);
-}
-
 
 /* --------------------------------------------------------------------
  *  AT91SAM9RL processor initialization
  * -------------------------------------------------------------------- */
 
-void __init at91sam9rl_initialize(unsigned long main_clock)
+static void __init at91sam9rl_map_io(void)
 {
-	unsigned long cidr, sram_size;
+	unsigned long sram_size;
 
-	/* Map peripherals */
-	iotable_init(at91sam9rl_io_desc, ARRAY_SIZE(at91sam9rl_io_desc));
-
-	cidr = at91_sys_read(AT91_DBGU_CIDR);
-
-	switch (cidr & AT91_CIDR_SRAMSIZ) {
+	switch (at91_soc_initdata.cidr & AT91_CIDR_SRAMSIZ) {
 		case AT91_CIDR_SRAMSIZ_32K:
 			sram_size = 2 * SZ_16K;
 			break;
@@ -275,21 +281,25 @@ void __init at91sam9rl_initialize(unsigned long main_clock)
 			sram_size = SZ_16K;
 	}
 
-	at91sam9rl_sram_desc->virtual = AT91_IO_VIRT_BASE - sram_size;
-	at91sam9rl_sram_desc->length = sram_size;
-
 	/* Map SRAM */
-	iotable_init(at91sam9rl_sram_desc, ARRAY_SIZE(at91sam9rl_sram_desc));
+	at91_init_sram(0, AT91SAM9RL_SRAM_BASE, sram_size);
+}
 
-	at91_arch_reset = at91sam9rl_reset;
-	pm_power_off = at91sam9rl_poweroff;
+static void __init at91sam9rl_ioremap_registers(void)
+{
+	at91_ioremap_shdwc(AT91SAM9RL_BASE_SHDWC);
+	at91_ioremap_rstc(AT91SAM9RL_BASE_RSTC);
+	at91_ioremap_ramc(0, AT91SAM9RL_BASE_SDRAMC, 512);
+	at91sam926x_ioremap_pit(AT91SAM9RL_BASE_PIT);
+	at91sam9_ioremap_smc(0, AT91SAM9RL_BASE_SMC);
+	at91_ioremap_matrix(AT91SAM9RL_BASE_MATRIX);
+}
+
+static void __init at91sam9rl_initialize(void)
+{
+	arm_pm_idle = at91sam9_idle;
+	arm_pm_restart = at91sam9_alt_restart;
 	at91_extern_irq = (1 << AT91SAM9RL_ID_IRQ0);
-
-	/* Init clock subsystem */
-	at91_clock_init(main_clock);
-
-	/* Register the processor-specific clocks */
-	at91sam9rl_register_clocks();
 
 	/* Register GPIO subsystem */
 	at91_gpio_init(at91sam9rl_gpio, 4);
@@ -337,14 +347,10 @@ static unsigned int at91sam9rl_default_irq_priority[NR_AIC_IRQS] __initdata = {
 	0,	/* Advanced Interrupt Controller */
 };
 
-void __init at91sam9rl_init_interrupts(unsigned int priority[NR_AIC_IRQS])
-{
-	if (!priority)
-		priority = at91sam9rl_default_irq_priority;
-
-	/* Initialize the AIC interrupt controller */
-	at91_aic_init(priority);
-
-	/* Enable GPIO interrupts */
-	at91_gpio_irq_setup();
-}
+struct at91_init_soc __initdata at91sam9rl_soc = {
+	.map_io = at91sam9rl_map_io,
+	.default_irq_priority = at91sam9rl_default_irq_priority,
+	.ioremap_registers = at91sam9rl_ioremap_registers,
+	.register_clocks = at91sam9rl_register_clocks,
+	.init = at91sam9rl_initialize,
+};

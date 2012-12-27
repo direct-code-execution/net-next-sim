@@ -26,10 +26,12 @@
 #include <linux/spi/spi.h>
 #include <linux/spi/tdo24m.h>
 #include <linux/spi/libertas_spi.h>
+#include <linux/spi/pxa2xx_spi.h>
 #include <linux/power_supply.h>
 #include <linux/apm-emulation.h>
 #include <linux/i2c.h>
 #include <linux/i2c/pca953x.h>
+#include <linux/i2c/pxa-i2c.h>
 #include <linux/regulator/userspace-consumer.h>
 
 #include <media/soc_camera.h>
@@ -43,10 +45,8 @@
 #include <mach/pxafb.h>
 #include <mach/ohci.h>
 #include <mach/mmc.h>
-#include <mach/pxa27x_keypad.h>
-#include <plat/i2c.h>
+#include <plat/pxa27x_keypad.h>
 #include <mach/camera.h>
-#include <mach/pxa2xx_spi.h>
 
 #include "generic.h"
 #include "devices.h"
@@ -70,7 +70,7 @@
 /* common  GPIOs */
 #define GPIO11_NAND_CS		(11)
 #define GPIO41_ETHIRQ		(41)
-#define EM_X270_ETHIRQ		IRQ_GPIO(GPIO41_ETHIRQ)
+#define EM_X270_ETHIRQ		PXA_GPIO_TO_IRQ(GPIO41_ETHIRQ)
 #define GPIO115_WLAN_PWEN	(115)
 #define GPIO19_WLAN_STRAP	(19)
 #define GPIO9_USB_VBUS_EN	(9)
@@ -689,7 +689,7 @@ static struct pxafb_mach_info em_x270_lcd = {
 
 static void __init em_x270_init_lcd(void)
 {
-	set_pxa_fb_info(&em_x270_lcd);
+	pxa_set_fb_info(NULL, &em_x270_lcd);
 }
 #else
 static inline void em_x270_init_lcd(void) {}
@@ -805,7 +805,7 @@ static struct spi_board_info em_x270_spi_devices[] __initdata = {
 		.modalias		= "libertas_spi",
 		.max_speed_hz		= 13000000,
 		.bus_num		= 2,
-		.irq			= IRQ_GPIO(116),
+		.irq			= PXA_GPIO_TO_IRQ(116),
 		.chip_select		= 0,
 		.controller_data	= &em_x270_libertas_chip,
 		.platform_data		= &em_x270_libertas_pdata,
@@ -1015,7 +1015,6 @@ static struct soc_camera_link iclink = {
 	.power		= em_x270_sensor_power,
 	.board_info	= &em_x270_i2c_cam_info[0],
 	.i2c_adapter_id	= 0,
-	.module_name	= "mt9m111",
 };
 
 static struct platform_device em_x270_camera = {
@@ -1084,19 +1083,19 @@ static void __init em_x270_userspace_consumers_init(void)
 }
 
 /* DA9030 related initializations */
-#define REGULATOR_CONSUMER(_name, _dev, _supply)			       \
+#define REGULATOR_CONSUMER(_name, _dev_name, _supply)		        \
 	static struct regulator_consumer_supply _name##_consumers[] = {	\
 		{							\
-			.dev = _dev,					\
+			.dev_name = _dev_name,				\
 			.supply = _supply,				\
 		},							\
 	}
 
-REGULATOR_CONSUMER(ldo3, &em_x270_gps_userspace_consumer.dev, "vcc gps");
+REGULATOR_CONSUMER(ldo3, "reg-userspace-consumer.0", "vcc gps");
 REGULATOR_CONSUMER(ldo5, NULL, "vcc cam");
-REGULATOR_CONSUMER(ldo10, &pxa_device_mci.dev, "vcc sdio");
+REGULATOR_CONSUMER(ldo10, "pxa2xx-mci", "vcc sdio");
 REGULATOR_CONSUMER(ldo12, NULL, "vcc usb");
-REGULATOR_CONSUMER(ldo19, &em_x270_gprs_userspace_consumer.dev, "vcc gprs");
+REGULATOR_CONSUMER(ldo19, "reg-userspace-consumer.1", "vcc gprs");
 REGULATOR_CONSUMER(buck2, NULL, "vcc_core");
 
 #define REGULATOR_INIT(_ldo, _min_uV, _max_uV, _ops_mask)		\
@@ -1204,7 +1203,7 @@ static struct da903x_platform_data em_x270_da9030_info = {
 
 static struct i2c_board_info em_x270_i2c_pmic_info = {
 	I2C_BOARD_INFO("da9030", 0x49),
-	.irq = IRQ_GPIO(0),
+	.irq = PXA_GPIO_TO_IRQ(0),
 	.platform_data = &em_x270_da9030_info,
 };
 
@@ -1300,21 +1299,23 @@ static void __init em_x270_init(void)
 }
 
 MACHINE_START(EM_X270, "Compulab EM-X270")
-	.boot_params	= 0xa0000100,
-	.phys_io	= 0x40000000,
-	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
-	.map_io		= pxa_map_io,
+	.atag_offset	= 0x100,
+	.map_io		= pxa27x_map_io,
+	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.timer		= &pxa_timer,
 	.init_machine	= em_x270_init,
+	.restart	= pxa_restart,
 MACHINE_END
 
 MACHINE_START(EXEDA, "Compulab eXeda")
-	.boot_params	= 0xa0000100,
-	.phys_io	= 0x40000000,
-	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
-	.map_io		= pxa_map_io,
+	.atag_offset	= 0x100,
+	.map_io		= pxa27x_map_io,
+	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.timer		= &pxa_timer,
 	.init_machine	= em_x270_init,
+	.restart	= pxa_restart,
 MACHINE_END

@@ -55,7 +55,7 @@
 #include "ivtv-routing.h"
 #include "ivtv-controls.h"
 #include "ivtv-gpio.h"
-
+#include <linux/dma-mapping.h>
 #include <media/tveeprom.h>
 #include <media/saa7115.h>
 #include <media/v4l2-chip-ident.h>
@@ -99,7 +99,7 @@ static int i2c_clock_period[IVTV_MAX_CARDS] = { -1, -1, -1, -1, -1, -1, -1, -1,
 
 static unsigned int cardtype_c = 1;
 static unsigned int tuner_c = 1;
-static unsigned int radio_c = 1;
+static int radio_c = 1;
 static unsigned int i2c_clock_period_c = 1;
 static char pal[] = "---";
 static char secam[] = "--";
@@ -139,7 +139,7 @@ static int tunertype = -1;
 static int newi2c = -1;
 
 module_param_array(tuner, int, &tuner_c, 0644);
-module_param_array(radio, bool, &radio_c, 0644);
+module_param_array(radio, int, &radio_c, 0644);
 module_param_array(cardtype, int, &cardtype_c, 0644);
 module_param_string(pal, pal, sizeof(pal), 0644);
 module_param_string(secam, secam, sizeof(secam), 0644);
@@ -731,9 +731,6 @@ static int __devinit ivtv_init_struct1(struct ivtv *itv)
 
 	init_kthread_work(&itv->irq_work, ivtv_irq_work_handler);
 
-	/* start counting open_id at 1 */
-	itv->open_id = 1;
-
 	/* Initial settings */
 	itv->cxhdl.port = CX2341X_PORT_MEMORY;
 	itv->cxhdl.capabilities = CX2341X_CAP_HAS_SLICED_VBI;
@@ -747,8 +744,6 @@ static int __devinit ivtv_init_struct1(struct ivtv *itv)
 
 	itv->cur_dma_stream = -1;
 	itv->cur_pio_stream = -1;
-	itv->audio_stereo_mode = AUDIO_STEREO;
-	itv->audio_bilingual_mode = AUDIO_MONO_LEFT;
 
 	/* Ctrls */
 	itv->speed = 1000;
@@ -810,7 +805,6 @@ static int ivtv_setup_pci(struct ivtv *itv, struct pci_dev *pdev,
 			  const struct pci_device_id *pci_id)
 {
 	u16 cmd;
-	u8 card_rev;
 	unsigned char pci_latency;
 
 	IVTV_DEBUG_INFO("Enabling pci device\n");
@@ -819,7 +813,7 @@ static int ivtv_setup_pci(struct ivtv *itv, struct pci_dev *pdev,
 		IVTV_ERR("Can't enable device!\n");
 		return -EIO;
 	}
-	if (pci_set_dma_mask(pdev, 0xffffffff)) {
+	if (pci_set_dma_mask(pdev, DMA_BIT_MASK(32))) {
 		IVTV_ERR("No suitable DMA available.\n");
 		return -EIO;
 	}
@@ -857,7 +851,6 @@ static int ivtv_setup_pci(struct ivtv *itv, struct pci_dev *pdev,
 	}
 	IVTV_DEBUG_INFO("Bus Mastering Enabled.\n");
 
-	pci_read_config_byte(pdev, PCI_CLASS_REVISION, &card_rev);
 	pci_read_config_byte(pdev, PCI_LATENCY_TIMER, &pci_latency);
 
 	if (pci_latency < 64 && ivtv_pci_latency) {
@@ -874,7 +867,7 @@ static int ivtv_setup_pci(struct ivtv *itv, struct pci_dev *pdev,
 
 	IVTV_DEBUG_INFO("%d (rev %d) at %02x:%02x.%x, "
 		   "irq: %d, latency: %d, memory: 0x%lx\n",
-		   pdev->device, card_rev, pdev->bus->number,
+		   pdev->device, pdev->revision, pdev->bus->number,
 		   PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn),
 		   pdev->irq, pci_latency, (unsigned long)itv->base_addr);
 
@@ -1029,8 +1022,13 @@ static int __devinit ivtv_probe(struct pci_dev *pdev,
 	itv->enc_mem = ioremap_nocache(itv->base_addr + IVTV_ENCODER_OFFSET,
 				       IVTV_ENCODER_SIZE);
 	if (!itv->enc_mem) {
-		IVTV_ERR("ioremap failed, perhaps increasing __VMALLOC_RESERVE in page.h\n");
-		IVTV_ERR("or disabling CONFIG_HIGHMEM4G into the kernel would help\n");
+		IVTV_ERR("ioremap failed. Can't get a window into CX23415/6 "
+			 "encoder memory\n");
+		IVTV_ERR("Each capture card with a CX23415/6 needs 8 MB of "
+			 "vmalloc address space for this window\n");
+		IVTV_ERR("Check the output of 'grep Vmalloc /proc/meminfo'\n");
+		IVTV_ERR("Use the vmalloc= kernel command line option to set "
+			 "VmallocTotal to a larger value\n");
 		retval = -ENOMEM;
 		goto free_mem;
 	}
@@ -1041,8 +1039,14 @@ static int __devinit ivtv_probe(struct pci_dev *pdev,
 		itv->dec_mem = ioremap_nocache(itv->base_addr + IVTV_DECODER_OFFSET,
 				IVTV_DECODER_SIZE);
 		if (!itv->dec_mem) {
-			IVTV_ERR("ioremap failed, perhaps increasing __VMALLOC_RESERVE in page.h\n");
-			IVTV_ERR("or disabling CONFIG_HIGHMEM4G into the kernel would help\n");
+			IVTV_ERR("ioremap failed. Can't get a window into "
+				 "CX23415 decoder memory\n");
+			IVTV_ERR("Each capture card with a CX23415 needs 8 MB "
+				 "of vmalloc address space for this window\n");
+			IVTV_ERR("Check the output of 'grep Vmalloc "
+				 "/proc/meminfo'\n");
+			IVTV_ERR("Use the vmalloc= kernel command line option "
+				 "to set VmallocTotal to a larger value\n");
 			retval = -ENOMEM;
 			goto free_mem;
 		}
@@ -1057,8 +1061,13 @@ static int __devinit ivtv_probe(struct pci_dev *pdev,
 	itv->reg_mem =
 	    ioremap_nocache(itv->base_addr + IVTV_REG_OFFSET, IVTV_REG_SIZE);
 	if (!itv->reg_mem) {
-		IVTV_ERR("ioremap failed, perhaps increasing __VMALLOC_RESERVE in page.h\n");
-		IVTV_ERR("or disabling CONFIG_HIGHMEM4G into the kernel would help\n");
+		IVTV_ERR("ioremap failed. Can't get a window into CX23415/6 "
+			 "register space\n");
+		IVTV_ERR("Each capture card with a CX23415/6 needs 64 kB of "
+			 "vmalloc address space for this window\n");
+		IVTV_ERR("Check the output of 'grep Vmalloc /proc/meminfo'\n");
+		IVTV_ERR("Use the vmalloc= kernel command line option to set "
+			 "VmallocTotal to a larger value\n");
 		retval = -ENOMEM;
 		goto free_io;
 	}
@@ -1166,6 +1175,8 @@ static int __devinit ivtv_probe(struct pci_dev *pdev,
 		setup.addr = ADDR_UNSET;
 		setup.type = itv->options.tuner;
 		setup.mode_mask = T_ANALOG_TV;  /* matches TV tuners */
+		if (itv->options.radio > 0)
+			setup.mode_mask |= T_RADIO;
 		setup.tuner_callback = (setup.type == TUNER_XC2028) ?
 			ivtv_reset_tuner_gpio : NULL;
 		ivtv_call_all(itv, tuner, s_type_addr, &setup);
@@ -1187,6 +1198,32 @@ static int __devinit ivtv_probe(struct pci_dev *pdev,
 	itv->tuner_std = itv->std;
 
 	if (itv->v4l2_cap & V4L2_CAP_VIDEO_OUTPUT) {
+		struct v4l2_ctrl_handler *hdl = itv->v4l2_dev.ctrl_handler;
+
+		itv->ctrl_pts = v4l2_ctrl_new_std(hdl, &ivtv_hdl_out_ops,
+				V4L2_CID_MPEG_VIDEO_DEC_PTS, 0, 0, 1, 0);
+		itv->ctrl_frame = v4l2_ctrl_new_std(hdl, &ivtv_hdl_out_ops,
+				V4L2_CID_MPEG_VIDEO_DEC_FRAME, 0, 0x7fffffff, 1, 0);
+		/* Note: V4L2_MPEG_AUDIO_DEC_PLAYBACK_AUTO is not supported,
+		   mask that menu item. */
+		itv->ctrl_audio_playback =
+			v4l2_ctrl_new_std_menu(hdl, &ivtv_hdl_out_ops,
+				V4L2_CID_MPEG_AUDIO_DEC_PLAYBACK,
+				V4L2_MPEG_AUDIO_DEC_PLAYBACK_SWAPPED_STEREO,
+				1 << V4L2_MPEG_AUDIO_DEC_PLAYBACK_AUTO,
+				V4L2_MPEG_AUDIO_DEC_PLAYBACK_STEREO);
+		itv->ctrl_audio_multilingual_playback =
+			v4l2_ctrl_new_std_menu(hdl, &ivtv_hdl_out_ops,
+				V4L2_CID_MPEG_AUDIO_DEC_MULTILINGUAL_PLAYBACK,
+				V4L2_MPEG_AUDIO_DEC_PLAYBACK_SWAPPED_STEREO,
+				1 << V4L2_MPEG_AUDIO_DEC_PLAYBACK_AUTO,
+				V4L2_MPEG_AUDIO_DEC_PLAYBACK_LEFT);
+		if (hdl->error) {
+			retval = hdl->error;
+			goto free_i2c;
+		}
+		v4l2_ctrl_cluster(2, &itv->ctrl_pts);
+		v4l2_ctrl_cluster(2, &itv->ctrl_audio_playback);
 		ivtv_call_all(itv, video, s_std_output, itv->std);
 		/* Turn off the output signal. The mpeg decoder is not yet
 		   active so without this you would get a green image until the
@@ -1223,6 +1260,7 @@ free_streams:
 free_irq:
 	free_irq(itv->pdev->irq, (void *)itv);
 free_i2c:
+	v4l2_ctrl_handler_free(&itv->cxhdl.hdl);
 	exit_ivtv_i2c(itv);
 free_io:
 	ivtv_iounmap(itv);
@@ -1314,6 +1352,8 @@ int ivtv_init_on_first_open(struct ivtv *itv)
 	if (!itv->has_cx23415)
 		write_reg_sync(0x03, IVTV_REG_DMACONTROL);
 
+	ivtv_s_std_enc(itv, &itv->tuner_std);
+
 	/* Default interrupts enabled. For the PVR350 this includes the
 	   decoder VSYNC interrupt, which is always on. It is not only used
 	   during decoding but also by the OSD.
@@ -1322,12 +1362,10 @@ int ivtv_init_on_first_open(struct ivtv *itv)
 	if (itv->v4l2_cap & V4L2_CAP_VIDEO_OUTPUT) {
 		ivtv_clear_irq_mask(itv, IVTV_IRQ_MASK_INIT | IVTV_IRQ_DEC_VSYNC);
 		ivtv_set_osd_alpha(itv);
-	}
-	else
+		ivtv_s_std_dec(itv, &itv->tuner_std);
+	} else {
 		ivtv_clear_irq_mask(itv, IVTV_IRQ_MASK_INIT);
-
-	/* For cards with video out, this call needs interrupts enabled */
-	ivtv_s_std(NULL, &fh, &itv->tuner_std);
+	}
 
 	/* Setup initial controls */
 	cx2341x_handler_setup(&itv->cxhdl);
@@ -1362,7 +1400,7 @@ static void ivtv_remove(struct pci_dev *pdev)
 			else
 				type = IVTV_DEC_STREAM_TYPE_MPG;
 			ivtv_stop_v4l2_decode_stream(&itv->streams[type],
-				VIDEO_CMD_STOP_TO_BLACK | VIDEO_CMD_STOP_IMMEDIATELY, 0);
+				V4L2_DEC_CMD_STOP_TO_BLACK | V4L2_DEC_CMD_STOP_IMMEDIATELY, 0);
 		}
 		ivtv_halt_firmware(itv);
 	}
@@ -1377,6 +1415,8 @@ static void ivtv_remove(struct pci_dev *pdev)
 
 	ivtv_streams_cleanup(itv, 1);
 	ivtv_udma_free(itv);
+
+	v4l2_ctrl_handler_free(&itv->cxhdl.hdl);
 
 	exit_ivtv_i2c(itv);
 

@@ -365,10 +365,13 @@ void __init chrp_setup_arch(void)
 
 static void chrp_8259_cascade(unsigned int irq, struct irq_desc *desc)
 {
+	struct irq_chip *chip = irq_desc_get_chip(desc);
 	unsigned int cascade_irq = i8259_irq();
+
 	if (cascade_irq != NO_IRQ)
 		generic_handle_irq(cascade_irq);
-	desc->chip->eoi(irq);
+
+	chip->irq_eoi(&desc->irq_data);
 }
 
 /*
@@ -432,8 +435,8 @@ static void __init chrp_find_openpic(void)
 	if (len > 1)
 		isu_size = iranges[3];
 
-	chrp_mpic = mpic_alloc(np, opaddr, MPIC_PRIMARY,
-			       isu_size, 0, " MPIC    ");
+	chrp_mpic = mpic_alloc(np, opaddr, MPIC_NO_RESET,
+			isu_size, 0, " MPIC    ");
 	if (chrp_mpic == NULL) {
 		printk(KERN_ERR "Failed to allocate MPIC structure\n");
 		goto bail;
@@ -514,7 +517,7 @@ static void __init chrp_find_8259(void)
 		if (cascade_irq == NO_IRQ)
 			printk(KERN_ERR "i8259: failed to map cascade irq\n");
 		else
-			set_irq_chained_handler(cascade_irq,
+			irq_set_chained_handler(cascade_irq,
 						chrp_8259_cascade);
 	}
 }

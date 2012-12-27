@@ -56,7 +56,6 @@
 #include <linux/videodev2.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
-#include <media/v4l2-i2c-drv.h>
 #include <media/msp3400.h>
 #include <media/tvaudio.h>
 #include "msp3400-driver.h"
@@ -70,12 +69,12 @@ MODULE_LICENSE("GPL");
 /* module parameters */
 static int opmode   = OPMODE_AUTO;
 int msp_debug;		 /* msp_debug output */
-int msp_once;		 /* no continous stereo monitoring */
-int msp_amsound;	 /* hard-wire AM sound at 6.5 Hz (france),
+bool msp_once;		 /* no continuous stereo monitoring */
+bool msp_amsound;	 /* hard-wire AM sound at 6.5 Hz (france),
 			    the autoscan seems work well only with FM... */
 int msp_standard = 1;    /* Override auto detect of audio msp_standard,
 			    if needed. */
-int msp_dolby;
+bool msp_dolby;
 
 int msp_stereo_thresh = 0x190; /* a2 threshold for stereo/bilingual
 					(msp34xxg only) 0x00a0-0x03c0 */
@@ -97,7 +96,7 @@ MODULE_PARM_DESC(debug, "Enable debug messages [0-3]");
 MODULE_PARM_DESC(stereo_threshold, "Sets signal threshold to activate stereo");
 MODULE_PARM_DESC(standard, "Specify audio standard: 32 = NTSC, 64 = radio, Default: Autodetect");
 MODULE_PARM_DESC(amsound, "Hardwire AM sound at 6.5Hz (France), FM can autoscan");
-MODULE_PARM_DESC(dolby, "Activates Dolby processsing");
+MODULE_PARM_DESC(dolby, "Activates Dolby processing");
 
 /* ---------------------------------------------------------------------- */
 
@@ -382,7 +381,12 @@ static int msp_s_ctrl(struct v4l2_ctrl *ctrl)
 
 void msp_update_volume(struct msp_state *state)
 {
-	v4l2_ctrl_s_ctrl(state->volume, v4l2_ctrl_g_ctrl(state->volume));
+	/* Force an update of the volume/mute cluster */
+	v4l2_ctrl_lock(state->volume);
+	state->volume->val = state->volume->cur.val;
+	state->muted->val = state->muted->cur.val;
+	msp_s_ctrl(state->volume);
+	v4l2_ctrl_unlock(state->volume);
 }
 
 /* --- v4l2 ioctls --- */
@@ -419,6 +423,20 @@ static int msp_s_frequency(struct v4l2_subdev *sd, struct v4l2_frequency *freq)
 
 	/* new channel -- kick audio carrier scan */
 	msp_wake_thread(client);
+	return 0;
+}
+
+static int msp_querystd(struct v4l2_subdev *sd, v4l2_std_id *id)
+{
+	struct msp_state *state = to_state(sd);
+	struct i2c_client *client = v4l2_get_subdevdata(sd);
+
+	*id &= state->detected_std;
+
+	v4l_dbg(2, msp_debug, client,
+		"detected standard: %s(0x%08Lx)\n",
+		msp_standard_std_name(state->std), state->detected_std);
+
 	return 0;
 }
 
@@ -476,12 +494,14 @@ static int msp_g_tuner(struct v4l2_subdev *sd, struct v4l2_tuner *vt)
 	struct msp_state *state = to_state(sd);
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 
-	if (state->radio)
+	if (vt->type != V4L2_TUNER_ANALOG_TV)
 		return 0;
-	if (state->opmode == OPMODE_AUTOSELECT)
-		msp_detect_stereo(client);
-	vt->audmode    = state->audmode;
-	vt->rxsubchans = state->rxsubchans;
+	if (!state->radio) {
+		if (state->opmode == OPMODE_AUTOSELECT)
+			msp_detect_stereo(client);
+		vt->rxsubchans = state->rxsubchans;
+	}
+	vt->audmode = state->audmode;
 	vt->capability |= V4L2_TUNER_CAP_STEREO |
 		V4L2_TUNER_CAP_LANG1 | V4L2_TUNER_CAP_LANG2;
 	return 0;
@@ -547,7 +567,7 @@ static int msp_log_status(struct v4l2_subdev *sd)
 	switch (state->mode) {
 		case MSP_MODE_AM_DETECT: p = "AM (for carrier detect)"; break;
 		case MSP_MODE_FM_RADIO: p = "FM Radio"; break;
-		case MSP_MODE_FM_TERRA: p = "Terrestial FM-mono/stereo"; break;
+		case MSP_MODE_FM_TERRA: p = "Terrestrial FM-mono/stereo"; break;
 		case MSP_MODE_FM_SAT: p = "Satellite FM-mono"; break;
 		case MSP_MODE_FM_NICAM1: p = "NICAM/FM (B/G, D/K)"; break;
 		case MSP_MODE_FM_NICAM2: p = "NICAM/FM (I)"; break;
@@ -610,6 +630,10 @@ static const struct v4l2_subdev_core_ops msp_core_ops = {
 	.s_std = msp_s_std,
 };
 
+static const struct v4l2_subdev_video_ops msp_video_ops = {
+	.querystd = msp_querystd,
+};
+
 static const struct v4l2_subdev_tuner_ops msp_tuner_ops = {
 	.s_frequency = msp_s_frequency,
 	.g_tuner = msp_g_tuner,
@@ -624,6 +648,7 @@ static const struct v4l2_subdev_audio_ops msp_audio_ops = {
 
 static const struct v4l2_subdev_ops msp_ops = {
 	.core = &msp_core_ops,
+	.video = &msp_video_ops,
 	.tuner = &msp_tuner_ops,
 	.audio = &msp_audio_ops,
 };
@@ -658,6 +683,7 @@ static int msp_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	v4l2_i2c_subdev_init(sd, client, &msp_ops);
 
 	state->v4l2_std = V4L2_STD_NTSC;
+	state->detected_std = V4L2_STD_ALL;
 	state->audmode = V4L2_TUNER_MODE_STEREO;
 	state->input = -1;
 	state->i2s_mode = 0;
@@ -843,14 +869,19 @@ static const struct i2c_device_id msp_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, msp_id);
 
-static struct v4l2_i2c_driver_data v4l2_i2c_data = {
-	.name = "msp3400",
-	.probe = msp_probe,
-	.remove = msp_remove,
-	.suspend = msp_suspend,
-	.resume = msp_resume,
-	.id_table = msp_id,
+static struct i2c_driver msp_driver = {
+	.driver = {
+		.owner	= THIS_MODULE,
+		.name	= "msp3400",
+	},
+	.probe		= msp_probe,
+	.remove		= msp_remove,
+	.suspend	= msp_suspend,
+	.resume		= msp_resume,
+	.id_table	= msp_id,
 };
+
+module_i2c_driver(msp_driver);
 
 /*
  * Overrides for Emacs so that we follow Linus's tabbing style.

@@ -33,7 +33,6 @@
 #include <linux/slab.h>
 #include <asm/uaccess.h>
 #include <linux/seq_file.h>
-#include <linux/smp_lock.h>
 
 #include "jfs_incore.h"
 #include "jfs_filsys.h"
@@ -116,6 +115,13 @@ static struct inode *jfs_alloc_inode(struct super_block *sb)
 	return &jfs_inode->vfs_inode;
 }
 
+static void jfs_i_callback(struct rcu_head *head)
+{
+	struct inode *inode = container_of(head, struct inode, i_rcu);
+	struct jfs_inode_info *ji = JFS_IP(inode);
+	kmem_cache_free(jfs_inode_cachep, ji);
+}
+
 static void jfs_destroy_inode(struct inode *inode)
 {
 	struct jfs_inode_info *ji = JFS_IP(inode);
@@ -129,7 +135,7 @@ static void jfs_destroy_inode(struct inode *inode)
 		ji->active_ag = -1;
 	}
 	spin_unlock_irq(&ji->ag_lock);
-	kmem_cache_free(jfs_inode_cachep, ji);
+	call_rcu(&inode->i_rcu, jfs_i_callback);
 }
 
 static int jfs_statfs(struct dentry *dentry, struct kstatfs *buf)
@@ -176,8 +182,6 @@ static void jfs_put_super(struct super_block *sb)
 
 	dquot_disable(sb, -1, DQUOT_USAGE_ENABLED | DQUOT_LIMITS_ENABLED);
 
-	lock_kernel();
-
 	rc = jfs_umount(sb);
 	if (rc)
 		jfs_err("jfs_umount failed with return code %d", rc);
@@ -188,8 +192,6 @@ static void jfs_put_super(struct super_block *sb)
 	iput(sbi->direct_inode);
 
 	kfree(sbi);
-
-	unlock_kernel();
 }
 
 enum {
@@ -369,19 +371,16 @@ static int jfs_remount(struct super_block *sb, int *flags, char *data)
 	if (!parse_options(data, sb, &newLVSize, &flag)) {
 		return -EINVAL;
 	}
-	lock_kernel();
+
 	if (newLVSize) {
 		if (sb->s_flags & MS_RDONLY) {
 			printk(KERN_ERR
 		  "JFS: resize requires volume to be mounted read-write\n");
-			unlock_kernel();
 			return -EROFS;
 		}
 		rc = jfs_extendfs(sb, newLVSize, 0);
-		if (rc) {
-			unlock_kernel();
+		if (rc)
 			return rc;
-		}
 	}
 
 	if ((sb->s_flags & MS_RDONLY) && !(*flags & MS_RDONLY)) {
@@ -397,36 +396,30 @@ static int jfs_remount(struct super_block *sb, int *flags, char *data)
 		/* mark the fs r/w for quota activity */
 		sb->s_flags &= ~MS_RDONLY;
 
-		unlock_kernel();
 		dquot_resume(sb, -1);
 		return ret;
 	}
 	if ((!(sb->s_flags & MS_RDONLY)) && (*flags & MS_RDONLY)) {
 		rc = dquot_suspend(sb, -1);
 		if (rc < 0) {
-			unlock_kernel();
 			return rc;
 		}
 		rc = jfs_umount_rw(sb);
 		JFS_SBI(sb)->flag = flag;
-		unlock_kernel();
 		return rc;
 	}
 	if ((JFS_SBI(sb)->flag & JFS_NOINTEGRITY) != (flag & JFS_NOINTEGRITY))
 		if (!(sb->s_flags & MS_RDONLY)) {
 			rc = jfs_umount_rw(sb);
-			if (rc) {
-				unlock_kernel();
+			if (rc)
 				return rc;
-			}
+
 			JFS_SBI(sb)->flag = flag;
 			ret = jfs_mount_rw(sb, 1);
-			unlock_kernel();
 			return ret;
 		}
 	JFS_SBI(sb)->flag = flag;
 
-	unlock_kernel();
 	return 0;
 }
 
@@ -446,7 +439,9 @@ static int jfs_fill_super(struct super_block *sb, void *data, int silent)
 	sbi = kzalloc(sizeof (struct jfs_sb_info), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
+
 	sb->s_fs_info = sbi;
+	sb->s_max_links = JFS_LINK_MAX;
 	sbi->sb = sb;
 	sbi->uid = sbi->gid = sbi->umask = -1;
 
@@ -490,7 +485,6 @@ static int jfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out_unload;
 	}
 	inode->i_ino = 0;
-	inode->i_nlink = 1;
 	inode->i_size = sb->s_bdev->bd_inode->i_size;
 	inode->i_mapping->a_ops = &jfs_metapage_aops;
 	insert_inode_hash(inode);
@@ -520,17 +514,17 @@ static int jfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	sb->s_magic = JFS_SUPER_MAGIC;
 
+	if (sbi->mntflag & JFS_OS2)
+		sb->s_d_op = &jfs_ci_dentry_operations;
+
 	inode = jfs_iget(sb, ROOT_I);
 	if (IS_ERR(inode)) {
 		ret = PTR_ERR(inode);
 		goto out_no_rw;
 	}
-	sb->s_root = d_alloc_root(inode);
+	sb->s_root = d_make_root(inode);
 	if (!sb->s_root)
 		goto out_no_root;
-
-	if (sbi->mntflag & JFS_OS2)
-		sb->s_root->d_op = &jfs_ci_dentry_operations;
 
 	/* logical blocks are represented by 40 bits in pxd_t, etc. */
 	sb->s_maxbytes = ((u64) sb->s_blocksize) << 40;
@@ -546,7 +540,6 @@ static int jfs_fill_super(struct super_block *sb, void *data, int silent)
 
 out_no_root:
 	jfs_err("jfs_read_super: get root dentry failed");
-	iput(inode);
 
 out_no_rw:
 	rc = jfs_umount(sb);
@@ -596,11 +589,10 @@ static int jfs_unfreeze(struct super_block *sb)
 	return 0;
 }
 
-static int jfs_get_sb(struct file_system_type *fs_type,
-	int flags, const char *dev_name, void *data, struct vfsmount *mnt)
+static struct dentry *jfs_do_mount(struct file_system_type *fs_type,
+	int flags, const char *dev_name, void *data)
 {
-	return get_sb_bdev(fs_type, flags, dev_name, data, jfs_fill_super,
-			   mnt);
+	return mount_bdev(fs_type, flags, dev_name, data, jfs_fill_super);
 }
 
 static int jfs_sync_fs(struct super_block *sb, int wait)
@@ -616,9 +608,9 @@ static int jfs_sync_fs(struct super_block *sb, int wait)
 	return 0;
 }
 
-static int jfs_show_options(struct seq_file *seq, struct vfsmount *vfs)
+static int jfs_show_options(struct seq_file *seq, struct dentry *root)
 {
-	struct jfs_sb_info *sbi = JFS_SBI(vfs->mnt_sb);
+	struct jfs_sb_info *sbi = JFS_SBI(root->d_sb);
 
 	if (sbi->uid != -1)
 		seq_printf(seq, ",uid=%d", sbi->uid);
@@ -650,7 +642,7 @@ static int jfs_show_options(struct seq_file *seq, struct vfsmount *vfs)
 
 /* Read data from quotafile - avoid pagecache and such because we cannot afford
  * acquiring the locks... As quota files are never truncated and quota code
- * itself serializes the operations (and noone else should touch the files)
+ * itself serializes the operations (and no one else should touch the files)
  * we don't have to be afraid of races */
 static ssize_t jfs_quota_read(struct super_block *sb, int type, char *data,
 			      size_t len, loff_t off)
@@ -783,7 +775,7 @@ static const struct export_operations jfs_export_operations = {
 static struct file_system_type jfs_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "jfs",
-	.get_sb		= jfs_get_sb,
+	.mount		= jfs_do_mount,
 	.kill_sb	= kill_block_super,
 	.fs_flags	= FS_REQUIRES_DEV,
 };
@@ -868,8 +860,14 @@ static int __init init_jfs_fs(void)
 	jfs_proc_init();
 #endif
 
-	return register_filesystem(&jfs_fs_type);
+	rc = register_filesystem(&jfs_fs_type);
+	if (!rc)
+		return 0;
 
+#ifdef PROC_FS_JFS
+	jfs_proc_clean();
+#endif
+	kthread_stop(jfsSyncThread);
 kill_committask:
 	for (i = 0; i < commit_threads; i++)
 		kthread_stop(jfsCommitThread[i]);

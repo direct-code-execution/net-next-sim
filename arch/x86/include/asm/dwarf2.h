@@ -27,6 +27,7 @@
 #define CFI_REMEMBER_STATE	.cfi_remember_state
 #define CFI_RESTORE_STATE	.cfi_restore_state
 #define CFI_UNDEFINED		.cfi_undefined
+#define CFI_ESCAPE		.cfi_escape
 
 #ifdef CONFIG_AS_CFI_SIGNAL_FRAME
 #define CFI_SIGNAL_FRAME	.cfi_signal_frame
@@ -68,6 +69,7 @@
 #define CFI_REMEMBER_STATE	cfi_ignore
 #define CFI_RESTORE_STATE	cfi_ignore
 #define CFI_UNDEFINED		cfi_ignore
+#define CFI_ESCAPE		cfi_ignore
 #define CFI_SIGNAL_FRAME	cfi_ignore
 
 #endif
@@ -89,6 +91,16 @@
 	CFI_ADJUST_CFA_OFFSET -8
 	.endm
 
+	.macro pushfq_cfi
+	pushfq
+	CFI_ADJUST_CFA_OFFSET 8
+	.endm
+
+	.macro popfq_cfi
+	popfq
+	CFI_ADJUST_CFA_OFFSET -8
+	.endm
+
 	.macro movq_cfi reg offset=0
 	movq %\reg, \offset(%rsp)
 	CFI_REL_OFFSET \reg, \offset
@@ -106,6 +118,16 @@
 
 	.macro popl_cfi reg
 	popl \reg
+	CFI_ADJUST_CFA_OFFSET -4
+	.endm
+
+	.macro pushfl_cfi
+	pushfl
+	CFI_ADJUST_CFA_OFFSET 4
+	.endm
+
+	.macro popfl_cfi
+	popfl
 	CFI_ADJUST_CFA_OFFSET -4
 	.endm
 

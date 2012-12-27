@@ -3,7 +3,7 @@
  * Subsystem core
  *
  * Copyright 2005, Broadcom Corporation
- * Copyright 2006, 2007, Michael Buesch <mb@bu3sch.de>
+ * Copyright 2006, 2007, Michael Buesch <m@bues.ch>
  *
  * Licensed under the GNU/GPL. See COPYING for details.
  */
@@ -12,6 +12,7 @@
 
 #include <linux/delay.h>
 #include <linux/io.h>
+#include <linux/module.h>
 #include <linux/ssb/ssb.h>
 #include <linux/ssb/ssb_regs.h>
 #include <linux/ssb/ssb_driver_gige.h>
@@ -20,7 +21,6 @@
 #include <linux/mmc/sdio_func.h>
 #include <linux/slab.h>
 
-#include <pcmcia/cs.h>
 #include <pcmcia/cistpl.h>
 #include <pcmcia/ds.h>
 
@@ -140,19 +140,6 @@ static void ssb_device_put(struct ssb_device *dev)
 		put_device(dev->dev);
 }
 
-static inline struct ssb_driver *ssb_driver_get(struct ssb_driver *drv)
-{
-	if (drv)
-		get_driver(&drv->drv);
-	return drv;
-}
-
-static inline void ssb_driver_put(struct ssb_driver *drv)
-{
-	if (drv)
-		put_driver(&drv->drv);
-}
-
 static int ssb_device_resume(struct device *dev)
 {
 	struct ssb_device *ssb_dev = dev_to_ssb_dev(dev);
@@ -250,11 +237,9 @@ int ssb_devices_freeze(struct ssb_bus *bus, struct ssb_freeze_context *ctx)
 			ssb_device_put(sdev);
 			continue;
 		}
-		sdrv = ssb_driver_get(drv_to_ssb_drv(sdev->dev->driver));
-		if (!sdrv || SSB_WARN_ON(!sdrv->remove)) {
-			ssb_device_put(sdev);
+		sdrv = drv_to_ssb_drv(sdev->dev->driver);
+		if (SSB_WARN_ON(!sdrv->remove))
 			continue;
-		}
 		sdrv->remove(sdev);
 		ctx->device_frozen[i] = 1;
 	}
@@ -293,7 +278,6 @@ int ssb_devices_thaw(struct ssb_freeze_context *ctx)
 				   dev_name(sdev->dev));
 			result = err;
 		}
-		ssb_driver_put(sdrv);
 		ssb_device_put(sdev);
 	}
 
@@ -384,6 +368,35 @@ static int ssb_device_uevent(struct device *dev, struct kobj_uevent_env *env)
 			     ssb_dev->id.revision);
 }
 
+#define ssb_config_attr(attrib, field, format_string) \
+static ssize_t \
+attrib##_show(struct device *dev, struct device_attribute *attr, char *buf) \
+{ \
+	return sprintf(buf, format_string, dev_to_ssb_dev(dev)->field); \
+}
+
+ssb_config_attr(core_num, core_index, "%u\n")
+ssb_config_attr(coreid, id.coreid, "0x%04x\n")
+ssb_config_attr(vendor, id.vendor, "0x%04x\n")
+ssb_config_attr(revision, id.revision, "%u\n")
+ssb_config_attr(irq, irq, "%u\n")
+static ssize_t
+name_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%s\n",
+		       ssb_core_name(dev_to_ssb_dev(dev)->id.coreid));
+}
+
+static struct device_attribute ssb_device_attrs[] = {
+	__ATTR_RO(name),
+	__ATTR_RO(core_num),
+	__ATTR_RO(coreid),
+	__ATTR_RO(vendor),
+	__ATTR_RO(revision),
+	__ATTR_RO(irq),
+	__ATTR_NULL,
+};
+
 static struct bus_type ssb_bustype = {
 	.name		= "ssb",
 	.match		= ssb_bus_match,
@@ -393,6 +406,7 @@ static struct bus_type ssb_bustype = {
 	.suspend	= ssb_device_suspend,
 	.resume		= ssb_device_resume,
 	.uevent		= ssb_device_uevent,
+	.dev_attrs	= ssb_device_attrs,
 };
 
 static void ssb_buses_lock(void)
@@ -528,7 +542,7 @@ error:
 }
 
 /* Needs ssb_buses_lock() */
-static int ssb_attach_queued_buses(void)
+static int __devinit ssb_attach_queued_buses(void)
 {
 	struct ssb_bus *bus, *n;
 	int err = 0;
@@ -739,9 +753,9 @@ out:
 	return err;
 }
 
-static int ssb_bus_register(struct ssb_bus *bus,
-			    ssb_invariants_func_t get_invariants,
-			    unsigned long baseaddr)
+static int __devinit ssb_bus_register(struct ssb_bus *bus,
+				      ssb_invariants_func_t get_invariants,
+				      unsigned long baseaddr)
 {
 	int err;
 
@@ -822,8 +836,8 @@ err_disable_xtal:
 }
 
 #ifdef CONFIG_SSB_PCIHOST
-int ssb_bus_pcibus_register(struct ssb_bus *bus,
-			    struct pci_dev *host_pci)
+int __devinit ssb_bus_pcibus_register(struct ssb_bus *bus,
+				      struct pci_dev *host_pci)
 {
 	int err;
 
@@ -846,9 +860,9 @@ EXPORT_SYMBOL(ssb_bus_pcibus_register);
 #endif /* CONFIG_SSB_PCIHOST */
 
 #ifdef CONFIG_SSB_PCMCIAHOST
-int ssb_bus_pcmciabus_register(struct ssb_bus *bus,
-			       struct pcmcia_device *pcmcia_dev,
-			       unsigned long baseaddr)
+int __devinit ssb_bus_pcmciabus_register(struct ssb_bus *bus,
+					 struct pcmcia_device *pcmcia_dev,
+					 unsigned long baseaddr)
 {
 	int err;
 
@@ -868,8 +882,9 @@ EXPORT_SYMBOL(ssb_bus_pcmciabus_register);
 #endif /* CONFIG_SSB_PCMCIAHOST */
 
 #ifdef CONFIG_SSB_SDIOHOST
-int ssb_bus_sdiobus_register(struct ssb_bus *bus, struct sdio_func *func,
-			     unsigned int quirks)
+int __devinit ssb_bus_sdiobus_register(struct ssb_bus *bus,
+				       struct sdio_func *func,
+				       unsigned int quirks)
 {
 	int err;
 
@@ -889,9 +904,9 @@ int ssb_bus_sdiobus_register(struct ssb_bus *bus, struct sdio_func *func,
 EXPORT_SYMBOL(ssb_bus_sdiobus_register);
 #endif /* CONFIG_SSB_PCMCIAHOST */
 
-int ssb_bus_ssbbus_register(struct ssb_bus *bus,
-			    unsigned long baseaddr,
-			    ssb_invariants_func_t get_invariants)
+int __devinit ssb_bus_ssbbus_register(struct ssb_bus *bus,
+				      unsigned long baseaddr,
+				      ssb_invariants_func_t get_invariants)
 {
 	int err;
 
@@ -972,8 +987,8 @@ u32 ssb_calc_clock_rate(u32 plltype, u32 n, u32 m)
 	switch (plltype) {
 	case SSB_PLLTYPE_6: /* 100/200 or 120/240 only */
 		if (m & SSB_CHIPCO_CLK_T6_MMASK)
-			return SSB_CHIPCO_CLK_T6_M0;
-		return SSB_CHIPCO_CLK_T6_M1;
+			return SSB_CHIPCO_CLK_T6_M1;
+		return SSB_CHIPCO_CLK_T6_M0;
 	case SSB_PLLTYPE_1: /* 48Mhz base, 3 dividers */
 	case SSB_PLLTYPE_3: /* 25Mhz, 2 dividers */
 	case SSB_PLLTYPE_4: /* 48Mhz, 4 dividers */
@@ -1063,6 +1078,9 @@ u32 ssb_clockspeed(struct ssb_bus *bus)
 	u32 plltype;
 	u32 clkctl_n, clkctl_m;
 
+	if (bus->chipco.capabilities & SSB_CHIPCO_CAP_PMU)
+		return ssb_pmu_get_controlclock(&bus->chipco);
+
 	if (ssb_extif_available(&bus->extif))
 		ssb_extif_get_clockcontrol(&bus->extif, &plltype,
 					   &clkctl_n, &clkctl_m);
@@ -1088,23 +1106,22 @@ static u32 ssb_tmslow_reject_bitmask(struct ssb_device *dev)
 {
 	u32 rev = ssb_read32(dev, SSB_IDLOW) & SSB_IDLOW_SSBREV;
 
-	/* The REJECT bit changed position in TMSLOW between
-	 * Backplane revisions. */
+	/* The REJECT bit seems to be different for Backplane rev 2.3 */
 	switch (rev) {
 	case SSB_IDLOW_SSBREV_22:
-		return SSB_TMSLOW_REJECT_22;
+	case SSB_IDLOW_SSBREV_24:
+	case SSB_IDLOW_SSBREV_26:
+		return SSB_TMSLOW_REJECT;
 	case SSB_IDLOW_SSBREV_23:
 		return SSB_TMSLOW_REJECT_23;
-	case SSB_IDLOW_SSBREV_24:     /* TODO - find the proper REJECT bits */
-	case SSB_IDLOW_SSBREV_25:     /* same here */
-	case SSB_IDLOW_SSBREV_26:     /* same here */
+	case SSB_IDLOW_SSBREV_25:     /* TODO - find the proper REJECT bit */
 	case SSB_IDLOW_SSBREV_27:     /* same here */
-		return SSB_TMSLOW_REJECT_23;	/* this is a guess */
+		return SSB_TMSLOW_REJECT;	/* this is a guess */
 	default:
 		printk(KERN_INFO "ssb: Backplane Revision 0x%.8X\n", rev);
 		WARN_ON(1);
 	}
-	return (SSB_TMSLOW_REJECT_22 | SSB_TMSLOW_REJECT_23);
+	return (SSB_TMSLOW_REJECT | SSB_TMSLOW_REJECT_23);
 }
 
 int ssb_device_is_enabled(struct ssb_device *dev)
@@ -1163,10 +1180,10 @@ void ssb_device_enable(struct ssb_device *dev, u32 core_specific_flags)
 }
 EXPORT_SYMBOL(ssb_device_enable);
 
-/* Wait for a bit in a register to get set or unset.
+/* Wait for bitmask in a register to get set or cleared.
  * timeout is in units of ten-microseconds */
-static int ssb_wait_bit(struct ssb_device *dev, u16 reg, u32 bitmask,
-			int timeout, int set)
+static int ssb_wait_bits(struct ssb_device *dev, u16 reg, u32 bitmask,
+			 int timeout, int set)
 {
 	int i;
 	u32 val;
@@ -1174,7 +1191,7 @@ static int ssb_wait_bit(struct ssb_device *dev, u16 reg, u32 bitmask,
 	for (i = 0; i < timeout; i++) {
 		val = ssb_read32(dev, reg);
 		if (set) {
-			if (val & bitmask)
+			if ((val & bitmask) == bitmask)
 				return 0;
 		} else {
 			if (!(val & bitmask))
@@ -1191,20 +1208,38 @@ static int ssb_wait_bit(struct ssb_device *dev, u16 reg, u32 bitmask,
 
 void ssb_device_disable(struct ssb_device *dev, u32 core_specific_flags)
 {
-	u32 reject;
+	u32 reject, val;
 
 	if (ssb_read32(dev, SSB_TMSLOW) & SSB_TMSLOW_RESET)
 		return;
 
 	reject = ssb_tmslow_reject_bitmask(dev);
-	ssb_write32(dev, SSB_TMSLOW, reject | SSB_TMSLOW_CLOCK);
-	ssb_wait_bit(dev, SSB_TMSLOW, reject, 1000, 1);
-	ssb_wait_bit(dev, SSB_TMSHIGH, SSB_TMSHIGH_BUSY, 1000, 0);
-	ssb_write32(dev, SSB_TMSLOW,
-		    SSB_TMSLOW_FGC | SSB_TMSLOW_CLOCK |
-		    reject | SSB_TMSLOW_RESET |
-		    core_specific_flags);
-	ssb_flush_tmslow(dev);
+
+	if (ssb_read32(dev, SSB_TMSLOW) & SSB_TMSLOW_CLOCK) {
+		ssb_write32(dev, SSB_TMSLOW, reject | SSB_TMSLOW_CLOCK);
+		ssb_wait_bits(dev, SSB_TMSLOW, reject, 1000, 1);
+		ssb_wait_bits(dev, SSB_TMSHIGH, SSB_TMSHIGH_BUSY, 1000, 0);
+
+		if (ssb_read32(dev, SSB_IDLOW) & SSB_IDLOW_INITIATOR) {
+			val = ssb_read32(dev, SSB_IMSTATE);
+			val |= SSB_IMSTATE_REJECT;
+			ssb_write32(dev, SSB_IMSTATE, val);
+			ssb_wait_bits(dev, SSB_IMSTATE, SSB_IMSTATE_BUSY, 1000,
+				      0);
+		}
+
+		ssb_write32(dev, SSB_TMSLOW,
+			SSB_TMSLOW_FGC | SSB_TMSLOW_CLOCK |
+			reject | SSB_TMSLOW_RESET |
+			core_specific_flags);
+		ssb_flush_tmslow(dev);
+
+		if (ssb_read32(dev, SSB_IDLOW) & SSB_IDLOW_INITIATOR) {
+			val = ssb_read32(dev, SSB_IMSTATE);
+			val &= ~SSB_IMSTATE_REJECT;
+			ssb_write32(dev, SSB_IMSTATE, val);
+		}
+	}
 
 	ssb_write32(dev, SSB_TMSLOW,
 		    reject | SSB_TMSLOW_RESET |
@@ -1213,13 +1248,34 @@ void ssb_device_disable(struct ssb_device *dev, u32 core_specific_flags)
 }
 EXPORT_SYMBOL(ssb_device_disable);
 
+/* Some chipsets need routing known for PCIe and 64-bit DMA */
+static bool ssb_dma_translation_special_bit(struct ssb_device *dev)
+{
+	u16 chip_id = dev->bus->chip_id;
+
+	if (dev->id.coreid == SSB_DEV_80211) {
+		return (chip_id == 0x4322 || chip_id == 43221 ||
+			chip_id == 43231 || chip_id == 43222);
+	}
+
+	return 0;
+}
+
 u32 ssb_dma_translation(struct ssb_device *dev)
 {
 	switch (dev->bus->bustype) {
 	case SSB_BUSTYPE_SSB:
 		return 0;
 	case SSB_BUSTYPE_PCI:
-		return SSB_PCI_DMA;
+		if (pci_is_pcie(dev->bus->host_pci) &&
+		    ssb_read32(dev, SSB_TMSHIGH) & SSB_TMSHIGH_DMA64) {
+			return SSB_PCIE_DMA_H32;
+		} else {
+			if (ssb_dma_translation_special_bit(dev))
+				return SSB_PCIE_DMA_H32;
+			else
+				return SSB_PCI_DMA;
+		}
 	default:
 		__ssb_dma_not_implemented(dev);
 	}
@@ -1262,26 +1318,57 @@ EXPORT_SYMBOL(ssb_bus_may_powerdown);
 
 int ssb_bus_powerup(struct ssb_bus *bus, bool dynamic_pctl)
 {
-	struct ssb_chipcommon *cc;
 	int err;
 	enum ssb_clkmode mode;
 
 	err = ssb_pci_xtal(bus, SSB_GPIO_XTAL | SSB_GPIO_PLL, 1);
 	if (err)
 		goto error;
-	cc = &bus->chipco;
-	mode = dynamic_pctl ? SSB_CLKMODE_DYNAMIC : SSB_CLKMODE_FAST;
-	ssb_chipco_set_clockmode(cc, mode);
 
 #ifdef CONFIG_SSB_DEBUG
 	bus->powered_up = 1;
 #endif
+
+	mode = dynamic_pctl ? SSB_CLKMODE_DYNAMIC : SSB_CLKMODE_FAST;
+	ssb_chipco_set_clockmode(&bus->chipco, mode);
+
 	return 0;
 error:
 	ssb_printk(KERN_ERR PFX "Bus powerup failed\n");
 	return err;
 }
 EXPORT_SYMBOL(ssb_bus_powerup);
+
+static void ssb_broadcast_value(struct ssb_device *dev,
+				u32 address, u32 data)
+{
+#ifdef CONFIG_SSB_DRIVER_PCICORE
+	/* This is used for both, PCI and ChipCommon core, so be careful. */
+	BUILD_BUG_ON(SSB_PCICORE_BCAST_ADDR != SSB_CHIPCO_BCAST_ADDR);
+	BUILD_BUG_ON(SSB_PCICORE_BCAST_DATA != SSB_CHIPCO_BCAST_DATA);
+#endif
+
+	ssb_write32(dev, SSB_CHIPCO_BCAST_ADDR, address);
+	ssb_read32(dev, SSB_CHIPCO_BCAST_ADDR); /* flush */
+	ssb_write32(dev, SSB_CHIPCO_BCAST_DATA, data);
+	ssb_read32(dev, SSB_CHIPCO_BCAST_DATA); /* flush */
+}
+
+void ssb_commit_settings(struct ssb_bus *bus)
+{
+	struct ssb_device *dev;
+
+#ifdef CONFIG_SSB_DRIVER_PCICORE
+	dev = bus->chipco.dev ? bus->chipco.dev : bus->pcicore.dev;
+#else
+	dev = bus->chipco.dev;
+#endif
+	if (WARN_ON(!dev))
+		return;
+	/* This forces an update of the cached registers. */
+	ssb_broadcast_value(dev, 0xFD8, 0);
+}
+EXPORT_SYMBOL(ssb_commit_settings);
 
 u32 ssb_admatch_base(u32 adm)
 {

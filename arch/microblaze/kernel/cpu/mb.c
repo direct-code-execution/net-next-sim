@@ -51,11 +51,12 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 	count = seq_printf(m,
 			"CPU-Family:	MicroBlaze\n"
 			"FPGA-Arch:	%s\n"
-			"CPU-Ver:	%s\n"
+			"CPU-Ver:	%s, %s endian\n"
 			"CPU-MHz:	%d.%02d\n"
 			"BogoMips:	%lu.%02lu\n",
 			fpga_family,
 			cpu_ver,
+			cpuinfo.endian ? "little" : "big",
 			cpuinfo.cpu_clock_freq /
 			1000000,
 			cpuinfo.cpu_clock_freq %
@@ -96,6 +97,10 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 		(cpuinfo.use_exc & PVR2_FPU_EXC_MASK) ? "fpu " : "",
 		(cpuinfo.use_exc & PVR2_USE_FSL_EXC) ? "fsl " : "");
 
+	count += seq_printf(m,
+			"Stream-insns:\t%sprivileged\n",
+			cpuinfo.mmu_privins ? "un" : "");
+
 	if (cpuinfo.use_icache)
 		count += seq_printf(m,
 				"Icache:\t\t%ukB\tline length:\t%dB\n",
@@ -109,10 +114,11 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 				"Dcache:\t\t%ukB\tline length:\t%dB\n",
 				cpuinfo.dcache_size >> 10,
 				cpuinfo.dcache_line_length);
+		seq_printf(m, "Dcache-Policy:\t");
 		if (cpuinfo.dcache_wb)
-			count += seq_printf(m, "\t\twrite-back\n");
+			count += seq_printf(m, "write-back\n");
 		else
-			count += seq_printf(m, "\t\twrite-through\n");
+			count += seq_printf(m, "write-through\n");
 	} else
 		count += seq_printf(m, "Dcache:\t\tno\n");
 

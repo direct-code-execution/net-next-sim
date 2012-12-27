@@ -63,6 +63,10 @@ static bool atkbd_extra;
 module_param_named(extra, atkbd_extra, bool, 0);
 MODULE_PARM_DESC(extra, "Enable extra LEDs and keys on IBM RapidAcces, EzKey and similar keyboards");
 
+static bool atkbd_terminal;
+module_param_named(terminal, atkbd_terminal, bool, 0);
+MODULE_PARM_DESC(terminal, "Enable break codes on an IBM Terminal keyboard connected via AT/PS2");
+
 /*
  * Scancode to keycode tables. These are just the default setting, and
  * are loadable via a userland utility.
@@ -136,7 +140,8 @@ static const unsigned short atkbd_unxlate_table[128] = {
 #define ATKBD_CMD_ENABLE	0x00f4
 #define ATKBD_CMD_RESET_DIS	0x00f5	/* Reset to defaults and disable */
 #define ATKBD_CMD_RESET_DEF	0x00f6	/* Reset to defaults */
-#define ATKBD_CMD_SETALL_MBR	0x00fa
+#define ATKBD_CMD_SETALL_MB	0x00f8	/* Set all keys to give break codes */
+#define ATKBD_CMD_SETALL_MBR	0x00fa  /* ... and repeat */
 #define ATKBD_CMD_RESET_BAT	0x02ff
 #define ATKBD_CMD_RESEND	0x00fe
 #define ATKBD_CMD_EX_ENABLE	0x10ea
@@ -764,6 +769,11 @@ static int atkbd_select_set(struct atkbd *atkbd, int target_set, int allow_extra
 		}
 	}
 
+	if (atkbd_terminal) {
+		ps2_command(ps2dev, param, ATKBD_CMD_SETALL_MB);
+		return 3;
+	}
+
 	if (target_set != 3)
 		return 2;
 
@@ -1295,7 +1305,7 @@ static ssize_t atkbd_show_extra(struct atkbd *atkbd, char *buf)
 static ssize_t atkbd_set_extra(struct atkbd *atkbd, const char *buf, size_t count)
 {
 	struct input_dev *old_dev, *new_dev;
-	unsigned long value;
+	unsigned int value;
 	int err;
 	bool old_extra;
 	unsigned char old_set;
@@ -1303,7 +1313,11 @@ static ssize_t atkbd_set_extra(struct atkbd *atkbd, const char *buf, size_t coun
 	if (!atkbd->write)
 		return -EIO;
 
-	if (strict_strtoul(buf, 10, &value) || value > 1)
+	err = kstrtouint(buf, 10, &value);
+	if (err)
+		return err;
+
+	if (value > 1)
 		return -EINVAL;
 
 	if (atkbd->extra != value) {
@@ -1379,11 +1393,15 @@ static ssize_t atkbd_show_scroll(struct atkbd *atkbd, char *buf)
 static ssize_t atkbd_set_scroll(struct atkbd *atkbd, const char *buf, size_t count)
 {
 	struct input_dev *old_dev, *new_dev;
-	unsigned long value;
+	unsigned int value;
 	int err;
 	bool old_scroll;
 
-	if (strict_strtoul(buf, 10, &value) || value > 1)
+	err = kstrtouint(buf, 10, &value);
+	if (err)
+		return err;
+
+	if (value > 1)
 		return -EINVAL;
 
 	if (atkbd->scroll != value) {
@@ -1423,7 +1441,7 @@ static ssize_t atkbd_show_set(struct atkbd *atkbd, char *buf)
 static ssize_t atkbd_set_set(struct atkbd *atkbd, const char *buf, size_t count)
 {
 	struct input_dev *old_dev, *new_dev;
-	unsigned long value;
+	unsigned int value;
 	int err;
 	unsigned char old_set;
 	bool old_extra;
@@ -1431,7 +1449,11 @@ static ssize_t atkbd_set_set(struct atkbd *atkbd, const char *buf, size_t count)
 	if (!atkbd->write)
 		return -EIO;
 
-	if (strict_strtoul(buf, 10, &value) || (value != 2 && value != 3))
+	err = kstrtouint(buf, 10, &value);
+	if (err)
+		return err;
+
+	if (value != 2 && value != 3)
 		return -EINVAL;
 
 	if (atkbd->set != value) {
@@ -1474,14 +1496,18 @@ static ssize_t atkbd_show_softrepeat(struct atkbd *atkbd, char *buf)
 static ssize_t atkbd_set_softrepeat(struct atkbd *atkbd, const char *buf, size_t count)
 {
 	struct input_dev *old_dev, *new_dev;
-	unsigned long value;
+	unsigned int value;
 	int err;
 	bool old_softrepeat, old_softraw;
 
 	if (!atkbd->write)
 		return -EIO;
 
-	if (strict_strtoul(buf, 10, &value) || value > 1)
+	err = kstrtouint(buf, 10, &value);
+	if (err)
+		return err;
+
+	if (value > 1)
 		return -EINVAL;
 
 	if (atkbd->softrepeat != value) {
@@ -1524,11 +1550,15 @@ static ssize_t atkbd_show_softraw(struct atkbd *atkbd, char *buf)
 static ssize_t atkbd_set_softraw(struct atkbd *atkbd, const char *buf, size_t count)
 {
 	struct input_dev *old_dev, *new_dev;
-	unsigned long value;
+	unsigned int value;
 	int err;
 	bool old_softraw;
 
-	if (strict_strtoul(buf, 10, &value) || value > 1)
+	err = kstrtouint(buf, 10, &value);
+	if (err)
+		return err;
+
+	if (value > 1)
 		return -EINVAL;
 
 	if (atkbd->softraw != value) {
@@ -1568,14 +1598,14 @@ static int __init atkbd_setup_forced_release(const struct dmi_system_id *id)
 	atkbd_platform_fixup = atkbd_apply_forced_release_keylist;
 	atkbd_platform_fixup_data = id->driver_data;
 
-	return 0;
+	return 1;
 }
 
 static int __init atkbd_setup_scancode_fixup(const struct dmi_system_id *id)
 {
 	atkbd_platform_scancode_fixup = id->driver_data;
 
-	return 0;
+	return 1;
 }
 
 static const struct dmi_system_id atkbd_dmi_quirk_table[] __initconst = {

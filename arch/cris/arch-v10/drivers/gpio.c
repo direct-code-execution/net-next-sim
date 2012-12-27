@@ -24,7 +24,6 @@
 #include <asm/etraxgpio.h>
 #include <arch/svinto.h>
 #include <asm/io.h>
-#include <asm/system.h>
 #include <asm/irq.h>
 #include <arch/io_interface_mux.h>
 
@@ -745,6 +744,7 @@ static const struct file_operations gpio_fops = {
 	.write          = gpio_write,
 	.open           = gpio_open,
 	.release        = gpio_release,
+	.llseek		= noop_llseek,
 };
 
 static void ioif_watcher(const unsigned int gpio_in_available,

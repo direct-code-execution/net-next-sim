@@ -1,7 +1,7 @@
 ARCH_DIR := arch/sim
 SRCDIR=$(dir $(firstword $(MAKEFILE_LIST)))
-#KERNEL_VERSION=6be35c700f742e911ecedd07fcc43d4439922334
-#KERNEL_VERSION=v3.4
+KERNEL_VERSION=6be35c700f742e911ecedd07fcc43d4439922334
+KERNEL_VERSION=v3.4
 
 SIM_SRC=\
 fs.c random.c sim.c softirq.c time.c \
@@ -9,12 +9,13 @@ glue.c sim-device.c sysctl.c timer.c \
 hrtimer.c sched.c sim-socket.c sysfs.c workqueue.c \
 print.c security.c slab.c tasklet.c \
 proc.c seq.c socket.c tasklet-hrtimer.c \
-cred.c pid.c modules.c 
+cred.c pid.c modules.c filemap.c splice.c vmscan.c \
+dcache.c super.c inode.c
 
 COV?=no
-cov_yes=-fprofile-arcs -ftest-coverage
+cov_yes=-coverage
 cov_no=
-covl_yes=-fprofile-arcs
+covl_yes=-Wl,-whole-archive -lgcov -Wl,-no-whole-archive
 covl_no=
 # no idea why OPT=no doesn't work...
 OPT?=yes
@@ -24,7 +25,7 @@ PIC?=yes
 pic_yes=-fpic -DPIC
 pic_no=-mcmodel=large
 PIC_CFLAGS=$(pic_$(PIC))
-KERNEL_LIB=libsim-linux$(KERNELVERSION).so
+KERNEL_LIB=liblinux-$(KERNEL_VERSION).so
 SIM_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(SIM_SRC))))
 CFLAGS+= \
  $(opt_$(OPT)) -g3 -D__KERNEL__ -Wall -Wstrict-prototypes -Wno-trigraphs \
@@ -32,7 +33,7 @@ CFLAGS+= \
  -fno-strict-aliasing -fno-common -fno-delete-null-pointer-checks \
  -fno-stack-protector \
  -DKBUILD_MODNAME=\"nsc\" -DMODVERSIONS -DEXPORT_SYMTAB \
- -include $(ARCH_DIR)/autoconf.h \
+ -include $(srctree)/include/linux/kconfig.h \
  -U__FreeBSD__ -D__linux__=1 -Dlinux=1 -D__linux=1 \
  -I$(ARCH_DIR)/include -I$(srctree)/include \
  -I$(ARCH_DIR) -I$(srctree) \
@@ -55,7 +56,7 @@ all: library modules
 
 AUTOCONF=$(ARCH_DIR)/autoconf.h
 # note: the directory order below matters to ensure that we match the kernel order
-dirs=kernel/ mm/ crypto/ lib/ drivers/base/ drivers/net/ net/
+dirs=kernel/ mm/ fs/ fs/proc/ crypto/ lib/ drivers/base/ drivers/net/ net/
 empty:=
 space:= $(empty) $(empty)
 colon:= :
@@ -71,6 +72,8 @@ find_last_bit.o find_next_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
 ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
 rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
 div64.o dynamic_queue_limits.o md5.o kstrtox.o
+fs/_to_keep=read_write.o libfs.o namei.o
+fs/proc/_to_keep=proc_sysctl.o
 
 
 $(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config

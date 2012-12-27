@@ -230,17 +230,21 @@ typedef struct
 #define PSW_MASK_IO		0x02000000UL
 #define PSW_MASK_EXT		0x01000000UL
 #define PSW_MASK_KEY		0x00F00000UL
+#define PSW_MASK_BASE		0x00080000UL	/* always one */
 #define PSW_MASK_MCHECK		0x00040000UL
 #define PSW_MASK_WAIT		0x00020000UL
 #define PSW_MASK_PSTATE		0x00010000UL
 #define PSW_MASK_ASC		0x0000C000UL
 #define PSW_MASK_CC		0x00003000UL
 #define PSW_MASK_PM		0x00000F00UL
+#define PSW_MASK_EA		0x00000000UL
+#define PSW_MASK_BA		0x00000000UL
+
+#define PSW_MASK_USER		0x00003F00UL
 
 #define PSW_ADDR_AMODE		0x80000000UL
 #define PSW_ADDR_INSN		0x7FFFFFFFUL
 
-#define PSW_BASE_BITS		0x00080000UL
 #define PSW_DEFAULT_KEY		(((unsigned long) PAGE_DEFAULT_ACC) << 20)
 
 #define PSW_ASC_PRIMARY		0x00000000UL
@@ -254,6 +258,7 @@ typedef struct
 #define PSW_MASK_DAT		0x0400000000000000UL
 #define PSW_MASK_IO		0x0200000000000000UL
 #define PSW_MASK_EXT		0x0100000000000000UL
+#define PSW_MASK_BASE		0x0000000000000000UL
 #define PSW_MASK_KEY		0x00F0000000000000UL
 #define PSW_MASK_MCHECK		0x0004000000000000UL
 #define PSW_MASK_WAIT		0x0002000000000000UL
@@ -261,12 +266,14 @@ typedef struct
 #define PSW_MASK_ASC		0x0000C00000000000UL
 #define PSW_MASK_CC		0x0000300000000000UL
 #define PSW_MASK_PM		0x00000F0000000000UL
+#define PSW_MASK_EA		0x0000000100000000UL
+#define PSW_MASK_BA		0x0000000080000000UL
+
+#define PSW_MASK_USER		0x00003F0180000000UL
 
 #define PSW_ADDR_AMODE		0x0000000000000000UL
 #define PSW_ADDR_INSN		0xFFFFFFFFFFFFFFFFUL
 
-#define PSW_BASE_BITS		0x0000000180000000UL
-#define PSW_BASE32_BITS		0x0000000080000000UL
 #define PSW_DEFAULT_KEY		(((unsigned long) PAGE_DEFAULT_ACC) << 52)
 
 #define PSW_ASC_PRIMARY		0x0000000000000000UL
@@ -279,18 +286,7 @@ typedef struct
 #ifdef __KERNEL__
 extern long psw_kernel_bits;
 extern long psw_user_bits;
-#ifdef CONFIG_64BIT
-extern long psw_user32_bits;
 #endif
-#endif
-
-/* This macro merges a NEW PSW mask specified by the user into
-   the currently active PSW mask CURRENT, modifying only those
-   bits in CURRENT that the user may be allowed to change: this
-   is the condition code and the program mask bits.  */
-#define PSW_MASK_MERGE(CURRENT,NEW) \
-	(((CURRENT) & ~(PSW_MASK_CC|PSW_MASK_PM)) | \
-	 ((NEW) & (PSW_MASK_CC|PSW_MASK_PM)))
 
 /*
  * The s390_regs structure is used to define the elf_gregset_t.
@@ -328,13 +324,63 @@ struct pt_regs
 	psw_t psw;
 	unsigned long gprs[NUM_GPRS];
 	unsigned long orig_gpr2;
-	unsigned short ilc;
-	unsigned short svcnr;
+	unsigned int int_code;
+	unsigned long int_parm_long;
 };
+
+/*
+ * Program event recording (PER) register set.
+ */
+struct per_regs {
+	unsigned long control;		/* PER control bits */
+	unsigned long start;		/* PER starting address */
+	unsigned long end;		/* PER ending address */
+};
+
+/*
+ * PER event contains information about the cause of the last PER exception.
+ */
+struct per_event {
+	unsigned short cause;		/* PER code, ATMID and AI */
+	unsigned long address;		/* PER address */
+	unsigned char paid;		/* PER access identification */
+};
+
+/*
+ * Simplified per_info structure used to decode the ptrace user space ABI.
+ */
+struct per_struct_kernel {
+	unsigned long cr9;		/* PER control bits */
+	unsigned long cr10;		/* PER starting address */
+	unsigned long cr11;		/* PER ending address */
+	unsigned long bits;		/* Obsolete software bits */
+	unsigned long starting_addr;	/* User specified start address */
+	unsigned long ending_addr;	/* User specified end address */
+	unsigned short perc_atmid;	/* PER trap ATMID */
+	unsigned long address;		/* PER trap instruction address */
+	unsigned char access_id;	/* PER trap access identification */
+};
+
+#define PER_EVENT_MASK			0xE9000000UL
+
+#define PER_EVENT_BRANCH		0x80000000UL
+#define PER_EVENT_IFETCH		0x40000000UL
+#define PER_EVENT_STORE			0x20000000UL
+#define PER_EVENT_STORE_REAL		0x08000000UL
+#define PER_EVENT_NULLIFICATION		0x01000000UL
+
+#define PER_CONTROL_MASK		0x00a00000UL
+
+#define PER_CONTROL_BRANCH_ADDRESS	0x00800000UL
+#define PER_CONTROL_ALTERATION		0x00200000UL
+
 #endif
 
 /*
- * Now for the program event recording (trace) definitions.
+ * Now for the user space program event recording (trace) definitions.
+ * The following structures are used only for the ptrace interface, don't
+ * touch or even look at it if you don't want to modify the user-space
+ * ptrace interface. In particular stay away from it for in-kernel PER.
  */
 typedef struct
 {
@@ -437,6 +483,8 @@ typedef struct
 #define PTRACE_POKETEXT_AREA	      0x5004
 #define PTRACE_POKEDATA_AREA 	      0x5005
 #define PTRACE_GET_LAST_BREAK	      0x5006
+#define PTRACE_PEEK_SYSTEM_CALL       0x5007
+#define PTRACE_POKE_SYSTEM_CALL	      0x5008
 
 /*
  * PT_PROT definition is loosely based on hppa bsd definition in
@@ -481,8 +529,7 @@ struct user_regs_struct
 	 * watchpoints. This is the way intel does it.
 	 */
 	per_struct per_info;
-	unsigned long ieee_instruction_pointer; 
-	/* Used to give failing instruction back to user for ieee exceptions */
+	unsigned long ieee_instruction_pointer;	/* obsolete, always 0 */
 };
 
 #ifdef __KERNEL__
@@ -490,13 +537,16 @@ struct user_regs_struct
  * These are defined as per linux/ptrace.h, which see.
  */
 #define arch_has_single_step()	(1)
-extern void show_regs(struct pt_regs * regs);
 
 #define user_mode(regs) (((regs)->psw.mask & PSW_MASK_PSTATE) != 0)
 #define instruction_pointer(regs) ((regs)->psw.addr & PSW_ADDR_INSN)
 #define user_stack_pointer(regs)((regs)->gprs[15])
-#define regs_return_value(regs)((regs)->gprs[2])
 #define profile_pc(regs) instruction_pointer(regs)
+
+static inline long regs_return_value(struct pt_regs *regs)
+{
+	return regs->gprs[2];
+}
 
 int regs_query_register_offset(const char *name);
 const char *regs_query_register_name(unsigned int offset);

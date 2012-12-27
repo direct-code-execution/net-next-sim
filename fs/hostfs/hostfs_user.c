@@ -16,7 +16,6 @@
 #include <sys/vfs.h>
 #include "hostfs.h"
 #include "os.h"
-#include "user.h"
 #include <utime.h>
 
 static void stat64_to_hostfs(const struct stat64 *buf, struct hostfs_stat *p)
@@ -94,13 +93,13 @@ void *open_dir(char *path, int *err_out)
 
 	dir = opendir(path);
 	*err_out = errno;
-	if (dir == NULL)
-		return NULL;
+
 	return dir;
 }
 
 char *read_dir(void *stream, unsigned long long *pos,
-	       unsigned long long *ino_out, int *len_out)
+	       unsigned long long *ino_out, int *len_out,
+	       unsigned int *type_out)
 {
 	DIR *dir = stream;
 	struct dirent *ent;
@@ -111,6 +110,7 @@ char *read_dir(void *stream, unsigned long long *pos,
 		return NULL;
 	*len_out = strlen(ent->d_name);
 	*ino_out = ent->d_ino;
+	*type_out = ent->d_type;
 	*pos = telldir(dir);
 	return ent->d_name;
 }
@@ -205,7 +205,7 @@ int set_attr(const char *file, struct hostfs_iattr *attrs, int fd)
 	if (attrs->ia_valid & HOSTFS_ATTR_MODE) {
 		if (fd >= 0) {
 			if (fchmod(fd, attrs->ia_mode) != 0)
-				return (-errno);
+				return -errno;
 		} else if (chmod(file, attrs->ia_mode) != 0) {
 			return -errno;
 		}
@@ -364,8 +364,7 @@ int rename_file(char *from, char *to)
 int do_statfs(char *root, long *bsize_out, long long *blocks_out,
 	      long long *bfree_out, long long *bavail_out,
 	      long long *files_out, long long *ffree_out,
-	      void *fsid_out, int fsid_size, long *namelen_out,
-	      long *spare_out)
+	      void *fsid_out, int fsid_size, long *namelen_out)
 {
 	struct statfs64 buf;
 	int err;
@@ -384,10 +383,6 @@ int do_statfs(char *root, long *bsize_out, long long *blocks_out,
 	       sizeof(buf.f_fsid) > fsid_size ? fsid_size :
 	       sizeof(buf.f_fsid));
 	*namelen_out = buf.f_namelen;
-	spare_out[0] = buf.f_spare[0];
-	spare_out[1] = buf.f_spare[1];
-	spare_out[2] = buf.f_spare[2];
-	spare_out[3] = buf.f_spare[3];
-	spare_out[4] = buf.f_spare[4];
+
 	return 0;
 }

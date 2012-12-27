@@ -14,7 +14,7 @@
 
 #include <linux/kobject.h>
 #include <linux/string.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/stat.h>
 #include <linux/slab.h>
 
@@ -192,14 +192,14 @@ static int kobject_add_internal(struct kobject *kobj)
 
 		/* be noisy on error issues */
 		if (error == -EEXIST)
-			printk(KERN_ERR "%s failed for %s with "
-			       "-EEXIST, don't try to register things with "
-			       "the same name in the same directory.\n",
-			       __func__, kobject_name(kobj));
+			WARN(1, "%s failed for %s with "
+			     "-EEXIST, don't try to register things with "
+			     "the same name in the same directory.\n",
+			     __func__, kobject_name(kobj));
 		else
-			printk(KERN_ERR "%s failed for %s (%d)\n",
-			       __func__, kobject_name(kobj), error);
-		dump_stack();
+			WARN(1, "%s failed for %s (error: %d parent: %s)\n",
+			     __func__, kobject_name(kobj), error,
+			     parent ? kobject_name(parent) : "'none'");
 	} else
 		kobj->state_in_sysfs = 1;
 
@@ -750,12 +750,14 @@ struct kobject *kset_find_obj(struct kset *kset, const char *name)
 	struct kobject *ret = NULL;
 
 	spin_lock(&kset->list_lock);
+
 	list_for_each_entry(k, &kset->list, entry) {
 		if (kobject_name(k) && !strcmp(kobject_name(k), name)) {
 			ret = kobject_get(k);
 			break;
 		}
 	}
+
 	spin_unlock(&kset->list_lock);
 	return ret;
 }
@@ -909,14 +911,14 @@ const struct kobj_ns_type_operations *kobj_ns_ops(struct kobject *kobj)
 }
 
 
-const void *kobj_ns_current(enum kobj_ns_type type)
+void *kobj_ns_grab_current(enum kobj_ns_type type)
 {
-	const void *ns = NULL;
+	void *ns = NULL;
 
 	spin_lock(&kobj_ns_type_lock);
 	if ((type > KOBJ_NS_TYPE_NONE) && (type < KOBJ_NS_TYPES) &&
 	    kobj_ns_ops_tbl[type])
-		ns = kobj_ns_ops_tbl[type]->current_ns();
+		ns = kobj_ns_ops_tbl[type]->grab_current_ns();
 	spin_unlock(&kobj_ns_type_lock);
 
 	return ns;
@@ -948,22 +950,14 @@ const void *kobj_ns_initial(enum kobj_ns_type type)
 	return ns;
 }
 
-/*
- * kobj_ns_exit - invalidate a namespace tag
- *
- * @type: the namespace type (i.e. KOBJ_NS_TYPE_NET)
- * @ns: the actual namespace being invalidated
- *
- * This is called when a tag is no longer valid.  For instance,
- * when a network namespace exits, it uses this helper to
- * make sure no sb's sysfs_info points to the now-invalidated
- * netns.
- */
-void kobj_ns_exit(enum kobj_ns_type type, const void *ns)
+void kobj_ns_drop(enum kobj_ns_type type, void *ns)
 {
-	sysfs_exit_ns(type, ns);
+	spin_lock(&kobj_ns_type_lock);
+	if ((type > KOBJ_NS_TYPE_NONE) && (type < KOBJ_NS_TYPES) &&
+	    kobj_ns_ops_tbl[type] && kobj_ns_ops_tbl[type]->drop_ns)
+		kobj_ns_ops_tbl[type]->drop_ns(ns);
+	spin_unlock(&kobj_ns_type_lock);
 }
-
 
 EXPORT_SYMBOL(kobject_get);
 EXPORT_SYMBOL(kobject_put);

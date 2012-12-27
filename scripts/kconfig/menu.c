@@ -3,14 +3,14 @@
  * Released under the terms of the GNU GPL v2.0.
  */
 
+#include <ctype.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define LKC_DIRECT_LINK
 #include "lkc.h"
 
-static const char nohelp_text[] = N_(
-	"There is no help available for this kernel option.\n");
+static const char nohelp_text[] = "There is no help available for this option.";
 
 struct menu rootmenu;
 static struct menu **last_entry_ptr;
@@ -138,8 +138,22 @@ struct property *menu_add_prop(enum prop_type type, char *prompt, struct expr *e
 			while (isspace(*prompt))
 				prompt++;
 		}
-		if (current_entry->prompt)
+		if (current_entry->prompt && current_entry != &rootmenu)
 			prop_warn(prop, "prompt redefined");
+
+		/* Apply all upper menus' visibilities to actual prompts. */
+		if(type == P_PROMPT) {
+			struct menu *menu = current_entry;
+
+			while ((menu = menu->parent) != NULL) {
+				if (!menu->visibility)
+					continue;
+				prop->visible.expr
+					= expr_alloc_and(prop->visible.expr,
+							 menu->visibility);
+			}
+		}
+
 		current_entry->prompt = prop;
 	}
 	prop->text = prompt;
@@ -150,6 +164,12 @@ struct property *menu_add_prop(enum prop_type type, char *prompt, struct expr *e
 struct property *menu_add_prompt(enum prop_type type, char *prompt, struct expr *dep)
 {
 	return menu_add_prop(type, prompt, NULL, dep);
+}
+
+void menu_add_visibility(struct expr *expr)
+{
+	current_entry->visibility = expr_alloc_and(current_entry->visibility,
+	    expr);
 }
 
 void menu_add_expr(enum prop_type type, struct expr *expr, struct expr *dep)
@@ -183,7 +203,7 @@ void menu_add_option(int token, char *arg)
 	}
 }
 
-static int menu_range_valid_sym(struct symbol *sym, struct symbol *sym2)
+static int menu_validate_number(struct symbol *sym, struct symbol *sym2)
 {
 	return sym2->type == S_INT || sym2->type == S_HEX ||
 	       (sym2->type == S_UNKNOWN && sym_string_valid(sym, sym2->name));
@@ -201,6 +221,15 @@ static void sym_check_prop(struct symbol *sym)
 				prop_warn(prop,
 				    "default for config symbol '%s'"
 				    " must be a single symbol", sym->name);
+			if (prop->expr->type != E_SYMBOL)
+				break;
+			sym2 = prop_get_symbol(prop);
+			if (sym->type == S_HEX || sym->type == S_INT) {
+				if (!menu_validate_number(sym, sym2))
+					prop_warn(prop,
+					    "'%s': number is invalid",
+					    sym->name);
+			}
 			break;
 		case P_SELECT:
 			sym2 = prop_get_symbol(prop);
@@ -220,8 +249,8 @@ static void sym_check_prop(struct symbol *sym)
 			if (sym->type != S_INT && sym->type != S_HEX)
 				prop_warn(prop, "range is only allowed "
 				                "for int or hex symbols");
-			if (!menu_range_valid_sym(sym, prop->expr->left.sym) ||
-			    !menu_range_valid_sym(sym, prop->expr->right.sym))
+			if (!menu_validate_number(sym, prop->expr->left.sym) ||
+			    !menu_validate_number(sym, prop->expr->right.sym))
 				prop_warn(prop, "range is invalid");
 			break;
 		default:
@@ -321,7 +350,7 @@ void menu_finalize(struct menu *parent)
 			last_menu->next = NULL;
 		}
 
-		sym->dir_dep.expr = parent->dep;
+		sym->dir_dep.expr = expr_alloc_or(sym->dir_dep.expr, parent->dep);
 	}
 	for (menu = parent->list; menu; menu = menu->next) {
 		if (sym && sym_is_choice(sym) &&
@@ -409,6 +438,11 @@ bool menu_is_visible(struct menu *menu)
 
 	if (!menu->prompt)
 		return false;
+
+	if (menu->visibility) {
+		if (expr_calc_value(menu->visibility) == no)
+			return no;
+	}
 
 	sym = menu->sym;
 	if (sym) {
@@ -560,16 +594,14 @@ struct gstr get_relations_str(struct symbol **sym_arr)
 void menu_get_ext_help(struct menu *menu, struct gstr *help)
 {
 	struct symbol *sym = menu->sym;
+	const char *help_text = nohelp_text;
 
 	if (menu_has_help(menu)) {
-		if (sym->name) {
-			str_printf(help, "CONFIG_%s:\n\n", sym->name);
-			str_append(help, _(menu_get_help(menu)));
-			str_append(help, "\n");
-		}
-	} else {
-		str_append(help, nohelp_text);
+		if (sym->name)
+			str_printf(help, "%s%s:\n\n", CONFIG_, sym->name);
+		help_text = menu_get_help(menu);
 	}
+	str_printf(help, "%s\n", _(help_text));
 	if (sym)
 		get_symbol_str(help, sym);
 }

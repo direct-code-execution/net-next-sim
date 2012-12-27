@@ -20,6 +20,7 @@
 
 #include <linux/kernel.h>
 #include <linux/spinlock.h>
+#include <asm/io.h>
 
 #include <linux/signal.h>
 #include <linux/sched.h>
@@ -172,7 +173,7 @@ int mantis_uart_init(struct mantis_pci *mantis)
 	mmwrite(mmread(MANTIS_UART_CTL) | MANTIS_UART_RXINT, MANTIS_UART_CTL);
 
 	schedule_work(&mantis->uart_work);
-	dprintk(MANTIS_DEBUG, 1, "UART succesfully initialized");
+	dprintk(MANTIS_DEBUG, 1, "UART successfully initialized");
 
 	return 0;
 }
@@ -182,5 +183,6 @@ void mantis_uart_exit(struct mantis_pci *mantis)
 {
 	/* disable interrupt */
 	mmwrite(mmread(MANTIS_UART_CTL) & 0xffef, MANTIS_UART_CTL);
+	flush_work_sync(&mantis->uart_work);
 }
 EXPORT_SYMBOL_GPL(mantis_uart_exit);

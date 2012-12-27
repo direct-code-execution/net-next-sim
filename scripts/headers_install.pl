@@ -35,6 +35,7 @@ foreach my $file (@files) {
 		$line =~ s/([\s(])__iomem\s/$1/g;
 		$line =~ s/\s__attribute_const__\s/ /g;
 		$line =~ s/\s__attribute_const__$//g;
+		$line =~ s/\b__packed\b/__attribute__((packed))/g;
 		$line =~ s/^#include <linux\/compiler.h>//;
 		$line =~ s/(^|\s)(inline)\b/$1__$2__/g;
 		$line =~ s/(^|\s)(asm)\b(\s|[(]|$)/$1__$2__$3/g;
@@ -45,6 +46,13 @@ foreach my $file (@files) {
 	close $in;
 
 	system $unifdef . " $tmpfile > $installdir/$file";
+	# unifdef will exit 0 on success, and will exit 1 when the
+	# file was processed successfully but no changes were made,
+	# so abort only when it's higher than that.
+	my $e = $? >> 8;
+	if ($e > 1) {
+		die "$tmpfile: $!\n";
+	}
 	unlink $tmpfile;
 }
 exit 0;

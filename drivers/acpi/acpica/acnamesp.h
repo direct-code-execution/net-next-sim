@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2010, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -283,8 +283,9 @@ acpi_ns_repair_object(struct acpi_predefined_data *data,
 		      union acpi_operand_object **return_object_ptr);
 
 acpi_status
-acpi_ns_repair_package_list(struct acpi_predefined_data *data,
-			    union acpi_operand_object **obj_desc_ptr);
+acpi_ns_wrap_with_package(struct acpi_predefined_data *data,
+			  union acpi_operand_object *original_object,
+			  union acpi_operand_object **obj_desc_ptr);
 
 acpi_status
 acpi_ns_repair_null_element(struct acpi_predefined_data *data,
@@ -337,18 +338,6 @@ u8 acpi_ns_valid_root_prefix(char prefix);
 acpi_object_type acpi_ns_get_type(struct acpi_namespace_node *node);
 
 u32 acpi_ns_local(acpi_object_type type);
-
-void
-acpi_ns_report_error(const char *module_name,
-		     u32 line_number,
-		     const char *internal_name, acpi_status lookup_status);
-
-void
-acpi_ns_report_method_error(const char *module_name,
-			    u32 line_number,
-			    const char *message,
-			    struct acpi_namespace_node *node,
-			    const char *path, acpi_status lookup_status);
 
 void
 acpi_ns_print_node_pathname(struct acpi_namespace_node *node, const char *msg);

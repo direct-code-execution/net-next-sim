@@ -14,29 +14,17 @@
  *
  */
 
-
+#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/spinlock.h>
 #include <linux/io.h>
+#include <linux/platform_device.h>
+#include <linux/of_device.h>
 
 #include <mach/iomap.h>
 #include <mach/pinmux.h>
-
-
-#define TEGRA_TRI_STATE(x)	(0x14 + (4 * (x)))
-#define TEGRA_PP_MUX_CTL(x)	(0x80 + (4 * (x)))
-#define TEGRA_PP_PU_PD(x)	(0xa0 + (4 * (x)))
-
-#define REG_A 0
-#define REG_B 1
-#define REG_C 2
-#define REG_D 3
-#define REG_E 4
-#define REG_F 5
-#define REG_G 6
-
-#define REG_N -1
 
 #define HSM_EN(reg)	(((reg) >> 2) & 0x1)
 #define SCHMT_EN(reg)	(((reg) >> 3) & 0x1)
@@ -46,154 +34,10 @@
 #define SLWR(reg)	(((reg) >> 28) & 0x3)
 #define SLWF(reg)	(((reg) >> 30) & 0x3)
 
-struct tegra_pingroup_desc {
-	const char *name;
-	int funcs[4];
-	s8 tri_reg; 	/* offset into the TRISTATE_REG_* register bank */
-	s8 tri_bit; 	/* offset into the TRISTATE_REG_* register bit */
-	s8 mux_reg;	/* offset into the PIN_MUX_CTL_* register bank */
-	s8 mux_bit;	/* offset into the PIN_MUX_CTL_* register bit */
-	s8 pupd_reg;	/* offset into the PULL_UPDOWN_REG_* register bank */
-	s8 pupd_bit;	/* offset into the PULL_UPDOWN_REG_* register bit */
-};
-
-#define PINGROUP(pg_name, f0, f1, f2, f3,			\
-		 tri_r, tri_b, mux_r, mux_b, pupd_r, pupd_b)	\
-	[TEGRA_PINGROUP_ ## pg_name] = {			\
-		.name = #pg_name,				\
-		.funcs = {					\
-			TEGRA_MUX_ ## f0,			\
-			TEGRA_MUX_ ## f1,			\
-			TEGRA_MUX_ ## f2,			\
-			TEGRA_MUX_ ## f3,			\
-		},						\
-		.tri_reg = REG_ ## tri_r,			\
-		.tri_bit = tri_b,				\
-		.mux_reg = REG_ ## mux_r,			\
-		.mux_bit = mux_b,				\
-		.pupd_reg = REG_ ## pupd_r,			\
-		.pupd_bit = pupd_b,				\
-	}
-
-static const struct tegra_pingroup_desc pingroups[TEGRA_MAX_PINGROUP] = {
-	PINGROUP(ATA,   IDE,       NAND,      GMI,       RSVD,          A, 0,  A, 24, A, 0),
-	PINGROUP(ATB,   IDE,       NAND,      GMI,       SDIO4,         A, 1,  A, 16, A, 2),
-	PINGROUP(ATC,   IDE,       NAND,      GMI,       SDIO4,         A, 2,  A, 22, A, 4),
-	PINGROUP(ATD,   IDE,       NAND,      GMI,       SDIO4,         A, 3,  A, 20, A, 6),
-	PINGROUP(ATE,   IDE,       NAND,      GMI,       RSVD,          B, 25, A, 12, A, 8),
-	PINGROUP(CDEV1, OSC,       PLLA_OUT,  PLLM_OUT1, AUDIO_SYNC,    A, 4,  C, 2,  C, 0),
-	PINGROUP(CDEV2, OSC,       AHB_CLK,   APB_CLK,   PLLP_OUT4,     A, 5,  C, 4,  C, 2),
-	PINGROUP(CRTP,  CRT,       RSVD,      RSVD,      RSVD,          D, 14, G, 20, B, 24),
-	PINGROUP(CSUS,  PLLC_OUT1, PLLP_OUT2, PLLP_OUT3, VI_SENSOR_CLK, A, 6,  C, 6,  D, 24),
-	PINGROUP(DAP1,  DAP1,      RSVD,      GMI,       SDIO2,         A, 7,  C, 20, A, 10),
-	PINGROUP(DAP2,  DAP2,      TWC,       RSVD,      GMI,           A, 8,  C, 22, A, 12),
-	PINGROUP(DAP3,  DAP3,      RSVD,      RSVD,      RSVD,          A, 9,  C, 24, A, 14),
-	PINGROUP(DAP4,  DAP4,      RSVD,      GMI,       RSVD,          A, 10, C, 26, A, 16),
-	PINGROUP(DDC,   I2C2,      RSVD,      RSVD,      RSVD,          B, 31, C, 0,  E, 28),
-	PINGROUP(DTA,   RSVD,      SDIO2,     VI,        RSVD,          A, 11, B, 20, A, 18),
-	PINGROUP(DTB,   RSVD,      RSVD,      VI,        SPI1,          A, 12, B, 22, A, 20),
-	PINGROUP(DTC,   RSVD,      RSVD,      VI,        RSVD,          A, 13, B, 26, A, 22),
-	PINGROUP(DTD,   RSVD,      SDIO2,     VI,        RSVD,          A, 14, B, 28, A, 24),
-	PINGROUP(DTE,   RSVD,      RSVD,      VI,        SPI1,          A, 15, B, 30, A, 26),
-	PINGROUP(DTF,   I2C3,      RSVD,      VI,        RSVD,          D, 12, G, 30, A, 28),
-	PINGROUP(GMA,   UARTE,     SPI3,      GMI,       SDIO4,         A, 28, B, 0,  E, 20),
-	PINGROUP(GMB,   IDE,       NAND,      GMI,       GMI_INT,       B, 29, C, 28, E, 22),
-	PINGROUP(GMC,   UARTD,     SPI4,      GMI,       SFLASH,        A, 29, B, 2,  E, 24),
-	PINGROUP(GMD,   RSVD,      NAND,      GMI,       SFLASH,        B, 30, C, 30, E, 26),
-	PINGROUP(GME,   RSVD,      DAP5,      GMI,       SDIO4,         B, 0,  D, 0,  C, 24),
-	PINGROUP(GPU,   PWM,       UARTA,     GMI,       RSVD,          A, 16, D, 4,  B, 20),
-	PINGROUP(GPU7,  RTCK,      RSVD,      RSVD,      RSVD,          D, 11, G, 28, B, 6),
-	PINGROUP(GPV,   PCIE,      RSVD,      RSVD,      RSVD,          A, 17, D, 2,  A, 30),
-	PINGROUP(HDINT, HDMI,      RSVD,      RSVD,      RSVD,          C, 23, B, 4,  D, 22),
-	PINGROUP(I2CP,  I2C,       RSVD,      RSVD,      RSVD,          A, 18, C, 8,  B, 2),
-	PINGROUP(IRRX,  UARTA,     UARTB,     GMI,       SPI4,          A, 20, C, 18, C, 22),
-	PINGROUP(IRTX,  UARTA,     UARTB,     GMI,       SPI4,          A, 19, C, 16, C, 20),
-	PINGROUP(KBCA,  KBC,       NAND,      SDIO2,     EMC_TEST0_DLL, A, 22, C, 10, B, 8),
-	PINGROUP(KBCB,  KBC,       NAND,      SDIO2,     MIO,           A, 21, C, 12, B, 10),
-	PINGROUP(KBCC,  KBC,       NAND,      TRACE,     EMC_TEST1_DLL, B, 26, C, 14, B, 12),
-	PINGROUP(KBCD,  KBC,       NAND,      SDIO2,     MIO,           D, 10, G, 26, B, 14),
-	PINGROUP(KBCE,  KBC,       NAND,      OWR,       RSVD,          A, 26, A, 28, E, 2),
-	PINGROUP(KBCF,  KBC,       NAND,      TRACE,     MIO,           A, 27, A, 26, E, 0),
-	PINGROUP(LCSN,  DISPLAYA,  DISPLAYB,  SPI3,      RSVD,          C, 31, E, 12, D, 20),
-	PINGROUP(LD0,   DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 0,  F, 0,  D, 12),
-	PINGROUP(LD1,   DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 1,  F, 2,  D, 12),
-	PINGROUP(LD10,  DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 10, F, 20, D, 12),
-	PINGROUP(LD11,  DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 11, F, 22, D, 12),
-	PINGROUP(LD12,  DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 12, F, 24, D, 12),
-	PINGROUP(LD13,  DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 13, F, 26, D, 12),
-	PINGROUP(LD14,  DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 14, F, 28, D, 12),
-	PINGROUP(LD15,  DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 15, F, 30, D, 12),
-	PINGROUP(LD16,  DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 16, G, 0,  D, 12),
-	PINGROUP(LD17,  DISPLAYA,  DISPLAYB,  RSVD,      RSVD,          C, 17, G, 2,  D, 12),
-	PINGROUP(LD2,   DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 2,  F, 4,  D, 12),
-	PINGROUP(LD3,   DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 3,  F, 6,  D, 12),
-	PINGROUP(LD4,   DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 4,  F, 8,  D, 12),
-	PINGROUP(LD5,   DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 5,  F, 10, D, 12),
-	PINGROUP(LD6,   DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 6,  F, 12, D, 12),
-	PINGROUP(LD7,   DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 7,  F, 14, D, 12),
-	PINGROUP(LD8,   DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 8,  F, 16, D, 12),
-	PINGROUP(LD9,   DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 9,  F, 18, D, 12),
-	PINGROUP(LDC,   DISPLAYA,  DISPLAYB,  RSVD,      RSVD,          C, 30, E, 14, D, 20),
-	PINGROUP(LDI,   DISPLAYA,  DISPLAYB,  RSVD,      RSVD,          D, 6,  G, 16, D, 18),
-	PINGROUP(LHP0,  DISPLAYA,  DISPLAYB,  RSVD,      RSVD,          C, 18, G, 10, D, 16),
-	PINGROUP(LHP1,  DISPLAYA,  DISPLAYB,  RSVD,      RSVD,          C, 19, G, 4,  D, 14),
-	PINGROUP(LHP2,  DISPLAYA,  DISPLAYB,  RSVD,      RSVD,          C, 20, G, 6,  D, 14),
-	PINGROUP(LHS,   DISPLAYA,  DISPLAYB,  XIO,       RSVD,          D, 7,  E, 22, D, 22),
-	PINGROUP(LM0,   DISPLAYA,  DISPLAYB,  SPI3,      RSVD,          C, 24, E, 26, D, 22),
-	PINGROUP(LM1,   DISPLAYA,  DISPLAYB,  RSVD,      CRT,           C, 25, E, 28, D, 22),
-	PINGROUP(LPP,   DISPLAYA,  DISPLAYB,  RSVD,      RSVD,          D, 8,  G, 14, D, 18),
-	PINGROUP(LPW0,  DISPLAYA,  DISPLAYB,  SPI3,      HDMI,          D, 3,  E, 0,  D, 20),
-	PINGROUP(LPW1,  DISPLAYA,  DISPLAYB,  RSVD,      RSVD,          D, 4,  E, 2,  D, 20),
-	PINGROUP(LPW2,  DISPLAYA,  DISPLAYB,  SPI3,      HDMI,          D, 5,  E, 4,  D, 20),
-	PINGROUP(LSC0,  DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 27, E, 18, D, 22),
-	PINGROUP(LSC1,  DISPLAYA,  DISPLAYB,  SPI3,      HDMI,          C, 28, E, 20, D, 20),
-	PINGROUP(LSCK,  DISPLAYA,  DISPLAYB,  SPI3,      HDMI,          C, 29, E, 16, D, 20),
-	PINGROUP(LSDA,  DISPLAYA,  DISPLAYB,  SPI3,      HDMI,          D, 1,  E, 8,  D, 20),
-	PINGROUP(LSDI,  DISPLAYA,  DISPLAYB,  SPI3,      RSVD,          D, 2,  E, 6,  D, 20),
-	PINGROUP(LSPI,  DISPLAYA,  DISPLAYB,  XIO,       HDMI,          D, 0,  E, 10, D, 22),
-	PINGROUP(LVP0,  DISPLAYA,  DISPLAYB,  RSVD,      RSVD,          C, 21, E, 30, D, 22),
-	PINGROUP(LVP1,  DISPLAYA,  DISPLAYB,  RSVD,      RSVD,          C, 22, G, 8,  D, 16),
-	PINGROUP(LVS,   DISPLAYA,  DISPLAYB,  XIO,       RSVD,          C, 26, E, 24, D, 22),
-	PINGROUP(OWC,   OWR,       RSVD,      RSVD,      RSVD,          A, 31, B, 8,  E, 30),
-	PINGROUP(PMC,   PWR_ON,    PWR_INTR,  RSVD,      RSVD,          A, 23, G, 18, N, -1),
-	PINGROUP(PTA,   I2C2,      HDMI,      GMI,       RSVD,          A, 24, G, 22, B, 4),
-	PINGROUP(RM,    I2C,       RSVD,      RSVD,      RSVD,          A, 25, A, 14, B, 0),
-	PINGROUP(SDB,   UARTA,     PWM,       SDIO3,     SPI2,          D, 15, D, 10, N, -1),
-	PINGROUP(SDC,   PWM,       TWC,       SDIO3,     SPI3,          B, 1,  D, 12, D, 28),
-	PINGROUP(SDD,   UARTA,     PWM,       SDIO3,     SPI3,          B, 2,  D, 14, D, 30),
-	PINGROUP(SDIO1, SDIO1,     RSVD,      UARTE,     UARTA,         A, 30, A, 30, E, 18),
-	PINGROUP(SLXA,  PCIE,      SPI4,      SDIO3,     SPI2,          B, 3,  B, 6,  B, 22),
-	PINGROUP(SLXC,  SPDIF,     SPI4,      SDIO3,     SPI2,          B, 5,  B, 10, B, 26),
-	PINGROUP(SLXD,  SPDIF,     SPI4,      SDIO3,     SPI2,          B, 6,  B, 12, B, 28),
-	PINGROUP(SLXK,  PCIE,      SPI4,      SDIO3,     SPI2,          B, 7,  B, 14, B, 30),
-	PINGROUP(SPDI,  SPDIF,     RSVD,      I2C,       SDIO2,         B, 8,  D, 8,  B, 16),
-	PINGROUP(SPDO,  SPDIF,     RSVD,      I2C,       SDIO2,         B, 9,  D, 6,  B, 18),
-	PINGROUP(SPIA,  SPI1,      SPI2,      SPI3,      GMI,           B, 10, D, 30, C, 4),
-	PINGROUP(SPIB,  SPI1,      SPI2,      SPI3,      GMI,           B, 11, D, 28, C, 6),
-	PINGROUP(SPIC,  SPI1,      SPI2,      SPI3,      GMI,           B, 12, D, 26, C, 8),
-	PINGROUP(SPID,  SPI2,      SPI1,      SPI2_ALT,  GMI,           B, 13, D, 24, C, 10),
-	PINGROUP(SPIE,  SPI2,      SPI1,      SPI2_ALT,  GMI,           B, 14, D, 22, C, 12),
-	PINGROUP(SPIF,  SPI3,      SPI1,      SPI2,      RSVD,          B, 15, D, 20, C, 14),
-	PINGROUP(SPIG,  SPI3,      SPI2,      SPI2_ALT,  I2C,           B, 16, D, 18, C, 16),
-	PINGROUP(SPIH,  SPI3,      SPI2,      SPI2_ALT,  I2C,           B, 17, D, 16, C, 18),
-	PINGROUP(UAA,   SPI3,      MIPI_HS,   UARTA,     ULPI,          B, 18, A, 0,  D, 0),
-	PINGROUP(UAB,   SPI2,      MIPI_HS,   UARTA,     ULPI,          B, 19, A, 2,  D, 2),
-	PINGROUP(UAC,   OWR,       RSVD,      RSVD,      RSVD,          B, 20, A, 4,  D, 4),
-	PINGROUP(UAD,   IRDA,      SPDIF,     UARTA,     SPI4,          B, 21, A, 6,  D, 6),
-	PINGROUP(UCA,   UARTC,     RSVD,      GMI,       RSVD,          B, 22, B, 16, D, 8),
-	PINGROUP(UCB,   UARTC,     PWM,       GMI,       RSVD,          B, 23, B, 18, D, 10),
-	PINGROUP(UDA,   SPI1,      RSVD,      UARTD,     ULPI,          D, 13, A, 8,  E, 16),
-	/* these pin groups only have pullup and pull down control */
-	PINGROUP(CK32,  RSVD,      RSVD,      RSVD,      RSVD,          N, -1,  N, -1,  E, 14),
-	PINGROUP(DDRC,  RSVD,      RSVD,      RSVD,      RSVD,          N, -1,  N, -1,  D, 26),
-	PINGROUP(PMCA,  RSVD,      RSVD,      RSVD,      RSVD,          N, -1,  N, -1,  E, 4),
-	PINGROUP(PMCB,  RSVD,      RSVD,      RSVD,      RSVD,          N, -1,  N, -1,  E, 6),
-	PINGROUP(PMCC,  RSVD,      RSVD,      RSVD,      RSVD,          N, -1,  N, -1,  E, 8),
-	PINGROUP(PMCD,  RSVD,      RSVD,      RSVD,      RSVD,          N, -1,  N, -1,  E, 10),
-	PINGROUP(PMCE,  RSVD,      RSVD,      RSVD,      RSVD,          N, -1,  N, -1,  E, 12),
-	PINGROUP(XM2C,  RSVD,      RSVD,      RSVD,      RSVD,          N, -1,  N, -1,  C, 30),
-	PINGROUP(XM2D,  RSVD,      RSVD,      RSVD,      RSVD,          N, -1,  N, -1,  C, 28),
-};
+static const struct tegra_pingroup_desc *pingroups;
+static const struct tegra_drive_pingroup_desc *drive_pingroups;
+static int pingroup_max;
+static int drive_max;
 
 static char *tegra_mux_names[TEGRA_MAX_MUX] = {
 	[TEGRA_MUX_AHB_CLK] = "AHB_CLK",
@@ -256,48 +100,50 @@ static char *tegra_mux_names[TEGRA_MAX_MUX] = {
 	[TEGRA_MUX_VI] = "VI",
 	[TEGRA_MUX_VI_SENSOR_CLK] = "VI_SENSOR_CLK",
 	[TEGRA_MUX_XIO] = "XIO",
-};
-
-struct tegra_drive_pingroup_desc {
-	const char *name;
-	s16 reg;
-};
-
-#define DRIVE_PINGROUP(pg_name, r)				\
-	[TEGRA_DRIVE_PINGROUP_ ## pg_name] = {			\
-		.name = #pg_name,				\
-		.reg = r					\
-	}
-
-static const struct tegra_drive_pingroup_desc drive_pingroups[TEGRA_MAX_PINGROUP] = {
-	DRIVE_PINGROUP(AO1,		0x868),
-	DRIVE_PINGROUP(AO2,		0x86c),
-	DRIVE_PINGROUP(AT1,		0x870),
-	DRIVE_PINGROUP(AT2,		0x874),
-	DRIVE_PINGROUP(CDEV1,		0x878),
-	DRIVE_PINGROUP(CDEV2,		0x87c),
-	DRIVE_PINGROUP(CSUS,		0x880),
-	DRIVE_PINGROUP(DAP1,		0x884),
-	DRIVE_PINGROUP(DAP2,		0x888),
-	DRIVE_PINGROUP(DAP3,		0x88c),
-	DRIVE_PINGROUP(DAP4,		0x890),
-	DRIVE_PINGROUP(DBG,		0x894),
-	DRIVE_PINGROUP(LCD1,		0x898),
-	DRIVE_PINGROUP(LCD2,		0x89c),
-	DRIVE_PINGROUP(SDMMC2,	0x8a0),
-	DRIVE_PINGROUP(SDMMC3,	0x8a4),
-	DRIVE_PINGROUP(SPI,		0x8a8),
-	DRIVE_PINGROUP(UAA,		0x8ac),
-	DRIVE_PINGROUP(UAB,		0x8b0),
-	DRIVE_PINGROUP(UART2,		0x8b4),
-	DRIVE_PINGROUP(UART3,		0x8b8),
-	DRIVE_PINGROUP(VI1,		0x8bc),
-	DRIVE_PINGROUP(VI2,		0x8c0),
-	DRIVE_PINGROUP(XM2A,		0x8c4),
-	DRIVE_PINGROUP(XM2C,		0x8c8),
-	DRIVE_PINGROUP(XM2D,		0x8cc),
-	DRIVE_PINGROUP(XM2CLK,	0x8d0),
-	DRIVE_PINGROUP(MEMCOMP,	0x8d4),
+	[TEGRA_MUX_BLINK] = "BLINK",
+	[TEGRA_MUX_CEC] = "CEC",
+	[TEGRA_MUX_CLK12] = "CLK12",
+	[TEGRA_MUX_DAP] = "DAP",
+	[TEGRA_MUX_DAPSDMMC2] = "DAPSDMMC2",
+	[TEGRA_MUX_DDR] = "DDR",
+	[TEGRA_MUX_DEV3] = "DEV3",
+	[TEGRA_MUX_DTV] = "DTV",
+	[TEGRA_MUX_VI_ALT1] = "VI_ALT1",
+	[TEGRA_MUX_VI_ALT2] = "VI_ALT2",
+	[TEGRA_MUX_VI_ALT3] = "VI_ALT3",
+	[TEGRA_MUX_EMC_DLL] = "EMC_DLL",
+	[TEGRA_MUX_EXTPERIPH1] = "EXTPERIPH1",
+	[TEGRA_MUX_EXTPERIPH2] = "EXTPERIPH2",
+	[TEGRA_MUX_EXTPERIPH3] = "EXTPERIPH3",
+	[TEGRA_MUX_GMI_ALT] = "GMI_ALT",
+	[TEGRA_MUX_HDA] = "HDA",
+	[TEGRA_MUX_HSI] = "HSI",
+	[TEGRA_MUX_I2C4] = "I2C4",
+	[TEGRA_MUX_I2C5] = "I2C5",
+	[TEGRA_MUX_I2CPWR] = "I2CPWR",
+	[TEGRA_MUX_I2S0] = "I2S0",
+	[TEGRA_MUX_I2S1] = "I2S1",
+	[TEGRA_MUX_I2S2] = "I2S2",
+	[TEGRA_MUX_I2S3] = "I2S3",
+	[TEGRA_MUX_I2S4] = "I2S4",
+	[TEGRA_MUX_NAND_ALT] = "NAND_ALT",
+	[TEGRA_MUX_POPSDIO4] = "POPSDIO4",
+	[TEGRA_MUX_POPSDMMC4] = "POPSDMMC4",
+	[TEGRA_MUX_PWM0] = "PWM0",
+	[TEGRA_MUX_PWM1] = "PWM2",
+	[TEGRA_MUX_PWM2] = "PWM2",
+	[TEGRA_MUX_PWM3] = "PWM3",
+	[TEGRA_MUX_SATA] = "SATA",
+	[TEGRA_MUX_SPI5] = "SPI5",
+	[TEGRA_MUX_SPI6] = "SPI6",
+	[TEGRA_MUX_SYSCLK] = "SYSCLK",
+	[TEGRA_MUX_VGP1] = "VGP1",
+	[TEGRA_MUX_VGP2] = "VGP2",
+	[TEGRA_MUX_VGP3] = "VGP3",
+	[TEGRA_MUX_VGP4] = "VGP4",
+	[TEGRA_MUX_VGP5] = "VGP5",
+	[TEGRA_MUX_VGP6] = "VGP6",
+	[TEGRA_MUX_SAFE] = "<safe>",
 };
 
 static const char *tegra_drive_names[TEGRA_MAX_DRIVE] = {
@@ -316,9 +162,9 @@ static const char *tegra_slew_names[TEGRA_MAX_SLEW] = {
 
 static DEFINE_SPINLOCK(mux_lock);
 
-static const char *pingroup_name(enum tegra_pingroup pg)
+static const char *pingroup_name(int pg)
 {
-	if (pg < 0 || pg >=  TEGRA_MAX_PINGROUP)
+	if (pg < 0 || pg >=  pingroup_max)
 		return "<UNKNOWN>";
 
 	return pingroups[pg].name;
@@ -370,32 +216,39 @@ static const char *pupd_name(unsigned long val)
 	}
 }
 
+static int nbanks;
+static void __iomem **regs;
 
-static inline unsigned long pg_readl(unsigned long offset)
+static inline u32 pg_readl(u32 bank, u32 reg)
 {
-	return readl(IO_TO_VIRT(TEGRA_APB_MISC_BASE + offset));
+	return readl(regs[bank] + reg);
 }
 
-static inline void pg_writel(unsigned long value, unsigned long offset)
+static inline void pg_writel(u32 val, u32 bank, u32 reg)
 {
-	writel(value, IO_TO_VIRT(TEGRA_APB_MISC_BASE + offset));
+	writel(val, regs[bank] + reg);
 }
 
-int tegra_pinmux_set_func(enum tegra_pingroup pg, enum tegra_mux_func func)
+static int tegra_pinmux_set_func(const struct tegra_pingroup_config *config)
 {
 	int mux = -1;
 	int i;
 	unsigned long reg;
 	unsigned long flags;
+	int pg = config->pingroup;
+	enum tegra_mux_func func = config->func;
 
-	if (pg < 0 || pg >=  TEGRA_MAX_PINGROUP)
+	if (pg < 0 || pg >=  pingroup_max)
 		return -ERANGE;
 
-	if (pingroups[pg].mux_reg == REG_N)
+	if (pingroups[pg].mux_reg < 0)
 		return -EINVAL;
 
 	if (func < 0)
 		return -ERANGE;
+
+	if (func == TEGRA_MUX_SAFE)
+		func = pingroups[pg].func_safe;
 
 	if (func & TEGRA_MUX_RSVD) {
 		mux = func & 0x3;
@@ -413,51 +266,49 @@ int tegra_pinmux_set_func(enum tegra_pingroup pg, enum tegra_mux_func func)
 
 	spin_lock_irqsave(&mux_lock, flags);
 
-	reg = pg_readl(TEGRA_PP_MUX_CTL(pingroups[pg].mux_reg));
+	reg = pg_readl(pingroups[pg].mux_bank, pingroups[pg].mux_reg);
 	reg &= ~(0x3 << pingroups[pg].mux_bit);
 	reg |= mux << pingroups[pg].mux_bit;
-	pg_writel(reg, TEGRA_PP_MUX_CTL(pingroups[pg].mux_reg));
+	pg_writel(reg, pingroups[pg].mux_bank, pingroups[pg].mux_reg);
 
 	spin_unlock_irqrestore(&mux_lock, flags);
 
 	return 0;
 }
 
-int tegra_pinmux_set_tristate(enum tegra_pingroup pg,
-	enum tegra_tristate tristate)
+int tegra_pinmux_set_tristate(int pg, enum tegra_tristate tristate)
 {
 	unsigned long reg;
 	unsigned long flags;
 
-	if (pg < 0 || pg >=  TEGRA_MAX_PINGROUP)
+	if (pg < 0 || pg >=  pingroup_max)
 		return -ERANGE;
 
-	if (pingroups[pg].tri_reg == REG_N)
+	if (pingroups[pg].tri_reg < 0)
 		return -EINVAL;
 
 	spin_lock_irqsave(&mux_lock, flags);
 
-	reg = pg_readl(TEGRA_TRI_STATE(pingroups[pg].tri_reg));
+	reg = pg_readl(pingroups[pg].tri_bank, pingroups[pg].tri_reg);
 	reg &= ~(0x1 << pingroups[pg].tri_bit);
 	if (tristate)
 		reg |= 1 << pingroups[pg].tri_bit;
-	pg_writel(reg, TEGRA_TRI_STATE(pingroups[pg].tri_reg));
+	pg_writel(reg, pingroups[pg].tri_bank, pingroups[pg].tri_reg);
 
 	spin_unlock_irqrestore(&mux_lock, flags);
 
 	return 0;
 }
 
-int tegra_pinmux_set_pullupdown(enum tegra_pingroup pg,
-	enum tegra_pullupdown pupd)
+int tegra_pinmux_set_pullupdown(int pg, enum tegra_pullupdown pupd)
 {
 	unsigned long reg;
 	unsigned long flags;
 
-	if (pg < 0 || pg >=  TEGRA_MAX_PINGROUP)
+	if (pg < 0 || pg >=  pingroup_max)
 		return -ERANGE;
 
-	if (pingroups[pg].pupd_reg == REG_N)
+	if (pingroups[pg].pupd_reg < 0)
 		return -EINVAL;
 
 	if (pupd != TEGRA_PUPD_NORMAL &&
@@ -468,38 +319,39 @@ int tegra_pinmux_set_pullupdown(enum tegra_pingroup pg,
 
 	spin_lock_irqsave(&mux_lock, flags);
 
-	reg = pg_readl(TEGRA_PP_PU_PD(pingroups[pg].pupd_reg));
+	reg = pg_readl(pingroups[pg].pupd_bank, pingroups[pg].pupd_reg);
 	reg &= ~(0x3 << pingroups[pg].pupd_bit);
 	reg |= pupd << pingroups[pg].pupd_bit;
-	pg_writel(reg, TEGRA_PP_PU_PD(pingroups[pg].pupd_reg));
+	pg_writel(reg, pingroups[pg].pupd_bank, pingroups[pg].pupd_reg);
 
 	spin_unlock_irqrestore(&mux_lock, flags);
 
 	return 0;
 }
 
-void tegra_pinmux_config_pingroup(enum tegra_pingroup pingroup,
-				 enum tegra_mux_func func,
-				 enum tegra_pullupdown pupd,
-				 enum tegra_tristate tristate)
+static void tegra_pinmux_config_pingroup(const struct tegra_pingroup_config *config)
 {
+	int pingroup = config->pingroup;
+	enum tegra_mux_func func     = config->func;
+	enum tegra_pullupdown pupd   = config->pupd;
+	enum tegra_tristate tristate = config->tristate;
 	int err;
 
-	if (pingroups[pingroup].mux_reg != REG_N) {
-		err = tegra_pinmux_set_func(pingroup, func);
+	if (pingroups[pingroup].mux_reg >= 0) {
+		err = tegra_pinmux_set_func(config);
 		if (err < 0)
 			pr_err("pinmux: can't set pingroup %s func to %s: %d\n",
 			       pingroup_name(pingroup), func_name(func), err);
 	}
 
-	if (pingroups[pingroup].pupd_reg != REG_N) {
+	if (pingroups[pingroup].pupd_reg >= 0) {
 		err = tegra_pinmux_set_pullupdown(pingroup, pupd);
 		if (err < 0)
 			pr_err("pinmux: can't set pingroup %s pullupdown to %s: %d\n",
 			       pingroup_name(pingroup), pupd_name(pupd), err);
 	}
 
-	if (pingroups[pingroup].tri_reg != REG_N) {
+	if (pingroups[pingroup].tri_reg >= 0) {
 		err = tegra_pinmux_set_tristate(pingroup, tristate);
 		if (err < 0)
 			pr_err("pinmux: can't set pingroup %s tristate to %s: %d\n",
@@ -507,22 +359,17 @@ void tegra_pinmux_config_pingroup(enum tegra_pingroup pingroup,
 	}
 }
 
-
-
-void tegra_pinmux_config_table(struct tegra_pingroup_config *config, int len)
+void tegra_pinmux_config_table(const struct tegra_pingroup_config *config, int len)
 {
 	int i;
 
 	for (i = 0; i < len; i++)
-		tegra_pinmux_config_pingroup(config[i].pingroup,
-					     config[i].func,
-					     config[i].pupd,
-					     config[i].tristate);
+		tegra_pinmux_config_pingroup(&config[i]);
 }
 
-static const char *drive_pinmux_name(enum tegra_drive_pingroup pg)
+static const char *drive_pinmux_name(int pg)
 {
-	if (pg < 0 || pg >=  TEGRA_MAX_DRIVE_PINGROUP)
+	if (pg < 0 || pg >=  drive_max)
 		return "<UNKNOWN>";
 
 	return drive_pingroups[pg].name;
@@ -549,12 +396,11 @@ static const char *slew_name(unsigned long val)
 	return tegra_slew_names[val];
 }
 
-static int tegra_drive_pinmux_set_hsm(enum tegra_drive_pingroup pg,
-	enum tegra_hsm hsm)
+static int tegra_drive_pinmux_set_hsm(int pg, enum tegra_hsm hsm)
 {
 	unsigned long flags;
 	u32 reg;
-	if (pg < 0 || pg >=  TEGRA_MAX_DRIVE_PINGROUP)
+	if (pg < 0 || pg >=  drive_max)
 		return -ERANGE;
 
 	if (hsm != TEGRA_HSM_ENABLE && hsm != TEGRA_HSM_DISABLE)
@@ -562,24 +408,23 @@ static int tegra_drive_pinmux_set_hsm(enum tegra_drive_pingroup pg,
 
 	spin_lock_irqsave(&mux_lock, flags);
 
-	reg = pg_readl(drive_pingroups[pg].reg);
+	reg = pg_readl(drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 	if (hsm == TEGRA_HSM_ENABLE)
 		reg |= (1 << 2);
 	else
 		reg &= ~(1 << 2);
-	pg_writel(reg, drive_pingroups[pg].reg);
+	pg_writel(reg, drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 
 	spin_unlock_irqrestore(&mux_lock, flags);
 
 	return 0;
 }
 
-static int tegra_drive_pinmux_set_schmitt(enum tegra_drive_pingroup pg,
-	enum tegra_schmitt schmitt)
+static int tegra_drive_pinmux_set_schmitt(int pg, enum tegra_schmitt schmitt)
 {
 	unsigned long flags;
 	u32 reg;
-	if (pg < 0 || pg >=  TEGRA_MAX_DRIVE_PINGROUP)
+	if (pg < 0 || pg >=  drive_max)
 		return -ERANGE;
 
 	if (schmitt != TEGRA_SCHMITT_ENABLE && schmitt != TEGRA_SCHMITT_DISABLE)
@@ -587,24 +432,23 @@ static int tegra_drive_pinmux_set_schmitt(enum tegra_drive_pingroup pg,
 
 	spin_lock_irqsave(&mux_lock, flags);
 
-	reg = pg_readl(drive_pingroups[pg].reg);
+	reg = pg_readl(drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 	if (schmitt == TEGRA_SCHMITT_ENABLE)
 		reg |= (1 << 3);
 	else
 		reg &= ~(1 << 3);
-	pg_writel(reg, drive_pingroups[pg].reg);
+	pg_writel(reg, drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 
 	spin_unlock_irqrestore(&mux_lock, flags);
 
 	return 0;
 }
 
-static int tegra_drive_pinmux_set_drive(enum tegra_drive_pingroup pg,
-	enum tegra_drive drive)
+static int tegra_drive_pinmux_set_drive(int pg, enum tegra_drive drive)
 {
 	unsigned long flags;
 	u32 reg;
-	if (pg < 0 || pg >=  TEGRA_MAX_DRIVE_PINGROUP)
+	if (pg < 0 || pg >=  drive_max)
 		return -ERANGE;
 
 	if (drive < 0 || drive >= TEGRA_MAX_DRIVE)
@@ -612,22 +456,22 @@ static int tegra_drive_pinmux_set_drive(enum tegra_drive_pingroup pg,
 
 	spin_lock_irqsave(&mux_lock, flags);
 
-	reg = pg_readl(drive_pingroups[pg].reg);
+	reg = pg_readl(drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 	reg &= ~(0x3 << 4);
 	reg |= drive << 4;
-	pg_writel(reg, drive_pingroups[pg].reg);
+	pg_writel(reg, drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 
 	spin_unlock_irqrestore(&mux_lock, flags);
 
 	return 0;
 }
 
-static int tegra_drive_pinmux_set_pull_down(enum tegra_drive_pingroup pg,
+static int tegra_drive_pinmux_set_pull_down(int pg,
 	enum tegra_pull_strength pull_down)
 {
 	unsigned long flags;
 	u32 reg;
-	if (pg < 0 || pg >=  TEGRA_MAX_DRIVE_PINGROUP)
+	if (pg < 0 || pg >=  drive_max)
 		return -ERANGE;
 
 	if (pull_down < 0 || pull_down >= TEGRA_MAX_PULL)
@@ -635,22 +479,22 @@ static int tegra_drive_pinmux_set_pull_down(enum tegra_drive_pingroup pg,
 
 	spin_lock_irqsave(&mux_lock, flags);
 
-	reg = pg_readl(drive_pingroups[pg].reg);
+	reg = pg_readl(drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 	reg &= ~(0x1f << 12);
 	reg |= pull_down << 12;
-	pg_writel(reg, drive_pingroups[pg].reg);
+	pg_writel(reg, drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 
 	spin_unlock_irqrestore(&mux_lock, flags);
 
 	return 0;
 }
 
-static int tegra_drive_pinmux_set_pull_up(enum tegra_drive_pingroup pg,
+static int tegra_drive_pinmux_set_pull_up(int pg,
 	enum tegra_pull_strength pull_up)
 {
 	unsigned long flags;
 	u32 reg;
-	if (pg < 0 || pg >=  TEGRA_MAX_DRIVE_PINGROUP)
+	if (pg < 0 || pg >=  drive_max)
 		return -ERANGE;
 
 	if (pull_up < 0 || pull_up >= TEGRA_MAX_PULL)
@@ -658,22 +502,22 @@ static int tegra_drive_pinmux_set_pull_up(enum tegra_drive_pingroup pg,
 
 	spin_lock_irqsave(&mux_lock, flags);
 
-	reg = pg_readl(drive_pingroups[pg].reg);
+	reg = pg_readl(drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 	reg &= ~(0x1f << 12);
 	reg |= pull_up << 12;
-	pg_writel(reg, drive_pingroups[pg].reg);
+	pg_writel(reg, drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 
 	spin_unlock_irqrestore(&mux_lock, flags);
 
 	return 0;
 }
 
-static int tegra_drive_pinmux_set_slew_rising(enum tegra_drive_pingroup pg,
+static int tegra_drive_pinmux_set_slew_rising(int pg,
 	enum tegra_slew slew_rising)
 {
 	unsigned long flags;
 	u32 reg;
-	if (pg < 0 || pg >=  TEGRA_MAX_DRIVE_PINGROUP)
+	if (pg < 0 || pg >=  drive_max)
 		return -ERANGE;
 
 	if (slew_rising < 0 || slew_rising >= TEGRA_MAX_SLEW)
@@ -681,22 +525,22 @@ static int tegra_drive_pinmux_set_slew_rising(enum tegra_drive_pingroup pg,
 
 	spin_lock_irqsave(&mux_lock, flags);
 
-	reg = pg_readl(drive_pingroups[pg].reg);
+	reg = pg_readl(drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 	reg &= ~(0x3 << 28);
 	reg |= slew_rising << 28;
-	pg_writel(reg, drive_pingroups[pg].reg);
+	pg_writel(reg, drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 
 	spin_unlock_irqrestore(&mux_lock, flags);
 
 	return 0;
 }
 
-static int tegra_drive_pinmux_set_slew_falling(enum tegra_drive_pingroup pg,
+static int tegra_drive_pinmux_set_slew_falling(int pg,
 	enum tegra_slew slew_falling)
 {
 	unsigned long flags;
 	u32 reg;
-	if (pg < 0 || pg >=  TEGRA_MAX_DRIVE_PINGROUP)
+	if (pg < 0 || pg >=  drive_max)
 		return -ERANGE;
 
 	if (slew_falling < 0 || slew_falling >= TEGRA_MAX_SLEW)
@@ -704,17 +548,17 @@ static int tegra_drive_pinmux_set_slew_falling(enum tegra_drive_pingroup pg,
 
 	spin_lock_irqsave(&mux_lock, flags);
 
-	reg = pg_readl(drive_pingroups[pg].reg);
+	reg = pg_readl(drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 	reg &= ~(0x3 << 30);
 	reg |= slew_falling << 30;
-	pg_writel(reg, drive_pingroups[pg].reg);
+	pg_writel(reg, drive_pingroups[pg].reg_bank, drive_pingroups[pg].reg);
 
 	spin_unlock_irqrestore(&mux_lock, flags);
 
 	return 0;
 }
 
-static void tegra_drive_pinmux_config_pingroup(enum tegra_drive_pingroup pingroup,
+static void tegra_drive_pinmux_config_pingroup(int pingroup,
 					  enum tegra_hsm hsm,
 					  enum tegra_schmitt schmitt,
 					  enum tegra_drive drive,
@@ -784,6 +628,199 @@ void tegra_drive_pinmux_config_table(struct tegra_drive_pingroup_config *config,
 						     config[i].slew_falling);
 }
 
+void tegra_pinmux_set_safe_pinmux_table(const struct tegra_pingroup_config *config,
+	int len)
+{
+	int i;
+	struct tegra_pingroup_config c;
+
+	for (i = 0; i < len; i++) {
+		int err;
+		c = config[i];
+		if (c.pingroup < 0 || c.pingroup >= pingroup_max) {
+			WARN_ON(1);
+			continue;
+		}
+		c.func = pingroups[c.pingroup].func_safe;
+		err = tegra_pinmux_set_func(&c);
+		if (err < 0)
+			pr_err("%s: tegra_pinmux_set_func returned %d setting "
+			       "%s to %s\n", __func__, err,
+			       pingroup_name(c.pingroup), func_name(c.func));
+	}
+}
+
+void tegra_pinmux_config_pinmux_table(const struct tegra_pingroup_config *config,
+	int len)
+{
+	int i;
+
+	for (i = 0; i < len; i++) {
+		int err;
+		if (config[i].pingroup < 0 ||
+		    config[i].pingroup >= pingroup_max) {
+			WARN_ON(1);
+			continue;
+		}
+		err = tegra_pinmux_set_func(&config[i]);
+		if (err < 0)
+			pr_err("%s: tegra_pinmux_set_func returned %d setting "
+			       "%s to %s\n", __func__, err,
+			       pingroup_name(config[i].pingroup),
+			       func_name(config[i].func));
+	}
+}
+
+void tegra_pinmux_config_tristate_table(const struct tegra_pingroup_config *config,
+	int len, enum tegra_tristate tristate)
+{
+	int i;
+	int err;
+	int pingroup;
+
+	for (i = 0; i < len; i++) {
+		pingroup = config[i].pingroup;
+		if (pingroups[pingroup].tri_reg >= 0) {
+			err = tegra_pinmux_set_tristate(pingroup, tristate);
+			if (err < 0)
+				pr_err("pinmux: can't set pingroup %s tristate"
+					" to %s: %d\n",	pingroup_name(pingroup),
+					tri_name(tristate), err);
+		}
+	}
+}
+
+void tegra_pinmux_config_pullupdown_table(const struct tegra_pingroup_config *config,
+	int len, enum tegra_pullupdown pupd)
+{
+	int i;
+	int err;
+	int pingroup;
+
+	for (i = 0; i < len; i++) {
+		pingroup = config[i].pingroup;
+		if (pingroups[pingroup].pupd_reg >= 0) {
+			err = tegra_pinmux_set_pullupdown(pingroup, pupd);
+			if (err < 0)
+				pr_err("pinmux: can't set pingroup %s pullupdown"
+					" to %s: %d\n",	pingroup_name(pingroup),
+					pupd_name(pupd), err);
+		}
+	}
+}
+
+static struct of_device_id tegra_pinmux_of_match[] __devinitdata = {
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+	{ .compatible = "nvidia,tegra20-pinmux", tegra20_pinmux_init },
+#endif
+#ifdef CONFIG_ARCH_TEGRA_3x_SOC
+	{ .compatible = "nvidia,tegra30-pinmux", tegra30_pinmux_init },
+#endif
+	{ },
+};
+
+static int __devinit tegra_pinmux_probe(struct platform_device *pdev)
+{
+	struct resource *res;
+	int i;
+	int config_bad = 0;
+	const struct of_device_id *match;
+
+	match = of_match_device(tegra_pinmux_of_match, &pdev->dev);
+
+	if (match)
+		((pinmux_init)(match->data))(&pingroups, &pingroup_max,
+			&drive_pingroups, &drive_max);
+#ifdef CONFIG_ARCH_TEGRA_2x_SOC
+	else
+		/* no device tree available, so we must be on tegra20 */
+		tegra20_pinmux_init(&pingroups, &pingroup_max,
+					&drive_pingroups, &drive_max);
+#else
+	pr_warn("non Tegra20 platform requires pinmux devicetree node\n");
+#endif
+
+	for (i = 0; ; i++) {
+		res = platform_get_resource(pdev, IORESOURCE_MEM, i);
+		if (!res)
+			break;
+	}
+	nbanks = i;
+
+	for (i = 0; i < pingroup_max; i++) {
+		if (pingroups[i].tri_bank >= nbanks) {
+			dev_err(&pdev->dev, "pingroup %d: bad tri_bank\n", i);
+			config_bad = 1;
+		}
+
+		if (pingroups[i].mux_bank >= nbanks) {
+			dev_err(&pdev->dev, "pingroup %d: bad mux_bank\n", i);
+			config_bad = 1;
+		}
+
+		if (pingroups[i].pupd_bank >= nbanks) {
+			dev_err(&pdev->dev, "pingroup %d: bad pupd_bank\n", i);
+			config_bad = 1;
+		}
+	}
+
+	for (i = 0; i < drive_max; i++) {
+		if (drive_pingroups[i].reg_bank >= nbanks) {
+			dev_err(&pdev->dev,
+				"drive pingroup %d: bad reg_bank\n", i);
+			config_bad = 1;
+		}
+	}
+
+	if (config_bad)
+		return -ENODEV;
+
+	regs = devm_kzalloc(&pdev->dev, nbanks * sizeof(*regs), GFP_KERNEL);
+	if (!regs) {
+		dev_err(&pdev->dev, "Can't alloc regs pointer\n");
+		return -ENODEV;
+	}
+
+	for (i = 0; i < nbanks; i++) {
+		res = platform_get_resource(pdev, IORESOURCE_MEM, i);
+		if (!res) {
+			dev_err(&pdev->dev, "Missing MEM resource\n");
+			return -ENODEV;
+		}
+
+		if (!devm_request_mem_region(&pdev->dev, res->start,
+					    resource_size(res),
+					    dev_name(&pdev->dev))) {
+			dev_err(&pdev->dev,
+				"Couldn't request MEM resource %d\n", i);
+			return -ENODEV;
+		}
+
+		regs[i] = devm_ioremap(&pdev->dev, res->start,
+					resource_size(res));
+		if (!regs) {
+			dev_err(&pdev->dev, "Couldn't ioremap regs %d\n", i);
+			return -ENODEV;
+		}
+	}
+
+	return 0;
+}
+
+static struct platform_driver tegra_pinmux_driver = {
+	.driver		= {
+		.name	= "tegra-pinmux",
+		.owner	= THIS_MODULE,
+		.of_match_table = tegra_pinmux_of_match,
+	},
+	.probe		= tegra_pinmux_probe,
+};
+
+static int __init tegra_pinmux_init(void)
+{
+	return platform_driver_register(&tegra_pinmux_driver);
+}
+postcore_initcall(tegra_pinmux_init);
 
 #ifdef	CONFIG_DEBUG_FS
 
@@ -803,7 +840,8 @@ static int dbg_pinmux_show(struct seq_file *s, void *unused)
 	int i;
 	int len;
 
-	for (i = 0; i < TEGRA_MAX_PINGROUP; i++) {
+	for (i = 0; i < pingroup_max; i++) {
+		unsigned long reg;
 		unsigned long tri;
 		unsigned long mux;
 		unsigned long pupd;
@@ -812,12 +850,13 @@ static int dbg_pinmux_show(struct seq_file *s, void *unused)
 		len = strlen(pingroups[i].name);
 		dbg_pad_field(s, 5 - len);
 
-		if (pingroups[i].mux_reg == REG_N) {
+		if (pingroups[i].mux_reg < 0) {
 			seq_printf(s, "TEGRA_MUX_NONE");
 			len = strlen("NONE");
 		} else {
-			mux = (pg_readl(TEGRA_PP_MUX_CTL(pingroups[i].mux_reg)) >>
-			       pingroups[i].mux_bit) & 0x3;
+			reg = pg_readl(pingroups[i].mux_bank,
+					pingroups[i].mux_reg);
+			mux = (reg >> pingroups[i].mux_bit) & 0x3;
 			if (pingroups[i].funcs[mux] == TEGRA_MUX_RSVD) {
 				seq_printf(s, "TEGRA_MUX_RSVD%1lu", mux+1);
 				len = 5;
@@ -829,22 +868,24 @@ static int dbg_pinmux_show(struct seq_file *s, void *unused)
 		}
 		dbg_pad_field(s, 13-len);
 
-		if (pingroups[i].mux_reg == REG_N) {
+		if (pingroups[i].pupd_reg < 0) {
 			seq_printf(s, "TEGRA_PUPD_NORMAL");
 			len = strlen("NORMAL");
 		} else {
-			pupd = (pg_readl(TEGRA_PP_PU_PD(pingroups[i].pupd_reg)) >>
-				pingroups[i].pupd_bit) & 0x3;
+			reg = pg_readl(pingroups[i].pupd_bank,
+					pingroups[i].pupd_reg);
+			pupd = (reg >> pingroups[i].pupd_bit) & 0x3;
 			seq_printf(s, "TEGRA_PUPD_%s", pupd_name(pupd));
 			len = strlen(pupd_name(pupd));
 		}
 		dbg_pad_field(s, 9 - len);
 
-		if (pingroups[i].tri_reg == REG_N) {
+		if (pingroups[i].tri_reg < 0) {
 			seq_printf(s, "TEGRA_TRI_NORMAL");
 		} else {
-			tri = (pg_readl(TEGRA_TRI_STATE(pingroups[i].tri_reg)) >>
-			       pingroups[i].tri_bit) & 0x1;
+			reg = pg_readl(pingroups[i].tri_bank,
+					pingroups[i].tri_reg);
+			tri = (reg >> pingroups[i].tri_bit) & 0x1;
 
 			seq_printf(s, "TEGRA_TRI_%s", tri_name(tri));
 		}
@@ -870,7 +911,7 @@ static int dbg_drive_pinmux_show(struct seq_file *s, void *unused)
 	int i;
 	int len;
 
-	for (i = 0; i < TEGRA_MAX_DRIVE_PINGROUP; i++) {
+	for (i = 0; i < drive_max; i++) {
 		u32 reg;
 
 		seq_printf(s, "\t{TEGRA_DRIVE_PINGROUP_%s",
@@ -879,7 +920,8 @@ static int dbg_drive_pinmux_show(struct seq_file *s, void *unused)
 		dbg_pad_field(s, 7 - len);
 
 
-		reg = pg_readl(drive_pingroups[i].reg);
+		reg = pg_readl(drive_pingroups[i].reg_bank,
+				drive_pingroups[i].reg);
 		if (HSM_EN(reg)) {
 			seq_printf(s, "TEGRA_HSM_ENABLE");
 			len = 16;

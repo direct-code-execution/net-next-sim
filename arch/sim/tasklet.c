@@ -22,18 +22,39 @@ void tasklet_kill(struct tasklet_struct *t)
   }
   clear_bit(TASKLET_STATE_SCHED, &t->state);
 }
+struct tasklet_struct *g_sched_events = NULL;
+static void run_tasklet_softirq(struct softirq_action *h)
+{
+  /* while (!list_empty (&g_sched_events)) */
+  /*   { */
+      struct tasklet_struct *tasklet = g_sched_events;
+      if (atomic_read (&tasklet->count) == 0)
+        {
+          // this tasklet is enabled so, we run it.
+          test_and_clear_bit (TASKLET_STATE_SCHED, &tasklet->state);
+          tasklet->func (tasklet->data);
+        }
+    /* } */
+}
+static void ensure_softirq_opened (void)
+{
+  static bool opened = false;
+  if (opened)
+    {
+      return;
+    }
+  opened = true;
+  open_softirq(TASKLET_SOFTIRQ, run_tasklet_softirq);
+}
 static void trampoline (void *context)
 {
+  ensure_softirq_opened ();
   struct tasklet_struct *tasklet = context;
   // allow the tasklet to re-schedule itself
   sim_assert (tasklet->next != 0);
   tasklet->next = 0;
-  if (atomic_read (&tasklet->count) == 0)
-    {
-      // this tasklet is enabled so, we run it.
-      test_and_clear_bit (TASKLET_STATE_SCHED, &tasklet->state);
-      tasklet->func (tasklet->data);
-    }
+  g_sched_events = tasklet;
+  raise_softirq (TASKLET_SOFTIRQ);
 }
 void __tasklet_schedule(struct tasklet_struct *t)
 {

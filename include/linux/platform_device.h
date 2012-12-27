@@ -14,6 +14,8 @@
 #include <linux/device.h>
 #include <linux/mod_devicetable.h>
 
+struct mfd_cell;
+
 struct platform_device {
 	const char	* name;
 	int		id;
@@ -22,6 +24,9 @@ struct platform_device {
 	struct resource	* resource;
 
 	const struct platform_device_id	*id_entry;
+
+	/* MFD cell pointer */
+	struct mfd_cell *mfd_cell;
 
 	/* arch specific additions */
 	struct pdev_archdata	archdata;
@@ -37,16 +42,61 @@ extern void platform_device_unregister(struct platform_device *);
 extern struct bus_type platform_bus_type;
 extern struct device platform_bus;
 
+extern void arch_setup_pdev_archdata(struct platform_device *);
 extern struct resource *platform_get_resource(struct platform_device *, unsigned int, unsigned int);
 extern int platform_get_irq(struct platform_device *, unsigned int);
 extern struct resource *platform_get_resource_byname(struct platform_device *, unsigned int, const char *);
 extern int platform_get_irq_byname(struct platform_device *, const char *);
 extern int platform_add_devices(struct platform_device **, int);
 
-extern struct platform_device *platform_device_register_resndata(
+struct platform_device_info {
+		struct device *parent;
+
+		const char *name;
+		int id;
+
+		const struct resource *res;
+		unsigned int num_res;
+
+		const void *data;
+		size_t size_data;
+		u64 dma_mask;
+};
+extern struct platform_device *platform_device_register_full(
+		const struct platform_device_info *pdevinfo);
+
+/**
+ * platform_device_register_resndata - add a platform-level device with
+ * resources and platform-specific data
+ *
+ * @parent: parent device for the device we're adding
+ * @name: base name of the device we're adding
+ * @id: instance id
+ * @res: set of resources that needs to be allocated for the device
+ * @num: number of resources
+ * @data: platform specific data for this platform device
+ * @size: size of platform specific data
+ *
+ * Returns &struct platform_device pointer on success, or ERR_PTR() on error.
+ */
+static inline struct platform_device *platform_device_register_resndata(
 		struct device *parent, const char *name, int id,
 		const struct resource *res, unsigned int num,
-		const void *data, size_t size);
+		const void *data, size_t size) {
+
+	struct platform_device_info pdevinfo = {
+		.parent = parent,
+		.name = name,
+		.id = id,
+		.res = res,
+		.num_res = num,
+		.data = data,
+		.size_data = size,
+		.dma_mask = 0,
+	};
+
+	return platform_device_register_full(&pdevinfo);
+}
 
 /**
  * platform_device_register_simple - add a platform-level device and its resources
@@ -130,8 +180,24 @@ extern void platform_driver_unregister(struct platform_driver *);
 extern int platform_driver_probe(struct platform_driver *driver,
 		int (*probe)(struct platform_device *));
 
-#define platform_get_drvdata(_dev)	dev_get_drvdata(&(_dev)->dev)
-#define platform_set_drvdata(_dev,data)	dev_set_drvdata(&(_dev)->dev, (data))
+static inline void *platform_get_drvdata(const struct platform_device *pdev)
+{
+	return dev_get_drvdata(&pdev->dev);
+}
+
+static inline void platform_set_drvdata(struct platform_device *pdev, void *data)
+{
+	dev_set_drvdata(&pdev->dev, data);
+}
+
+/* module_platform_driver() - Helper macro for drivers that don't do
+ * anything special in module init/exit.  This eliminates a lot of
+ * boilerplate.  Each module may only use this macro once, and
+ * calling it replaces module_init() and module_exit()
+ */
+#define module_platform_driver(__platform_driver) \
+	module_driver(__platform_driver, platform_driver_register, \
+			platform_driver_unregister)
 
 extern struct platform_device *platform_create_bundle(struct platform_driver *driver,
 					int (*probe)(struct platform_device *),
@@ -189,5 +255,37 @@ static inline char *early_platform_driver_setup_func(void)		\
 	return bufsiz ? buf : NULL;					\
 }
 #endif /* MODULE */
+
+#ifdef CONFIG_SUSPEND
+extern int platform_pm_suspend(struct device *dev);
+extern int platform_pm_resume(struct device *dev);
+#else
+#define platform_pm_suspend		NULL
+#define platform_pm_resume		NULL
+#endif
+
+#ifdef CONFIG_HIBERNATE_CALLBACKS
+extern int platform_pm_freeze(struct device *dev);
+extern int platform_pm_thaw(struct device *dev);
+extern int platform_pm_poweroff(struct device *dev);
+extern int platform_pm_restore(struct device *dev);
+#else
+#define platform_pm_freeze		NULL
+#define platform_pm_thaw		NULL
+#define platform_pm_poweroff		NULL
+#define platform_pm_restore		NULL
+#endif
+
+#ifdef CONFIG_PM_SLEEP
+#define USE_PLATFORM_PM_SLEEP_OPS \
+	.suspend = platform_pm_suspend, \
+	.resume = platform_pm_resume, \
+	.freeze = platform_pm_freeze, \
+	.thaw = platform_pm_thaw, \
+	.poweroff = platform_pm_poweroff, \
+	.restore = platform_pm_restore,
+#else
+#define USE_PLATFORM_PM_SLEEP_OPS
+#endif
 
 #endif /* _PLATFORM_DEVICE_H_ */

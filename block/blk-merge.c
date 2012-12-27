@@ -21,7 +21,7 @@ static unsigned int __blk_recalc_rq_segments(struct request_queue *q,
 		return 0;
 
 	fbio = bio;
-	cluster = test_bit(QUEUE_FLAG_CLUSTER, &q->queue_flags);
+	cluster = blk_queue_cluster(q);
 	seg_size = 0;
 	nr_phys_segs = 0;
 	for_each_bio(bio) {
@@ -87,7 +87,7 @@ EXPORT_SYMBOL(blk_recount_segments);
 static int blk_phys_contig_segment(struct request_queue *q, struct bio *bio,
 				   struct bio *nxt)
 {
-	if (!test_bit(QUEUE_FLAG_CLUSTER, &q->queue_flags))
+	if (!blk_queue_cluster(q))
 		return 0;
 
 	if (bio->bi_seg_back_size + nxt->bi_seg_front_size >
@@ -123,7 +123,7 @@ int blk_rq_map_sg(struct request_queue *q, struct request *rq,
 	int nsegs, cluster;
 
 	nsegs = 0;
-	cluster = test_bit(QUEUE_FLAG_CLUSTER, &q->queue_flags);
+	cluster = blk_queue_cluster(q);
 
 	/*
 	 * for each bio in rq
@@ -205,12 +205,11 @@ static inline int ll_new_hw_segment(struct request_queue *q,
 {
 	int nr_phys_segs = bio_phys_segments(q, bio);
 
-	if (req->nr_phys_segments + nr_phys_segs > queue_max_segments(q)) {
-		req->cmd_flags |= REQ_NOMERGE;
-		if (req == q->last_merge)
-			q->last_merge = NULL;
-		return 0;
-	}
+	if (req->nr_phys_segments + nr_phys_segs > queue_max_segments(q))
+		goto no_merge;
+
+	if (bio_integrity(bio) && blk_integrity_merge_bio(q, req, bio))
+		goto no_merge;
 
 	/*
 	 * This will form the start of a new hw segment.  Bump both
@@ -218,6 +217,12 @@ static inline int ll_new_hw_segment(struct request_queue *q,
 	 */
 	req->nr_phys_segments += nr_phys_segs;
 	return 1;
+
+no_merge:
+	req->cmd_flags |= REQ_NOMERGE;
+	if (req == q->last_merge)
+		q->last_merge = NULL;
+	return 0;
 }
 
 int ll_back_merge_fn(struct request_queue *q, struct request *req,
@@ -301,6 +306,9 @@ static int ll_merge_requests_fn(struct request_queue *q, struct request *req,
 	if (total_phys_segments > queue_max_segments(q))
 		return 0;
 
+	if (blk_integrity_rq(req) && blk_integrity_merge_rq(q, req, next))
+		return 0;
+
 	/* Merge is OK... */
 	req->nr_phys_segments = total_phys_segments;
 	return 1;
@@ -343,11 +351,12 @@ static void blk_account_io_merge(struct request *req)
 		int cpu;
 
 		cpu = part_stat_lock();
-		part = disk_map_sector_rcu(req->rq_disk, blk_rq_pos(req));
+		part = req->part;
 
 		part_round_stats(cpu, part);
 		part_dec_in_flight(part, rq_data_dir(req));
 
+		hd_struct_put(part);
 		part_stat_unlock();
 	}
 }
@@ -382,9 +391,6 @@ static int attempt_merge(struct request_queue *q, struct request *req,
 	if (rq_data_dir(req) != rq_data_dir(next)
 	    || req->rq_disk != next->rq_disk
 	    || next->special)
-		return 0;
-
-	if (blk_integrity_rq(req) != blk_integrity_rq(next))
 		return 0;
 
 	/*
@@ -458,4 +464,47 @@ int attempt_front_merge(struct request_queue *q, struct request *rq)
 		return attempt_merge(q, prev, rq);
 
 	return 0;
+}
+
+int blk_attempt_req_merge(struct request_queue *q, struct request *rq,
+			  struct request *next)
+{
+	return attempt_merge(q, rq, next);
+}
+
+bool blk_rq_merge_ok(struct request *rq, struct bio *bio)
+{
+	if (!rq_mergeable(rq))
+		return false;
+
+	/* don't merge file system requests and discard requests */
+	if ((bio->bi_rw & REQ_DISCARD) != (rq->bio->bi_rw & REQ_DISCARD))
+		return false;
+
+	/* don't merge discard requests and secure discard requests */
+	if ((bio->bi_rw & REQ_SECURE) != (rq->bio->bi_rw & REQ_SECURE))
+		return false;
+
+	/* different data direction or already started, don't merge */
+	if (bio_data_dir(bio) != rq_data_dir(rq))
+		return false;
+
+	/* must be same device and not a special request */
+	if (rq->rq_disk != bio->bi_bdev->bd_disk || rq->special)
+		return false;
+
+	/* only merge integrity protected bio into ditto rq */
+	if (bio_integrity(bio) != blk_integrity_rq(rq))
+		return false;
+
+	return true;
+}
+
+int blk_try_merge(struct request *rq, struct bio *bio)
+{
+	if (blk_rq_pos(rq) + blk_rq_sectors(rq) == bio->bi_sector)
+		return ELEVATOR_BACK_MERGE;
+	else if (blk_rq_pos(rq) - bio_sectors(bio) == bio->bi_sector)
+		return ELEVATOR_FRONT_MERGE;
+	return ELEVATOR_NO_MERGE;
 }

@@ -32,7 +32,10 @@
 #include <linux/gpio.h>
 #include <linux/pda_power.h>
 #include <linux/spi/spi.h>
+#include <linux/spi/pxa2xx_spi.h>
 #include <linux/input/matrix_keypad.h>
+#include <linux/i2c/pxa-i2c.h>
+#include <linux/usb/gpio_vbus.h>
 
 #include <asm/setup.h>
 #include <asm/mach-types.h>
@@ -40,12 +43,11 @@
 #include <mach/pxa25x.h>
 #include <mach/reset.h>
 #include <mach/irda.h>
-#include <plat/i2c.h>
 #include <mach/mmc.h>
 #include <mach/udc.h>
 #include <mach/tosa_bt.h>
-#include <mach/pxa2xx_spi.h>
 #include <mach/audio.h>
+#include <mach/smemc.h>
 
 #include <asm/mach/arch.h>
 #include <mach/tosa.h>
@@ -239,10 +241,18 @@ static struct scoop_pcmcia_config tosa_pcmcia_config = {
 /*
  * USB Device Controller
  */
-static struct pxa2xx_udc_mach_info udc_info __initdata = {
+static struct gpio_vbus_mach_info tosa_udc_info = {
 	.gpio_pullup		= TOSA_GPIO_USB_PULLUP,
 	.gpio_vbus		= TOSA_GPIO_USB_IN,
 	.gpio_vbus_inverted	= 1,
+};
+
+static struct platform_device tosa_gpio_vbus = {
+	.name	= "gpio-vbus",
+	.id	= -1,
+	.dev	= {
+		.platform_data	= &tosa_udc_info,
+	},
 };
 
 /*
@@ -394,8 +404,8 @@ static struct pda_power_pdata tosa_power_data = {
 static struct resource tosa_power_resource[] = {
 	{
 		.name		= "ac",
-		.start		= gpio_to_irq(TOSA_GPIO_AC_IN),
-		.end		= gpio_to_irq(TOSA_GPIO_AC_IN),
+		.start		= PXA_GPIO_TO_IRQ(TOSA_GPIO_AC_IN),
+		.end		= PXA_GPIO_TO_IRQ(TOSA_GPIO_AC_IN),
 		.flags		= IORESOURCE_IRQ |
 				  IORESOURCE_IRQ_HIGHEDGE |
 				  IORESOURCE_IRQ_LOWEDGE,
@@ -874,6 +884,16 @@ static struct platform_device sharpsl_rom_device = {
 	.dev.platform_data = &sharpsl_rom_data,
 };
 
+static struct platform_device wm9712_device = {
+	.name	= "wm9712-codec",
+	.id	= -1,
+};
+
+static struct platform_device tosa_audio_device = {
+	.name	= "tosa-audio",
+	.id	= -1,
+};
+
 static struct platform_device *devices[] __initdata = {
 	&tosascoop_device,
 	&tosascoop_jc_device,
@@ -884,18 +904,23 @@ static struct platform_device *devices[] __initdata = {
 	&tosaled_device,
 	&tosa_bt_device,
 	&sharpsl_rom_device,
+	&wm9712_device,
+	&tosa_gpio_vbus,
+	&tosa_audio_device,
 };
 
 static void tosa_poweroff(void)
 {
-	arm_machine_restart('g', NULL);
+	pxa_restart('g', NULL);
 }
 
 static void tosa_restart(char mode, const char *cmd)
 {
+	uint32_t msc0 = __raw_readl(MSC0);
+
 	/* Bootloader magic for a reboot */
-	if((MSC0 & 0xffff0000) == 0x7ff00000)
-		MSC0 = (MSC0 & 0xffff) | 0x7ee00000;
+	if((msc0 & 0xffff0000) == 0x7ff00000)
+		__raw_writel((msc0 & 0xffff) | 0x7ee00000, MSC0);
 
 	tosa_poweroff();
 }
@@ -916,7 +941,6 @@ static void __init tosa_init(void)
 	init_gpio_reset(TOSA_GPIO_ON_RESET, 0, 0);
 
 	pm_power_off = tosa_poweroff;
-	arm_pm_restart = tosa_restart;
 
 	PCFR |= PCFR_OPDE;
 
@@ -928,7 +952,6 @@ static void __init tosa_init(void)
 	dummy = gpiochip_reserve(TOSA_TC6393XB_GPIO_BASE, 16);
 
 	pxa_set_mci_info(&tosa_mci_platform_data);
-	pxa_set_udc_info(&udc_info);
 	pxa_set_ficp_info(&tosa_ficp_platform_data);
 	pxa_set_i2c_info(NULL);
 	pxa_set_ac97_info(NULL);
@@ -942,8 +965,8 @@ static void __init tosa_init(void)
 	platform_add_devices(devices, ARRAY_SIZE(devices));
 }
 
-static void __init fixup_tosa(struct machine_desc *desc,
-		struct tag *tags, char **cmdline, struct meminfo *mi)
+static void __init fixup_tosa(struct tag *tags, char **cmdline,
+			      struct meminfo *mi)
 {
 	sharpsl_save_param();
 	mi->nr_banks=1;
@@ -952,11 +975,13 @@ static void __init fixup_tosa(struct machine_desc *desc,
 }
 
 MACHINE_START(TOSA, "SHARP Tosa")
-	.phys_io	= 0x40000000,
-	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
+	.restart_mode	= 'g',
 	.fixup          = fixup_tosa,
-	.map_io         = pxa_map_io,
+	.map_io         = pxa25x_map_io,
+	.nr_irqs	= TOSA_NR_IRQS,
 	.init_irq       = pxa25x_init_irq,
+	.handle_irq       = pxa25x_handle_irq,
 	.init_machine   = tosa_init,
 	.timer          = &pxa_timer,
+	.restart	= tosa_restart,
 MACHINE_END

@@ -7,8 +7,8 @@ extern struct sys_timer pxa910_timer;
 extern void __init pxa910_init_irq(void);
 
 #include <linux/i2c.h>
+#include <linux/i2c/pxa-i2c.h>
 #include <mach/devices.h>
-#include <plat/i2c.h>
 #include <plat/pxa3xx_nand.h>
 
 extern struct pxa_device_desc pxa910_device_uart1;
@@ -20,6 +20,9 @@ extern struct pxa_device_desc pxa910_device_pwm2;
 extern struct pxa_device_desc pxa910_device_pwm3;
 extern struct pxa_device_desc pxa910_device_pwm4;
 extern struct pxa_device_desc pxa910_device_nand;
+
+extern struct platform_device pxa910_device_gpio;
+extern struct platform_device pxa910_device_rtc;
 
 static inline int pxa910_add_uart(int id)
 {

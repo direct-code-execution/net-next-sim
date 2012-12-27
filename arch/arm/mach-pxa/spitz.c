@@ -19,14 +19,18 @@
 #include <linux/gpio.h>
 #include <linux/leds.h>
 #include <linux/i2c.h>
+#include <linux/i2c/pxa-i2c.h>
 #include <linux/i2c/pca953x.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
 #include <linux/spi/corgi_lcd.h>
-#include <linux/mtd/physmap.h>
+#include <linux/spi/pxa2xx_spi.h>
 #include <linux/mtd/sharpsl.h>
+#include <linux/mtd/physmap.h>
 #include <linux/input/matrix_keypad.h>
 #include <linux/regulator/machine.h>
+#include <linux/io.h>
+#include <linux/module.h>
 
 #include <asm/setup.h>
 #include <asm/mach-types.h>
@@ -41,11 +45,9 @@
 #include <mach/mmc.h>
 #include <mach/ohci.h>
 #include <mach/pxafb.h>
-#include <mach/pxa2xx_spi.h>
 #include <mach/spitz.h>
 #include <mach/sharpsl_pm.h>
-
-#include <plat/i2c.h>
+#include <mach/smemc.h>
 
 #include "generic.h"
 #include "devices.h"
@@ -550,7 +552,7 @@ static struct spi_board_info spitz_spi_devices[] = {
 		.chip_select		= 0,
 		.platform_data		= &spitz_ads7846_info,
 		.controller_data	= &spitz_ads7846_chip,
-		.irq			= gpio_to_irq(SPITZ_GPIO_TP_INT),
+		.irq			= PXA_GPIO_TO_IRQ(SPITZ_GPIO_TP_INT),
 	}, {
 		.modalias		= "corgi-lcd",
 		.max_speed_hz		= 50000,
@@ -723,7 +725,7 @@ static struct pxafb_mach_info spitz_pxafb_info = {
 
 static void __init spitz_lcd_init(void)
 {
-	set_pxa_fb_info(&spitz_pxafb_info);
+	pxa_set_fb_info(NULL, &spitz_pxafb_info);
 }
 #else
 static inline void spitz_lcd_init(void) {}
@@ -924,14 +926,15 @@ static inline void spitz_i2c_init(void) {}
  ******************************************************************************/
 static void spitz_poweroff(void)
 {
-	arm_machine_restart('g', NULL);
+	pxa_restart('g', NULL);
 }
 
 static void spitz_restart(char mode, const char *cmd)
 {
+	uint32_t msc0 = __raw_readl(MSC0);
 	/* Bootloader magic for a reboot */
-	if ((MSC0 & 0xffff0000) == 0x7ff00000)
-		MSC0 = (MSC0 & 0xffff) | 0x7ee00000;
+	if ((msc0 & 0xffff0000) == 0x7ff00000)
+		__raw_writel((msc0 & 0xffff) | 0x7ee00000, MSC0);
 
 	spitz_poweroff();
 }
@@ -940,7 +943,6 @@ static void __init spitz_init(void)
 {
 	init_gpio_reset(SPITZ_GPIO_ON_RESET, 1, 0);
 	pm_power_off = spitz_poweroff;
-	arm_pm_restart = spitz_restart;
 
 	PMCR = 0x00;
 
@@ -968,8 +970,8 @@ static void __init spitz_init(void)
 	spitz_i2c_init();
 }
 
-static void __init spitz_fixup(struct machine_desc *desc,
-		struct tag *tags, char **cmdline, struct meminfo *mi)
+static void __init spitz_fixup(struct tag *tags, char **cmdline,
+			       struct meminfo *mi)
 {
 	sharpsl_save_param();
 	mi->nr_banks = 1;
@@ -979,36 +981,42 @@ static void __init spitz_fixup(struct machine_desc *desc,
 
 #ifdef CONFIG_MACH_SPITZ
 MACHINE_START(SPITZ, "SHARP Spitz")
-	.phys_io	= 0x40000000,
-	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
+	.restart_mode	= 'g',
 	.fixup		= spitz_fixup,
-	.map_io		= pxa_map_io,
+	.map_io		= pxa27x_map_io,
+	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.init_machine	= spitz_init,
 	.timer		= &pxa_timer,
+	.restart	= spitz_restart,
 MACHINE_END
 #endif
 
 #ifdef CONFIG_MACH_BORZOI
 MACHINE_START(BORZOI, "SHARP Borzoi")
-	.phys_io	= 0x40000000,
-	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
+	.restart_mode	= 'g',
 	.fixup		= spitz_fixup,
-	.map_io		= pxa_map_io,
+	.map_io		= pxa27x_map_io,
+	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.init_machine	= spitz_init,
 	.timer		= &pxa_timer,
+	.restart	= spitz_restart,
 MACHINE_END
 #endif
 
 #ifdef CONFIG_MACH_AKITA
 MACHINE_START(AKITA, "SHARP Akita")
-	.phys_io	= 0x40000000,
-	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
+	.restart_mode	= 'g',
 	.fixup		= spitz_fixup,
-	.map_io		= pxa_map_io,
+	.map_io		= pxa27x_map_io,
+	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.init_machine	= spitz_init,
 	.timer		= &pxa_timer,
+	.restart	= spitz_restart,
 MACHINE_END
 #endif

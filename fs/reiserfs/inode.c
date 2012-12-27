@@ -4,11 +4,10 @@
 
 #include <linux/time.h>
 #include <linux/fs.h>
-#include <linux/reiserfs_fs.h>
-#include <linux/reiserfs_acl.h>
-#include <linux/reiserfs_xattr.h>
+#include "reiserfs.h"
+#include "acl.h"
+#include "xattr.h"
 #include <linux/exportfs.h>
-#include <linux/smp_lock.h>
 #include <linux/pagemap.h>
 #include <linux/highmem.h>
 #include <linux/slab.h>
@@ -22,8 +21,6 @@
 
 int reiserfs_commit_write(struct file *f, struct page *page,
 			  unsigned from, unsigned to);
-int reiserfs_prepare_write(struct file *f, struct page *page,
-			   unsigned from, unsigned to);
 
 void reiserfs_evict_inode(struct inode *inode)
 {
@@ -165,7 +162,7 @@ inline void make_le_item_head(struct item_head *ih, const struct cpu_key *key,
 ** but tail is still sitting in a direct item, and we can't write to
 ** it.  So, look through this page, and check all the mapped buffers
 ** to make sure they have valid block numbers.  Any that don't need
-** to be unmapped, so that block_prepare_write will correctly call
+** to be unmapped, so that __block_write_begin will correctly call
 ** reiserfs_get_block to convert the tail into an unformatted node
 */
 static inline void fix_tail_page_for_writing(struct page *page)
@@ -439,13 +436,13 @@ static int reiserfs_bmap(struct inode *inode, sector_t block,
 }
 
 /* special version of get_block that is only used by grab_tail_page right
-** now.  It is sent to block_prepare_write, and when you try to get a
+** now.  It is sent to __block_write_begin, and when you try to get a
 ** block past the end of the file (or a block from a hole) it returns
-** -ENOENT instead of a valid buffer.  block_prepare_write expects to
+** -ENOENT instead of a valid buffer.  __block_write_begin expects to
 ** be able to do i/o on the buffers returned, unless an error value
 ** is also returned.
 **
-** So, this allows block_prepare_write to be used for reading a single block
+** So, this allows __block_write_begin to be used for reading a single block
 ** in a page.  Where it does not produce a valid page for holes, or past the
 ** end of the file.  This turns out to be exactly what we need for reading
 ** tails for conversion.
@@ -558,11 +555,12 @@ static int convert_tail_for_hole(struct inode *inode,
 	 **
 	 ** We must fix the tail page for writing because it might have buffers
 	 ** that are mapped, but have a block number of 0.  This indicates tail
-	 ** data that has been read directly into the page, and block_prepare_write
-	 ** won't trigger a get_block in this case.
+	 ** data that has been read directly into the page, and
+	 ** __block_write_begin won't trigger a get_block in this case.
 	 */
 	fix_tail_page_for_writing(tail_page);
-	retval = reiserfs_prepare_write(NULL, tail_page, tail_start, tail_end);
+	retval = __reiserfs_write_begin(tail_page, tail_start,
+				      tail_end - tail_start);
 	if (retval)
 		goto unlock;
 
@@ -1156,7 +1154,7 @@ static void init_inode(struct inode *inode, struct treepath *path)
 		set_inode_item_key_version(inode, KEY_FORMAT_3_5);
 		set_inode_sd_version(inode, STAT_DATA_V1);
 		inode->i_mode = sd_v1_mode(sd);
-		inode->i_nlink = sd_v1_nlink(sd);
+		set_nlink(inode, sd_v1_nlink(sd));
 		inode->i_uid = sd_v1_uid(sd);
 		inode->i_gid = sd_v1_gid(sd);
 		inode->i_size = sd_v1_size(sd);
@@ -1201,7 +1199,7 @@ static void init_inode(struct inode *inode, struct treepath *path)
 		struct stat_data *sd = (struct stat_data *)B_I_PITEM(bh, ih);
 
 		inode->i_mode = sd_v2_mode(sd);
-		inode->i_nlink = sd_v2_nlink(sd);
+		set_nlink(inode, sd_v2_nlink(sd));
 		inode->i_uid = sd_v2_uid(sd);
 		inode->i_size = sd_v2_size(sd);
 		inode->i_gid = sd_v2_gid(sd);
@@ -1446,7 +1444,7 @@ void reiserfs_read_locked_inode(struct inode *inode,
 		/* a stale NFS handle can trigger this without it being an error */
 		pathrelse(&path_to_sd);
 		reiserfs_make_bad_inode(inode);
-		inode->i_nlink = 0;
+		clear_nlink(inode);
 		return;
 	}
 
@@ -1477,6 +1475,11 @@ void reiserfs_read_locked_inode(struct inode *inode,
 
 	reiserfs_check_path(&path_to_sd);	/* init inode should be relsing */
 
+	/*
+	 * Stat data v1 doesn't support ACLs.
+	 */
+	if (get_inode_sd_version(inode) == STAT_DATA_V1)
+		cache_no_acl(inode);
 }
 
 /**
@@ -1595,8 +1598,13 @@ int reiserfs_encode_fh(struct dentry *dentry, __u32 * data, int *lenp,
 	struct inode *inode = dentry->d_inode;
 	int maxlen = *lenp;
 
-	if (maxlen < 3)
+	if (need_parent && (maxlen < 5)) {
+		*lenp = 5;
 		return 255;
+	} else if (maxlen < 3) {
+		*lenp = 3;
+		return 255;
+	}
 
 	data[0] = inode->i_ino;
 	data[1] = le32_to_cpu(INODE_PKEY(inode)->k_dir_id);
@@ -1758,7 +1766,7 @@ static int reiserfs_new_symlink(struct reiserfs_transaction_handle *th, struct i
    for the fresh inode.  This can only be done outside a transaction, so
    if we return non-zero, we also end the transaction.  */
 int reiserfs_new_inode(struct reiserfs_transaction_handle *th,
-		       struct inode *dir, int mode, const char *symname,
+		       struct inode *dir, umode_t mode, const char *symname,
 		       /* 0 for regular, EMTRY_DIR_SIZE for dirs,
 		          strlen (symname) for symlinks) */
 		       loff_t i_size, struct dentry *dentry,
@@ -1824,7 +1832,7 @@ int reiserfs_new_inode(struct reiserfs_transaction_handle *th,
 #endif
 
 	/* fill stat data */
-	inode->i_nlink = (S_ISDIR(mode) ? 2 : 1);
+	set_nlink(inode, (S_ISDIR(mode) ? 2 : 1));
 
 	/* uid and gid must already be set by the caller for quota init */
 
@@ -1979,7 +1987,7 @@ int reiserfs_new_inode(struct reiserfs_transaction_handle *th,
 	make_bad_inode(inode);
 
       out_inserted_sd:
-	inode->i_nlink = 0;
+	clear_nlink(inode);
 	th->t_trans_id = 0;	/* so the caller can't use this handle later */
 	unlock_new_inode(inode); /* OK to do even if we hadn't locked it */
 	iput(inode);
@@ -2033,7 +2041,7 @@ static int grab_tail_page(struct inode *inode,
 	/* start within the page of the last block in the file */
 	start = (offset / blocksize) * blocksize;
 
-	error = block_prepare_write(page, start, offset,
+	error = __block_write_begin(page, start, offset - start,
 				    reiserfs_get_block_create_0);
 	if (error)
 		goto unlock;
@@ -2438,7 +2446,7 @@ static int reiserfs_write_full_page(struct page *page,
 		/* from this point on, we know the buffer is mapped to a
 		 * real block and not a direct item
 		 */
-		if (wbc->sync_mode != WB_SYNC_NONE || !wbc->nonblocking) {
+		if (wbc->sync_mode != WB_SYNC_NONE) {
 			lock_buffer(bh);
 		} else {
 			if (!trylock_buffer(bh)) {
@@ -2628,8 +2636,7 @@ static int reiserfs_write_begin(struct file *file,
 	return ret;
 }
 
-int reiserfs_prepare_write(struct file *f, struct page *page,
-			   unsigned from, unsigned to)
+int __reiserfs_write_begin(struct page *page, unsigned from, unsigned len)
 {
 	struct inode *inode = page->mapping->host;
 	int ret;
@@ -2650,7 +2657,7 @@ int reiserfs_prepare_write(struct file *f, struct page *page,
 		th->t_refcount++;
 	}
 
-	ret = block_prepare_write(page, from, to, reiserfs_get_block);
+	ret = __block_write_begin(page, from, len, reiserfs_get_block);
 	if (ret && reiserfs_transaction_running(inode->i_sb)) {
 		struct reiserfs_transaction_handle *th = current->journal_info;
 		/* this gets a little ugly.  If reiserfs_get_block returned an
@@ -3066,9 +3073,8 @@ static ssize_t reiserfs_direct_IO(int rw, struct kiocb *iocb,
 	struct inode *inode = file->f_mapping->host;
 	ssize_t ret;
 
-	ret = blockdev_direct_IO(rw, iocb, inode, inode->i_sb->s_bdev, iov,
-				  offset, nr_segs,
-				  reiserfs_get_blocks_direct_io, NULL);
+	ret = blockdev_direct_IO(rw, iocb, inode, iov, offset, nr_segs,
+				  reiserfs_get_blocks_direct_io);
 
 	/*
 	 * In case of error extending write may have instantiated a few
@@ -3112,6 +3118,9 @@ int reiserfs_setattr(struct dentry *dentry, struct iattr *attr)
 			error = -EFBIG;
 			goto out;
 		}
+
+		inode_dio_wait(inode);
+
 		/* fill in hole pointers in the expanding truncate case. */
 		if (attr->ia_size > inode->i_size) {
 			error = generic_cont_expand_simple(inode, attr->ia_size);
@@ -3215,7 +3224,6 @@ const struct address_space_operations reiserfs_address_space_operations = {
 	.readpages = reiserfs_readpages,
 	.releasepage = reiserfs_releasepage,
 	.invalidatepage = reiserfs_invalidatepage,
-	.sync_page = block_sync_page,
 	.write_begin = reiserfs_write_begin,
 	.write_end = reiserfs_write_end,
 	.bmap = reiserfs_aop_bmap,

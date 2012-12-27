@@ -8,7 +8,6 @@
 #include <linux/quotaops.h>
 #include <linux/module.h>
 
-#define MLOG_MASK_PREFIX ML_QUOTA
 #include <cluster/masklog.h>
 
 #include "ocfs2_fs.h"
@@ -23,6 +22,7 @@
 #include "quota.h"
 #include "uptodate.h"
 #include "super.h"
+#include "ocfs2_trace.h"
 
 /* Number of local quota structures per block */
 static inline unsigned int ol_quota_entries_per_block(struct super_block *sb)
@@ -404,7 +404,9 @@ struct ocfs2_quota_recovery *ocfs2_begin_quota_recovery(
 	int status = 0;
 	struct ocfs2_quota_recovery *rec;
 
-	mlog(ML_NOTICE, "Beginning quota recovery in slot %u\n", slot_num);
+	printk(KERN_NOTICE "ocfs2: Beginning quota recovery on device (%s) for "
+	       "slot %u\n", osb->dev_str, slot_num);
+
 	rec = ocfs2_alloc_quota_recovery();
 	if (!rec)
 		return ERR_PTR(-ENOMEM);
@@ -475,7 +477,7 @@ static int ocfs2_recover_local_quota_file(struct inode *lqinode,
 	struct ocfs2_recovery_chunk *rchunk, *next;
 	qsize_t spacechange, inodechange;
 
-	mlog_entry("ino=%lu type=%u", (unsigned long)lqinode->i_ino, type);
+	trace_ocfs2_recover_local_quota_file((unsigned long)lqinode->i_ino, type);
 
 	list_for_each_entry_safe(rchunk, next, &(rec->r_list[type]), rc_list) {
 		chunk = rchunk->rc_chunk;
@@ -549,8 +551,8 @@ static int ocfs2_recover_local_quota_file(struct inode *lqinode,
 				goto out_commit;
 			}
 			lock_buffer(qbh);
-			WARN_ON(!ocfs2_test_bit(bit, dchunk->dqc_bitmap));
-			ocfs2_clear_bit(bit, dchunk->dqc_bitmap);
+			WARN_ON(!ocfs2_test_bit_unaligned(bit, dchunk->dqc_bitmap));
+			ocfs2_clear_bit_unaligned(bit, dchunk->dqc_bitmap);
 			le32_add_cpu(&dchunk->dqc_free, 1);
 			unlock_buffer(qbh);
 			ocfs2_journal_dirty(handle, qbh);
@@ -575,7 +577,8 @@ out_put_bh:
 	}
 	if (status < 0)
 		free_recovery_list(&(rec->r_list[type]));
-	mlog_exit(status);
+	if (status)
+		mlog_errno(status);
 	return status;
 }
 
@@ -595,12 +598,14 @@ int ocfs2_finish_quota_recovery(struct ocfs2_super *osb,
 	struct inode *lqinode;
 	unsigned int flags;
 
-	mlog(ML_NOTICE, "Finishing quota recovery in slot %u\n", slot_num);
+	printk(KERN_NOTICE "ocfs2: Finishing quota recovery on device (%s) for "
+	       "slot %u\n", osb->dev_str, slot_num);
+
 	mutex_lock(&sb_dqopt(sb)->dqonoff_mutex);
 	for (type = 0; type < MAXQUOTAS; type++) {
 		if (list_empty(&(rec->r_list[type])))
 			continue;
-		mlog(0, "Recovering quota in slot %d\n", slot_num);
+		trace_ocfs2_finish_quota_recovery(slot_num);
 		lqinode = ocfs2_get_system_file_inode(osb, ino[type], slot_num);
 		if (!lqinode) {
 			status = -ENOENT;
@@ -611,8 +616,9 @@ int ocfs2_finish_quota_recovery(struct ocfs2_super *osb,
 		/* Someone else is holding the lock? Then he must be
 		 * doing the recovery. Just skip the file... */
 		if (status == -EAGAIN) {
-			mlog(ML_NOTICE, "skipping quota recovery for slot %d "
-			     "because quota file is locked.\n", slot_num);
+			printk(KERN_NOTICE "ocfs2: Skipping quota recovery on "
+			       "device (%s) for slot %d because quota file is "
+			       "locked.\n", osb->dev_str, slot_num);
 			status = 0;
 			goto out_put;
 		} else if (status < 0) {
@@ -882,9 +888,10 @@ static void olq_set_dquot(struct buffer_head *bh, void *private)
 	dqblk->dqb_inodemod = cpu_to_le64(od->dq_dquot.dq_dqb.dqb_curinodes -
 					  od->dq_originodes);
 	spin_unlock(&dq_data_lock);
-	mlog(0, "Writing local dquot %u space %lld inodes %lld\n",
-	     od->dq_dquot.dq_id, (long long)le64_to_cpu(dqblk->dqb_spacemod),
-	     (long long)le64_to_cpu(dqblk->dqb_inodemod));
+	trace_olq_set_dquot(
+		(unsigned long long)le64_to_cpu(dqblk->dqb_spacemod),
+		(unsigned long long)le64_to_cpu(dqblk->dqb_inodemod),
+		od->dq_dquot.dq_id);
 }
 
 /* Write dquot to local quota file */
@@ -942,7 +949,7 @@ static struct ocfs2_quota_chunk *ocfs2_find_free_entry(struct super_block *sb,
 		      * ol_quota_entries_per_block(sb);
 	}
 
-	found = ocfs2_find_next_zero_bit(dchunk->dqc_bitmap, len, 0);
+	found = ocfs2_find_next_zero_bit_unaligned(dchunk->dqc_bitmap, len, 0);
 	/* We failed? */
 	if (found == len) {
 		mlog(ML_ERROR, "Did not find empty entry in chunk %d with %u"
@@ -1206,7 +1213,7 @@ static void olq_alloc_dquot(struct buffer_head *bh, void *private)
 	struct ocfs2_local_disk_chunk *dchunk;
 
 	dchunk = (struct ocfs2_local_disk_chunk *)bh->b_data;
-	ocfs2_set_bit(*offset, dchunk->dqc_bitmap);
+	ocfs2_set_bit_unaligned(*offset, dchunk->dqc_bitmap);
 	le32_add_cpu(&dchunk->dqc_free, -1);
 }
 
@@ -1287,7 +1294,7 @@ int ocfs2_local_release_dquot(handle_t *handle, struct dquot *dquot)
 			(od->dq_chunk->qc_headerbh->b_data);
 	/* Mark structure as freed */
 	lock_buffer(od->dq_chunk->qc_headerbh);
-	ocfs2_clear_bit(offset, dchunk->dqc_bitmap);
+	ocfs2_clear_bit_unaligned(offset, dchunk->dqc_bitmap);
 	le32_add_cpu(&dchunk->dqc_free, 1);
 	unlock_buffer(od->dq_chunk->qc_headerbh);
 	ocfs2_journal_dirty(handle, od->dq_chunk->qc_headerbh);

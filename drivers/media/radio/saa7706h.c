@@ -376,7 +376,7 @@ static int __devinit saa7706h_probe(struct i2c_client *client,
 	v4l_info(client, "chip found @ 0x%02x (%s)\n",
 			client->addr << 1, client->adapter->name);
 
-	state = kmalloc(sizeof(struct saa7706h_state), GFP_KERNEL);
+	state = kzalloc(sizeof(struct saa7706h_state), GFP_KERNEL);
 	if (state == NULL)
 		return -ENOMEM;
 	sd = &state->sd;
@@ -434,18 +434,7 @@ static struct i2c_driver saa7706h_driver = {
 	.id_table	= saa7706h_id,
 };
 
-static __init int saa7706h_init(void)
-{
-	return i2c_add_driver(&saa7706h_driver);
-}
-
-static __exit void saa7706h_exit(void)
-{
-	i2c_del_driver(&saa7706h_driver);
-}
-
-module_init(saa7706h_init);
-module_exit(saa7706h_exit);
+module_i2c_driver(saa7706h_driver);
 
 MODULE_DESCRIPTION("SAA7706H Car Radio DSP driver");
 MODULE_AUTHOR("Mocean Laboratories");

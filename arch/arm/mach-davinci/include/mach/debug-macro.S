@@ -18,8 +18,6 @@
 
 #include <linux/serial_reg.h>
 
-#include <asm/memory.h>
-
 #include <mach/serial.h>
 
 #define UART_SHIFT	2
@@ -29,38 +27,41 @@ davinci_uart_phys:	.word	0
 davinci_uart_virt:	.word	0
 		.popsection
 
-		.macro addruart, rx, tmp
+		.macro addruart, rp, rv, tmp
 
 		/* Use davinci_uart_phys/virt if already configured */
-10:		mrc	p15, 0, \rx, c1, c0
-		tst	\rx, #1			@ MMU enabled?
-		ldreq	\rx, =__virt_to_phys(davinci_uart_phys)
-		ldrne	\rx, =davinci_uart_virt
-		ldr	\rx, [\rx]
-		cmp	\rx, #0			@ is port configured?
-		bne	99f			@ already configured
+10:		adr	\rp, 99f		@ get effective addr of 99f
+		ldr	\rv, [\rp]		@ get absolute addr of 99f
+		sub	\rv, \rv, \rp		@ offset between the two
+		ldr	\rp, [\rp, #4]		@ abs addr of omap_uart_phys
+		sub	\tmp, \rp, \rv		@ make it effective
+		ldr	\rp, [\tmp, #0]		@ davinci_uart_phys
+		ldr	\rv, [\tmp, #4]		@ davinci_uart_virt
+		cmp	\rp, #0			@ is port configured?
+		cmpne	\rv, #0
+		bne	100f			@ already configured
 
-		mrc	p15, 0, \rx, c1, c0
-		tst	\rx, #1			@ MMU enabled?
+		/* Check the debug UART address set in uncompress.h */
+		and	\rp, pc, #0xff000000
+		ldr	\rv, =DAVINCI_UART_INFO_OFS
+		add	\rp, \rp, \rv
 
 		/* Copy uart phys address from decompressor uart info */
-		ldreq	\tmp, =__virt_to_phys(davinci_uart_phys)
-		ldrne	\tmp, =davinci_uart_phys
-		ldreq	\rx, =DAVINCI_UART_INFO
-		ldrne	\rx, =__phys_to_virt(DAVINCI_UART_INFO)
-		ldr	\rx, [\rx, #0]
-		str	\rx, [\tmp]
+		ldr	\rv, [\rp, #0]
+		str	\rv, [\tmp, #0]
 
 		/* Copy uart virt address from decompressor uart info */
-		ldreq	\tmp, =__virt_to_phys(davinci_uart_virt)
-		ldrne	\tmp, =davinci_uart_virt
-		ldreq	\rx, =DAVINCI_UART_INFO
-		ldrne	\rx, =__phys_to_virt(DAVINCI_UART_INFO)
-		ldr	\rx, [\rx, #4]
-		str	\rx, [\tmp]
+		ldr	\rv, [\rp, #4]
+		str	\rv, [\tmp, #4]
 
 		b	10b
-99:
+
+		.align
+99:		.word	.
+		.word	davinci_uart_phys
+		.ltorg
+
+100:
 		.endm
 
 		.macro	senduart,rd,rx

@@ -6,8 +6,7 @@ config CXT1E1
       channelized stream WAN adapter card which contains a HDLC/Transparent
       mode controller.
 
-      If you want to compile this driver as a module
-      say M here and read <file:Documentation/modules.txt>.
+      If you want to compile this driver as a module say M here.
       The module will be called 'cxt1e1'.
 
       If unsure, say N.
@@ -18,5 +17,5 @@ config SBE_PMCC4_NCOMM
 	---help---
       SBE supplies optional support for NCOMM products.
 
-      If you have purchased this optional support you must say Y or M
+      If you have purchased this optional support you must say Y
       here to allow the driver to operate with the NCOMM product.

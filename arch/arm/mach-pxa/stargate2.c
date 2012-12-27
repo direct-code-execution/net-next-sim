@@ -25,6 +25,7 @@
 #include <linux/mtd/plat-ram.h>
 #include <linux/mtd/partitions.h>
 
+#include <linux/i2c/pxa-i2c.h>
 #include <linux/i2c/pcf857x.h>
 #include <linux/i2c/at24.h>
 #include <linux/smc91x.h>
@@ -43,18 +44,20 @@
 #include <asm/mach/flash.h>
 
 #include <mach/pxa27x.h>
-#include <plat/i2c.h>
 #include <mach/mmc.h>
 #include <mach/udc.h>
-#include <mach/pxa2xx_spi.h>
 #include <mach/pxa27x-udc.h>
+#include <mach/smemc.h>
 
 #include <linux/spi/spi.h>
+#include <linux/spi/pxa2xx_spi.h>
 #include <linux/mfd/da903x.h>
 #include <linux/sht15.h>
 
 #include "devices.h"
 #include "generic.h"
+
+#define STARGATE_NR_IRQS	(IRQ_BOARD_START + 8)
 
 /* Bluetooth */
 #define SG2_BT_RESET		81
@@ -149,7 +152,7 @@ static struct platform_device sht15 = {
 
 static struct regulator_consumer_supply stargate2_sensor_3_con[] = {
 	{
-		.dev = &sht15.dev,
+		.dev_name = "sht15",
 		.supply = "vcc",
 	},
 };
@@ -373,7 +376,7 @@ static struct spi_board_info spi_board_info[] __initdata = {
 		.bus_num = 1,
 		.chip_select = 0,
 		.controller_data = &staccel_chip_info,
-		.irq = IRQ_GPIO(96),
+		.irq = PXA_GPIO_TO_IRQ(96),
 	}, {
 		.modalias = "cc2420",
 		.max_speed_hz = 6500000,
@@ -543,7 +546,7 @@ static struct i2c_board_info __initdata imote2_pwr_i2c_board_info[] = {
 		.type = "da9030",
 		.addr = 0x49,
 		.platform_data = &imote2_da9030_pdata,
-		.irq = gpio_to_irq(1),
+		.irq = PXA_GPIO_TO_IRQ(1),
 	},
 };
 
@@ -557,18 +560,18 @@ static struct i2c_board_info __initdata imote2_i2c_board_info[] = {
 		/* Through a nand gate - Also beware, on V2 sensor board the
 		 * pull up resistors are missing.
 		 */
-		.irq = IRQ_GPIO(99),
+		.irq = PXA_GPIO_TO_IRQ(99),
 	}, { /* ITS400 Sensor board only */
 		.type = "tsl2561",
 		.addr = 0x49,
 		/* Through a nand gate - Also beware, on V2 sensor board the
 		 * pull up resistors are missing.
 		 */
-		.irq = IRQ_GPIO(99),
+		.irq = PXA_GPIO_TO_IRQ(99),
 	}, { /* ITS400 Sensor board only */
 		.type = "tmp175",
 		.addr = 0x4A,
-		.irq = IRQ_GPIO(96),
+		.irq = PXA_GPIO_TO_IRQ(96),
 	}, { /* IMB400 Multimedia board */
 		.type = "wm8940",
 		.addr = 0x1A,
@@ -590,10 +593,16 @@ static struct pxa2xx_udc_mach_info imote2_udc_info __initdata = {
 	.udc_command		= sg2_udc_command,
 };
 
+static struct platform_device imote2_audio_device = {
+	.name = "imote2-audio",
+	.id   = -1,
+};
+
 static struct platform_device *imote2_devices[] = {
 	&stargate2_flash_device,
 	&imote2_leds,
 	&sht15,
+	&imote2_audio_device,
 };
 
 static void __init imote2_init(void)
@@ -658,8 +667,8 @@ static struct resource smc91x_resources[] = {
 		.flags = IORESOURCE_MEM,
 	},
 	[1] = {
-		.start = IRQ_GPIO(40),
-		.end = IRQ_GPIO(40),
+		.start = PXA_GPIO_TO_IRQ(40),
+		.end = PXA_GPIO_TO_IRQ(40),
 		.flags = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHEDGE,
 	}
 };
@@ -704,7 +713,7 @@ static int stargate2_mci_init(struct device *dev,
 	}
 	gpio_direction_input(SG2_GPIO_nSD_DETECT);
 
-	err = request_irq(IRQ_GPIO(SG2_GPIO_nSD_DETECT),
+	err = request_irq(PXA_GPIO_TO_IRQ(SG2_GPIO_nSD_DETECT),
 			  stargate2_detect_int,
 			  IRQ_TYPE_EDGE_BOTH,
 			  "MMC card detect",
@@ -735,7 +744,7 @@ static void stargate2_mci_setpower(struct device *dev, unsigned int vdd)
 
 static void stargate2_mci_exit(struct device *dev, void *data)
 {
-	free_irq(IRQ_GPIO(SG2_GPIO_nSD_DETECT), data);
+	free_irq(PXA_GPIO_TO_IRQ(SG2_GPIO_nSD_DETECT), data);
 	gpio_free(SG2_SD_POWER_ENABLE);
 	gpio_free(SG2_GPIO_nSD_DETECT);
 }
@@ -910,7 +919,7 @@ static struct i2c_board_info __initdata stargate2_pwr_i2c_board_info[] = {
 		.type = "da9030",
 		.addr = 0x49,
 		.platform_data = &stargate2_da9030_pdata,
-		.irq = gpio_to_irq(1),
+		.irq = PXA_GPIO_TO_IRQ(1),
 	},
 };
 
@@ -935,18 +944,18 @@ static struct i2c_board_info __initdata stargate2_i2c_board_info[] = {
 		/* Through a nand gate - Also beware, on V2 sensor board the
 		 * pull up resistors are missing.
 		 */
-		.irq = IRQ_GPIO(99),
+		.irq = PXA_GPIO_TO_IRQ(99),
 	}, { /* ITS400 Sensor board only */
 		.type = "tsl2561",
 		.addr = 0x49,
 		/* Through a nand gate - Also beware, on V2 sensor board the
 		 * pull up resistors are missing.
 		 */
-		.irq = IRQ_GPIO(99),
+		.irq = PXA_GPIO_TO_IRQ(99),
 	}, { /* ITS400 Sensor board only */
 		.type = "tmp175",
 		.addr = 0x4A,
-		.irq = IRQ_GPIO(96),
+		.irq = PXA_GPIO_TO_IRQ(96),
 	},
 };
 
@@ -974,7 +983,7 @@ static void __init stargate2_init(void)
 {
 	/* This is probably a board specific hack as this must be set
 	   prior to connecting the MFP stuff up. */
-	MECR &= ~MECR_NOS;
+	__raw_writel(__raw_readl(MECR) & ~MECR_NOS, MECR);
 
 	pxa2xx_mfp_config(ARRAY_AND_SIZE(stargate2_pin_config));
 
@@ -996,24 +1005,26 @@ static void __init stargate2_init(void)
 
 #ifdef CONFIG_MACH_INTELMOTE2
 MACHINE_START(INTELMOTE2, "IMOTE 2")
-	.phys_io	= 0x40000000,
-	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
-	.map_io		= pxa_map_io,
+	.map_io		= pxa27x_map_io,
+	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa27x_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.timer		= &pxa_timer,
 	.init_machine	= imote2_init,
-	.boot_params	= 0xA0000100,
+	.atag_offset	= 0x100,
+	.restart	= pxa_restart,
 MACHINE_END
 #endif
 
 #ifdef CONFIG_MACH_STARGATE2
 MACHINE_START(STARGATE2, "Stargate 2")
-	.phys_io = 0x40000000,
-	.io_pg_offst = (io_p2v(0x40000000) >> 18) & 0xfffc,
-	.map_io = pxa_map_io,
+	.map_io = pxa27x_map_io,
+	.nr_irqs = STARGATE_NR_IRQS,
 	.init_irq = pxa27x_init_irq,
+	.handle_irq = pxa27x_handle_irq,
 	.timer = &pxa_timer,
 	.init_machine = stargate2_init,
-	.boot_params = 0xA0000100,
+	.atag_offset = 0x100,
+	.restart	= pxa_restart,
 MACHINE_END
 #endif

@@ -80,8 +80,6 @@ static struct libfc_function_template fnic_transport_template = {
 static int fnic_slave_alloc(struct scsi_device *sdev)
 {
 	struct fc_rport *rport = starget_to_rport(scsi_target(sdev));
-	struct fc_lport *lp = shost_priv(sdev->host);
-	struct fnic *fnic = lport_priv(lp);
 
 	sdev->tagged_supported = 1;
 
@@ -89,8 +87,6 @@ static int fnic_slave_alloc(struct scsi_device *sdev)
 		return -ENXIO;
 
 	scsi_activate_tcq(sdev, FNIC_DFLT_QUEUE_DEPTH);
-	rport->dev_loss_tmo = fnic->config.port_down_timeout / 1000;
-
 	return 0;
 }
 
@@ -112,6 +108,15 @@ static struct scsi_host_template fnic_host_template = {
 	.max_sectors = 0xffff,
 	.shost_attrs = fnic_attrs,
 };
+
+static void
+fnic_set_rport_dev_loss_tmo(struct fc_rport *rport, u32 timeout)
+{
+	if (timeout)
+		rport->dev_loss_tmo = timeout;
+	else
+		rport->dev_loss_tmo = 1;
+}
 
 static void fnic_get_host_speed(struct Scsi_Host *shost);
 static struct scsi_transport_template *fnic_fc_transport;
@@ -140,6 +145,7 @@ static struct fc_function_template fnic_fc_functions = {
 	.show_starget_port_name = 1,
 	.show_starget_port_id = 1,
 	.show_rport_dev_loss_tmo = 1,
+	.set_rport_dev_loss_tmo = fnic_set_rport_dev_loss_tmo,
 	.issue_fc_host_lip = fnic_reset,
 	.get_fc_host_stats = fnic_get_stats,
 	.dd_fcrport_size = sizeof(struct fc_rport_libfc_priv),
@@ -382,17 +388,6 @@ static void fnic_iounmap(struct fnic *fnic)
 		iounmap(fnic->bar0.vaddr);
 }
 
-/*
- * Allocate element for mempools requiring GFP_DMA flag.
- * Otherwise, checks in kmem_flagcheck() hit BUG_ON().
- */
-static void *fnic_alloc_slab_dma(gfp_t gfp_mask, void *pool_data)
-{
-	struct kmem_cache *mem = pool_data;
-
-	return kmem_cache_alloc(mem, gfp_mask | GFP_ATOMIC | GFP_DMA);
-}
-
 /**
  * fnic_get_mac() - get assigned data MAC address for FIP code.
  * @lport: 	local port.
@@ -597,14 +592,12 @@ static int __devinit fnic_probe(struct pci_dev *pdev,
 	if (!fnic->io_req_pool)
 		goto err_out_free_resources;
 
-	pool = mempool_create(2, fnic_alloc_slab_dma, mempool_free_slab,
-			      fnic_sgl_cache[FNIC_SGL_CACHE_DFLT]);
+	pool = mempool_create_slab_pool(2, fnic_sgl_cache[FNIC_SGL_CACHE_DFLT]);
 	if (!pool)
 		goto err_out_free_ioreq_pool;
 	fnic->io_sgl_pool[FNIC_SGL_CACHE_DFLT] = pool;
 
-	pool = mempool_create(2, fnic_alloc_slab_dma, mempool_free_slab,
-			      fnic_sgl_cache[FNIC_SGL_CACHE_MAX]);
+	pool = mempool_create_slab_pool(2, fnic_sgl_cache[FNIC_SGL_CACHE_MAX]);
 	if (!pool)
 		goto err_out_free_dflt_pool;
 	fnic->io_sgl_pool[FNIC_SGL_CACHE_MAX] = pool;
@@ -706,6 +699,7 @@ static int __devinit fnic_probe(struct pci_dev *pdev,
 		goto err_out_free_exch_mgr;
 	}
 	fc_host_maxframe_size(lp->host) = lp->mfs;
+	fc_host_dev_loss_tmo(lp->host) = fnic->config.port_down_timeout / 1000;
 
 	sprintf(fc_host_symbolic_name(lp->host),
 		DRV_NAME " v" DRV_VERSION " over %s", fnic->name);
@@ -869,7 +863,7 @@ static int __init fnic_init_module(void)
 	len = sizeof(struct fnic_dflt_sgl_list);
 	fnic_sgl_cache[FNIC_SGL_CACHE_DFLT] = kmem_cache_create
 		("fnic_sgl_dflt", len + FNIC_SG_DESC_ALIGN, FNIC_SG_DESC_ALIGN,
-		 SLAB_HWCACHE_ALIGN | SLAB_CACHE_DMA,
+		 SLAB_HWCACHE_ALIGN,
 		 NULL);
 	if (!fnic_sgl_cache[FNIC_SGL_CACHE_DFLT]) {
 		printk(KERN_ERR PFX "failed to create fnic dflt sgl slab\n");
@@ -881,7 +875,7 @@ static int __init fnic_init_module(void)
 	len = sizeof(struct fnic_sgl_list);
 	fnic_sgl_cache[FNIC_SGL_CACHE_MAX] = kmem_cache_create
 		("fnic_sgl_max", len + FNIC_SG_DESC_ALIGN, FNIC_SG_DESC_ALIGN,
-		 SLAB_HWCACHE_ALIGN | SLAB_CACHE_DMA,
+		 SLAB_HWCACHE_ALIGN,
 		 NULL);
 	if (!fnic_sgl_cache[FNIC_SGL_CACHE_MAX]) {
 		printk(KERN_ERR PFX "failed to create fnic max sgl slab\n");

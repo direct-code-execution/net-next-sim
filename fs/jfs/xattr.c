@@ -678,7 +678,7 @@ static int can_set_system_xattr(struct inode *inode, const char *name,
 	struct posix_acl *acl;
 	int rc;
 
-	if (!is_owner_or_cap(inode))
+	if (!inode_owner_or_capable(inode))
 		return -EPERM;
 
 	/*
@@ -693,8 +693,7 @@ static int can_set_system_xattr(struct inode *inode, const char *name,
 			return rc;
 		}
 		if (acl) {
-			mode_t mode = inode->i_mode;
-			rc = posix_acl_equiv_mode(acl, &mode);
+			rc = posix_acl_equiv_mode(acl, &inode->i_mode);
 			posix_acl_release(acl);
 			if (rc < 0) {
 				printk(KERN_ERR
@@ -702,7 +701,6 @@ static int can_set_system_xattr(struct inode *inode, const char *name,
 				       rc);
 				return rc;
 			}
-			inode->i_mode = mode;
 			mark_inode_dirty(inode);
 		}
 		/*
@@ -1091,36 +1089,37 @@ int jfs_removexattr(struct dentry *dentry, const char *name)
 }
 
 #ifdef CONFIG_JFS_SECURITY
-int jfs_init_security(tid_t tid, struct inode *inode, struct inode *dir)
+int jfs_initxattrs(struct inode *inode, const struct xattr *xattr_array,
+		   void *fs_info)
 {
-	int rc;
-	size_t len;
-	void *value;
-	char *suffix;
+	const struct xattr *xattr;
+	tid_t *tid = fs_info;
 	char *name;
+	int err = 0;
 
-	rc = security_inode_init_security(inode, dir, &suffix, &value, &len);
-	if (rc) {
-		if (rc == -EOPNOTSUPP)
-			return 0;
-		return rc;
+	for (xattr = xattr_array; xattr->name != NULL; xattr++) {
+		name = kmalloc(XATTR_SECURITY_PREFIX_LEN +
+			       strlen(xattr->name) + 1, GFP_NOFS);
+		if (!name) {
+			err = -ENOMEM;
+			break;
+		}
+		strcpy(name, XATTR_SECURITY_PREFIX);
+		strcpy(name + XATTR_SECURITY_PREFIX_LEN, xattr->name);
+
+		err = __jfs_setxattr(*tid, inode, name,
+				     xattr->value, xattr->value_len, 0);
+		kfree(name);
+		if (err < 0)
+			break;
 	}
-	name = kmalloc(XATTR_SECURITY_PREFIX_LEN + 1 + strlen(suffix),
-		       GFP_NOFS);
-	if (!name) {
-		rc = -ENOMEM;
-		goto kmalloc_failed;
-	}
-	strcpy(name, XATTR_SECURITY_PREFIX);
-	strcpy(name + XATTR_SECURITY_PREFIX_LEN, suffix);
+	return err;
+}
 
-	rc = __jfs_setxattr(tid, inode, name, value, len, 0);
-
-	kfree(name);
-kmalloc_failed:
-	kfree(suffix);
-	kfree(value);
-
-	return rc;
+int jfs_init_security(tid_t tid, struct inode *inode, struct inode *dir,
+		      const struct qstr *qstr)
+{
+	return security_inode_init_security(inode, dir, qstr,
+					    &jfs_initxattrs, &tid);
 }
 #endif

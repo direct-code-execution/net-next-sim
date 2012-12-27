@@ -80,14 +80,6 @@ enum qeth_tr_broadcast_modes {
 	QETH_TR_BROADCAST_LOCAL    = 1,
 };
 
-/* these values match CHECKSUM_* in include/linux/skbuff.h */
-enum qeth_checksum_types {
-	SW_CHECKSUMMING = 0, /* TODO: set to bit flag used in IPA Command */
-	HW_CHECKSUMMING = 1,
-	NO_CHECKSUMMING = 2,
-};
-#define QETH_CHECKSUM_DEFAULT SW_CHECKSUMMING
-
 /*
  * Routing stuff
  */
@@ -198,6 +190,7 @@ enum qeth_ipa_return_codes {
 	IPA_RC_MC_ADDR_ALREADY_DEFINED	= 0xe013,
 	IPA_RC_LAN_OFFLINE		= 0xe080,
 	IPA_RC_INVALID_IP_VERSION2	= 0xf001,
+	IPA_RC_ENOMEM			= 0xfffe,
 	IPA_RC_FFFF			= 0xffff
 };
 /* for DELIP */
@@ -257,6 +250,7 @@ enum qeth_ipa_setadp_cmd {
 	IPA_SETADP_SET_PROMISC_MODE		= 0x00000800L,
 	IPA_SETADP_SET_DIAG_ASSIST		= 0x00002000L,
 	IPA_SETADP_SET_ACCESS_CONTROL		= 0x00010000L,
+	IPA_SETADP_QUERY_OAT			= 0x00080000L,
 };
 enum qeth_ipa_mac_ops {
 	CHANGE_ADDR_READ_MAC		= 0,
@@ -333,7 +327,7 @@ struct qeth_arp_query_data {
 	__u16 request_bits;
 	__u16 reply_bits;
 	__u32 no_entries;
-	char data;
+	char data; /* only for replies */
 } __attribute__((packed));
 
 /* used as parameter for arp_query reply */
@@ -406,6 +400,17 @@ struct qeth_set_access_ctrl {
 	__u32 subcmd_code;
 } __attribute__((packed));
 
+struct qeth_query_oat {
+	__u32 subcmd_code;
+	__u8 reserved[12];
+} __packed;
+
+struct qeth_qoat_priv {
+	__u32 buffer_len;
+	__u32 response_len;
+	char *buffer;
+};
+
 struct qeth_ipacmd_setadpparms_hdr {
 	__u32 supp_hw_cmds;
 	__u32 reserved1;
@@ -425,6 +430,7 @@ struct qeth_ipacmd_setadpparms {
 		struct qeth_change_addr change_addr;
 		struct qeth_snmp_cmd snmp;
 		struct qeth_set_access_ctrl set_access_ctrl;
+		struct qeth_query_oat query_oat;
 		__u32 mode;
 	} data;
 } __attribute__ ((packed));
@@ -456,6 +462,12 @@ enum qeth_diags_trace_cmds {
 	QETH_DIAGS_CMD_TRACE_QUERY	= 0x0010,
 };
 
+enum qeth_diags_trap_action {
+	QETH_DIAGS_TRAP_ARM	= 0x01,
+	QETH_DIAGS_TRAP_DISARM	= 0x02,
+	QETH_DIAGS_TRAP_CAPTURE = 0x04,
+};
+
 struct qeth_ipacmd_diagass {
 	__u32  host_tod2;
 	__u32:32;
@@ -465,7 +477,8 @@ struct qeth_ipacmd_diagass {
 	__u8   type;
 	__u8   action;
 	__u16  options;
-	__u32:32;
+	__u32  ext;
+	__u8   cdata[64];
 } __attribute__ ((packed));
 
 /* Header for each IPA command */

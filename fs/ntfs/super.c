@@ -1,7 +1,7 @@
 /*
  * super.c - NTFS kernel super block handling. Part of the Linux-NTFS project.
  *
- * Copyright (c) 2001-2007 Anton Altaparmakov
+ * Copyright (c) 2001-2012 Anton Altaparmakov and Tuxera Inc.
  * Copyright (c) 2001,2002 Richard Russon
  *
  * This program/include file is free software; you can redistribute it and/or
@@ -30,7 +30,6 @@
 #include <linux/buffer_head.h>
 #include <linux/vfs.h>
 #include <linux/moduleparam.h>
-#include <linux/smp_lock.h>
 #include <linux/bitmap.h>
 
 #include "sysctl.h"
@@ -105,7 +104,7 @@ static bool parse_options(ntfs_volume *vol, char *opt)
 	int errors = 0, sloppy = 0;
 	uid_t uid = (uid_t)-1;
 	gid_t gid = (gid_t)-1;
-	mode_t fmask = (mode_t)-1, dmask = (mode_t)-1;
+	umode_t fmask = (umode_t)-1, dmask = (umode_t)-1;
 	int mft_zone_multiplier = -1, on_errors = -1;
 	int show_sys_files = -1, case_sensitive = -1, disable_sparse = -1;
 	struct nls_table *nls_map = NULL, *old_nls;
@@ -288,9 +287,9 @@ no_mount_options:
 		vol->uid = uid;
 	if (gid != (gid_t)-1)
 		vol->gid = gid;
-	if (fmask != (mode_t)-1)
+	if (fmask != (umode_t)-1)
 		vol->fmask = fmask;
-	if (dmask != (mode_t)-1)
+	if (dmask != (umode_t)-1)
 		vol->dmask = dmask;
 	if (show_sys_files != -1) {
 		if (show_sys_files)
@@ -445,7 +444,6 @@ static int ntfs_remount(struct super_block *sb, int *flags, char *opt)
 
 	ntfs_debug("Entering with remount options string: %s", opt);
 
-	lock_kernel();
 #ifndef NTFS_RW
 	/* For read-only compiled driver, enforce read-only flag. */
 	*flags |= MS_RDONLY;
@@ -460,7 +458,7 @@ static int ntfs_remount(struct super_block *sb, int *flags, char *opt)
 	 * the volume on boot and updates them.
 	 *
 	 * When remounting read-only, mark the volume clean if no volume errors
-	 * have occured.
+	 * have occurred.
 	 */
 	if ((sb->s_flags & MS_RDONLY) && !(*flags & MS_RDONLY)) {
 		static const char *es = ".  Cannot remount read-write.";
@@ -469,18 +467,15 @@ static int ntfs_remount(struct super_block *sb, int *flags, char *opt)
 		if (NVolErrors(vol)) {
 			ntfs_error(sb, "Volume has errors and is read-only%s",
 					es);
-			unlock_kernel();
 			return -EROFS;
 		}
 		if (vol->vol_flags & VOLUME_IS_DIRTY) {
 			ntfs_error(sb, "Volume is dirty and read-only%s", es);
-			unlock_kernel();
 			return -EROFS;
 		}
 		if (vol->vol_flags & VOLUME_MODIFIED_BY_CHKDSK) {
 			ntfs_error(sb, "Volume has been modified by chkdsk "
 					"and is read-only%s", es);
-			unlock_kernel();
 			return -EROFS;
 		}
 		if (vol->vol_flags & VOLUME_MUST_MOUNT_RO_MASK) {
@@ -488,13 +483,11 @@ static int ntfs_remount(struct super_block *sb, int *flags, char *opt)
 					"(0x%x) and is read-only%s",
 					(unsigned)le16_to_cpu(vol->vol_flags),
 					es);
-			unlock_kernel();
 			return -EROFS;
 		}
 		if (ntfs_set_volume_flags(vol, VOLUME_IS_DIRTY)) {
 			ntfs_error(sb, "Failed to set dirty bit in volume "
 					"information flags%s", es);
-			unlock_kernel();
 			return -EROFS;
 		}
 #if 0
@@ -514,21 +507,18 @@ static int ntfs_remount(struct super_block *sb, int *flags, char *opt)
 			ntfs_error(sb, "Failed to empty journal $LogFile%s",
 					es);
 			NVolSetErrors(vol);
-			unlock_kernel();
 			return -EROFS;
 		}
 		if (!ntfs_mark_quotas_out_of_date(vol)) {
 			ntfs_error(sb, "Failed to mark quotas out of date%s",
 					es);
 			NVolSetErrors(vol);
-			unlock_kernel();
 			return -EROFS;
 		}
 		if (!ntfs_stamp_usnjrnl(vol)) {
 			ntfs_error(sb, "Failed to stamp transation log "
 					"($UsnJrnl)%s", es);
 			NVolSetErrors(vol);
-			unlock_kernel();
 			return -EROFS;
 		}
 	} else if (!(sb->s_flags & MS_RDONLY) && (*flags & MS_RDONLY)) {
@@ -544,11 +534,9 @@ static int ntfs_remount(struct super_block *sb, int *flags, char *opt)
 
 	// TODO: Deal with *flags.
 
-	if (!parse_options(vol, opt)) {
-		unlock_kernel();
+	if (!parse_options(vol, opt))
 		return -EINVAL;
-	}
-	unlock_kernel();
+
 	ntfs_debug("Done.");
 	return 0;
 }
@@ -1251,7 +1239,6 @@ static int check_windows_hibernation_status(ntfs_volume *vol)
 {
 	MFT_REF mref;
 	struct inode *vi;
-	ntfs_inode *ni;
 	struct page *page;
 	u32 *kaddr, *kend;
 	ntfs_name *name = NULL;
@@ -1281,7 +1268,7 @@ static int check_windows_hibernation_status(ntfs_volume *vol)
 					"hibernated on the volume.");
 			return 0;
 		}
-		/* A real error occured. */
+		/* A real error occurred. */
 		ntfs_error(vol->sb, "Failed to find inode number for "
 				"hiberfil.sys.");
 		return ret;
@@ -1302,7 +1289,6 @@ static int check_windows_hibernation_status(ntfs_volume *vol)
 				"is not the system volume.", i_size_read(vi));
 		goto iput_out;
 	}
-	ni = NTFS_I(vi);
 	page = ntfs_map_page(vi->i_mapping, 0);
 	if (IS_ERR(page)) {
 		ntfs_error(vol->sb, "Failed to read from hiberfil.sys.");
@@ -1382,7 +1368,7 @@ static bool load_and_init_quota(ntfs_volume *vol)
 			NVolSetQuotaOutOfDate(vol);
 			return true;
 		}
-		/* A real error occured. */
+		/* A real error occurred. */
 		ntfs_error(vol->sb, "Failed to find inode number for $Quota.");
 		return false;
 	}
@@ -1466,7 +1452,7 @@ not_enabled:
 			NVolSetUsnJrnlStamped(vol);
 			return true;
 		}
-		/* A real error occured. */
+		/* A real error occurred. */
 		ntfs_error(vol->sb, "Failed to find inode number for "
 				"$UsnJrnl.");
 		return false;
@@ -2261,8 +2247,6 @@ static void ntfs_put_super(struct super_block *sb)
 
 	ntfs_debug("Entering.");
 
-	lock_kernel();
-
 #ifdef NTFS_RW
 	/*
 	 * Commit all inodes while they are still open in case some of them
@@ -2306,7 +2290,7 @@ static void ntfs_put_super(struct super_block *sb)
 	ntfs_commit_inode(vol->mft_ino);
 
 	/*
-	 * If a read-write mount and no volume errors have occured, mark the
+	 * If a read-write mount and no volume errors have occurred, mark the
 	 * volume clean.  Also, re-commit all affected inodes.
 	 */
 	if (!(sb->s_flags & MS_RDONLY)) {
@@ -2433,8 +2417,6 @@ static void ntfs_put_super(struct super_block *sb)
 
 	sb->s_fs_info = NULL;
 	kfree(vol);
-
-	unlock_kernel();
 }
 
 /**
@@ -2491,7 +2473,7 @@ static s64 get_nr_free_clusters(ntfs_volume *vol)
 			nr_free -= PAGE_CACHE_SIZE * 8;
 			continue;
 		}
-		kaddr = kmap_atomic(page, KM_USER0);
+		kaddr = kmap_atomic(page);
 		/*
 		 * Subtract the number of set bits. If this
 		 * is the last page and it is partial we don't really care as
@@ -2501,7 +2483,7 @@ static s64 get_nr_free_clusters(ntfs_volume *vol)
 		 */
 		nr_free -= bitmap_weight(kaddr,
 					PAGE_CACHE_SIZE * BITS_PER_BYTE);
-		kunmap_atomic(kaddr, KM_USER0);
+		kunmap_atomic(kaddr);
 		page_cache_release(page);
 	}
 	ntfs_debug("Finished reading $Bitmap, last index = 0x%lx.", index - 1);
@@ -2512,7 +2494,7 @@ static s64 get_nr_free_clusters(ntfs_volume *vol)
 	if (vol->nr_clusters & 63)
 		nr_free += 64 - (vol->nr_clusters & 63);
 	up_read(&vol->lcnbmp_lock);
-	/* If errors occured we may well have gone below zero, fix this. */
+	/* If errors occurred we may well have gone below zero, fix this. */
 	if (nr_free < 0)
 		nr_free = 0;
 	ntfs_debug("Exiting.");
@@ -2562,7 +2544,7 @@ static unsigned long __get_nr_free_mft_records(ntfs_volume *vol,
 			nr_free -= PAGE_CACHE_SIZE * 8;
 			continue;
 		}
-		kaddr = kmap_atomic(page, KM_USER0);
+		kaddr = kmap_atomic(page);
 		/*
 		 * Subtract the number of set bits. If this
 		 * is the last page and it is partial we don't really care as
@@ -2572,12 +2554,12 @@ static unsigned long __get_nr_free_mft_records(ntfs_volume *vol,
 		 */
 		nr_free -= bitmap_weight(kaddr,
 					PAGE_CACHE_SIZE * BITS_PER_BYTE);
-		kunmap_atomic(kaddr, KM_USER0);
+		kunmap_atomic(kaddr);
 		page_cache_release(page);
 	}
 	ntfs_debug("Finished reading $MFT/$BITMAP, last index = 0x%lx.",
 			index - 1);
-	/* If errors occured we may well have gone below zero, fix this. */
+	/* If errors occurred we may well have gone below zero, fix this. */
 	if (nr_free < 0)
 		nr_free = 0;
 	ntfs_debug("Exiting.");
@@ -2772,8 +2754,6 @@ static int ntfs_fill_super(struct super_block *sb, void *opt, const int silent)
 	init_rwsem(&vol->mftbmp_lock);
 	init_rwsem(&vol->lcnbmp_lock);
 
-	unlock_kernel();
-
 	/* By default, enable sparse support. */
 	NVolSetSparseEnabled(vol);
 
@@ -2928,9 +2908,10 @@ static int ntfs_fill_super(struct super_block *sb, void *opt, const int silent)
 		ntfs_error(sb, "Failed to load system files.");
 		goto unl_upcase_iput_tmp_ino_err_out_now;
 	}
-	if ((sb->s_root = d_alloc_root(vol->root_ino))) {
-		/* We increment i_count simulating an ntfs_iget(). */
-		atomic_inc(&vol->root_ino->i_count);
+
+	/* We grab a reference, simulating an ntfs_iget(). */
+	ihold(vol->root_ino);
+	if ((sb->s_root = d_make_root(vol->root_ino))) {
 		ntfs_debug("Exiting, status successful.");
 		/* Release the default upcase if it has no users. */
 		mutex_lock(&ntfs_lock);
@@ -2940,7 +2921,6 @@ static int ntfs_fill_super(struct super_block *sb, void *opt, const int silent)
 		}
 		mutex_unlock(&ntfs_lock);
 		sb->s_export_op = &ntfs_export_ops;
-		lock_kernel();
 		lockdep_on();
 		return 0;
 	}
@@ -3040,24 +3020,8 @@ iput_tmp_ino_err_out_now:
 	if (vol->mft_ino && vol->mft_ino != tmp_ino)
 		iput(vol->mft_ino);
 	vol->mft_ino = NULL;
-	/*
-	 * This is needed to get ntfs_clear_extent_inode() called for each
-	 * inode we have ever called ntfs_iget()/iput() on, otherwise we A)
-	 * leak resources and B) a subsequent mount fails automatically due to
-	 * ntfs_iget() never calling down into our ntfs_read_locked_inode()
-	 * method again... FIXME: Do we need to do this twice now because of
-	 * attribute inodes? I think not, so leave as is for now... (AIA)
-	 */
-	if (invalidate_inodes(sb)) {
-		ntfs_error(sb, "Busy inodes left. This is most likely a NTFS "
-				"driver bug.");
-		/* Copied from fs/super.c. I just love this message. (-; */
-		printk("NTFS: Busy inodes after umount. Self-destruct in 5 "
-				"seconds.  Have a nice day...\n");
-	}
 	/* Errors at this stage are irrelevant. */
 err_out_now:
-	lock_kernel();
 	sb->s_fs_info = NULL;
 	kfree(vol);
 	ntfs_debug("Failed, returning -EINVAL.");
@@ -3094,17 +3058,16 @@ struct kmem_cache *ntfs_index_ctx_cache;
 /* Driver wide mutex. */
 DEFINE_MUTEX(ntfs_lock);
 
-static int ntfs_get_sb(struct file_system_type *fs_type,
-	int flags, const char *dev_name, void *data, struct vfsmount *mnt)
+static struct dentry *ntfs_mount(struct file_system_type *fs_type,
+	int flags, const char *dev_name, void *data)
 {
-	return get_sb_bdev(fs_type, flags, dev_name, data, ntfs_fill_super,
-			   mnt);
+	return mount_bdev(fs_type, flags, dev_name, data, ntfs_fill_super);
 }
 
 static struct file_system_type ntfs_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "ntfs",
-	.get_sb		= ntfs_get_sb,
+	.mount		= ntfs_mount,
 	.kill_sb	= kill_block_super,
 	.fs_flags	= FS_REQUIRES_DEV,
 };
@@ -3196,6 +3159,8 @@ static int __init init_ntfs_fs(void)
 	}
 	printk(KERN_CRIT "NTFS: Failed to register NTFS filesystem driver!\n");
 
+	/* Unregister the ntfs sysctls. */
+	ntfs_sysctl(0);
 sysctl_err_out:
 	kmem_cache_destroy(ntfs_big_inode_cache);
 big_inode_err_out:
@@ -3229,12 +3194,12 @@ static void __exit exit_ntfs_fs(void)
 	ntfs_sysctl(0);
 }
 
-MODULE_AUTHOR("Anton Altaparmakov <aia21@cantab.net>");
-MODULE_DESCRIPTION("NTFS 1.2/3.x driver - Copyright (c) 2001-2007 Anton Altaparmakov");
+MODULE_AUTHOR("Anton Altaparmakov <anton@tuxera.com>");
+MODULE_DESCRIPTION("NTFS 1.2/3.x driver - Copyright (c) 2001-2011 Anton Altaparmakov and Tuxera Inc.");
 MODULE_VERSION(NTFS_VERSION);
 MODULE_LICENSE("GPL");
 #ifdef DEBUG
-module_param(debug_msgs, bool, 0);
+module_param(debug_msgs, bint, 0);
 MODULE_PARM_DESC(debug_msgs, "Enable debug messages.");
 #endif
 

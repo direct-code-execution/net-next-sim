@@ -22,7 +22,6 @@
 #include <linux/in.h>
 #include <linux/uio.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/mutex.h>
 #include <linux/kthread.h>
 #include <linux/freezer.h>
@@ -35,6 +34,8 @@
 #include <net/ip.h>
 #include <linux/lockd/lockd.h>
 #include <linux/nfs.h>
+
+#include "netns.h"
 
 #define NLMDBG_FACILITY		NLMDBG_SVC
 #define LOCKD_BUFSIZE		(1024 + NLMSVC_XDRSIZE)
@@ -50,6 +51,8 @@ static unsigned int		nlmsvc_users;
 static struct task_struct	*nlmsvc_task;
 static struct svc_rqst		*nlmsvc_rqst;
 unsigned long			nlmsvc_timeout;
+
+int lockd_net_id;
 
 /*
  * These can be set at insmod time (useful for NFS as root filesystem),
@@ -130,15 +133,6 @@ lockd(void *vrqstp)
 
 	dprintk("NFS locking service started (ver " LOCKD_VERSION ").\n");
 
-	/*
-	 * FIXME: it would be nice if lockd didn't spend its entire life
-	 * running under the BKL. At the very least, it would be good to
-	 * have someone clarify what it's intended to protect here. I've
-	 * seen some handwavy posts about posix locking needing to be
-	 * done under the BKL, but it's far from clear.
-	 */
-	lock_kernel();
-
 	if (!nlm_timeout)
 		nlm_timeout = LOCKD_DFLT_TIMEO;
 	nlmsvc_timeout = nlm_timeout * HZ;
@@ -195,32 +189,33 @@ lockd(void *vrqstp)
 	if (nlmsvc_ops)
 		nlmsvc_invalidate_all();
 	nlm_shutdown_hosts();
-	unlock_kernel();
 	return 0;
 }
 
 static int create_lockd_listener(struct svc_serv *serv, const char *name,
-				 const int family, const unsigned short port)
+				 struct net *net, const int family,
+				 const unsigned short port)
 {
 	struct svc_xprt *xprt;
 
-	xprt = svc_find_xprt(serv, name, family, 0);
+	xprt = svc_find_xprt(serv, name, net, family, 0);
 	if (xprt == NULL)
-		return svc_create_xprt(serv, name, family, port,
+		return svc_create_xprt(serv, name, net, family, port,
 						SVC_SOCK_DEFAULTS);
 	svc_xprt_put(xprt);
 	return 0;
 }
 
-static int create_lockd_family(struct svc_serv *serv, const int family)
+static int create_lockd_family(struct svc_serv *serv, struct net *net,
+			       const int family)
 {
 	int err;
 
-	err = create_lockd_listener(serv, "udp", family, nlm_udpport);
+	err = create_lockd_listener(serv, "udp", net, family, nlm_udpport);
 	if (err < 0)
 		return err;
 
-	return create_lockd_listener(serv, "tcp", family, nlm_tcpport);
+	return create_lockd_listener(serv, "tcp", net, family, nlm_tcpport);
 }
 
 /*
@@ -233,16 +228,16 @@ static int create_lockd_family(struct svc_serv *serv, const int family)
  * Returns zero if all listeners are available; otherwise a
  * negative errno value is returned.
  */
-static int make_socks(struct svc_serv *serv)
+static int make_socks(struct svc_serv *serv, struct net *net)
 {
 	static int warned;
 	int err;
 
-	err = create_lockd_family(serv, PF_INET);
+	err = create_lockd_family(serv, net, PF_INET);
 	if (err < 0)
 		goto out_err;
 
-	err = create_lockd_family(serv, PF_INET6);
+	err = create_lockd_family(serv, net, PF_INET6);
 	if (err < 0 && err != -EAFNOSUPPORT)
 		goto out_err;
 
@@ -256,6 +251,47 @@ out_err:
 	return err;
 }
 
+static int lockd_up_net(struct net *net)
+{
+	struct lockd_net *ln = net_generic(net, lockd_net_id);
+	struct svc_serv *serv = nlmsvc_rqst->rq_server;
+	int error;
+
+	if (ln->nlmsvc_users)
+		return 0;
+
+	error = svc_rpcb_setup(serv, net);
+	if (error)
+		goto err_rpcb;
+
+	error = make_socks(serv, net);
+	if (error < 0)
+		goto err_socks;
+	return 0;
+
+err_socks:
+	svc_rpcb_cleanup(serv, net);
+err_rpcb:
+	return error;
+}
+
+static void lockd_down_net(struct net *net)
+{
+	struct lockd_net *ln = net_generic(net, lockd_net_id);
+	struct svc_serv *serv = nlmsvc_rqst->rq_server;
+
+	if (ln->nlmsvc_users) {
+		if (--ln->nlmsvc_users == 0) {
+			nlm_shutdown_hosts_net(net);
+			svc_shutdown_net(serv, net);
+		}
+	} else {
+		printk(KERN_ERR "lockd_down_net: no users! task=%p, net=%p\n",
+				nlmsvc_task, net);
+		BUG();
+	}
+}
+
 /*
  * Bring up the lockd process if it's not already up.
  */
@@ -263,13 +299,16 @@ int lockd_up(void)
 {
 	struct svc_serv *serv;
 	int		error = 0;
+	struct net *net = current->nsproxy->net_ns;
 
 	mutex_lock(&nlmsvc_mutex);
 	/*
 	 * Check whether we're already up and running.
 	 */
-	if (nlmsvc_rqst)
+	if (nlmsvc_rqst) {
+		error = lockd_up_net(net);
 		goto out;
+	}
 
 	/*
 	 * Sanity check: if there's no pid,
@@ -286,14 +325,14 @@ int lockd_up(void)
 		goto out;
 	}
 
-	error = make_socks(serv);
+	error = make_socks(serv, net);
 	if (error < 0)
 		goto destroy_and_out;
 
 	/*
 	 * Create the kernel thread and wait for it to start.
 	 */
-	nlmsvc_rqst = svc_prepare_thread(serv, &serv->sv_pools[0]);
+	nlmsvc_rqst = svc_prepare_thread(serv, &serv->sv_pools[0], NUMA_NO_NODE);
 	if (IS_ERR(nlmsvc_rqst)) {
 		error = PTR_ERR(nlmsvc_rqst);
 		nlmsvc_rqst = NULL;
@@ -324,8 +363,12 @@ int lockd_up(void)
 destroy_and_out:
 	svc_destroy(serv);
 out:
-	if (!error)
+	if (!error) {
+		struct lockd_net *ln = net_generic(net, lockd_net_id);
+
+		ln->nlmsvc_users++;
 		nlmsvc_users++;
+	}
 	mutex_unlock(&nlmsvc_mutex);
 	return error;
 }
@@ -339,8 +382,10 @@ lockd_down(void)
 {
 	mutex_lock(&nlmsvc_mutex);
 	if (nlmsvc_users) {
-		if (--nlmsvc_users)
+		if (--nlmsvc_users) {
+			lockd_down_net(current->nsproxy->net_ns);
 			goto out;
+		}
 	} else {
 		printk(KERN_ERR "lockd_down: no users! task=%p\n",
 			nlmsvc_task);
@@ -451,7 +496,7 @@ static int param_set_##name(const char *val, struct kernel_param *kp)	\
 	__typeof__(type) num = which_strtol(val, &endp, 0);		\
 	if (endp == val || *endp || num < (min) || num > (max))		\
 		return -EINVAL;						\
-	*((int *) kp->arg) = num;					\
+	*((type *) kp->arg) = num;					\
 	return 0;							\
 }
 
@@ -508,24 +553,55 @@ module_param_call(nlm_tcpport, param_set_port, param_get_int,
 module_param(nsm_use_hostnames, bool, 0644);
 module_param(nlm_max_connections, uint, 0644);
 
+static int lockd_init_net(struct net *net)
+{
+	return 0;
+}
+
+static void lockd_exit_net(struct net *net)
+{
+}
+
+static struct pernet_operations lockd_net_ops = {
+	.init = lockd_init_net,
+	.exit = lockd_exit_net,
+	.id = &lockd_net_id,
+	.size = sizeof(struct lockd_net),
+};
+
+
 /*
  * Initialising and terminating the module.
  */
 
 static int __init init_nlm(void)
 {
+	int err;
+
 #ifdef CONFIG_SYSCTL
+	err = -ENOMEM;
 	nlm_sysctl_table = register_sysctl_table(nlm_sysctl_root);
-	return nlm_sysctl_table ? 0 : -ENOMEM;
-#else
-	return 0;
+	if (nlm_sysctl_table == NULL)
+		goto err_sysctl;
 #endif
+	err = register_pernet_subsys(&lockd_net_ops);
+	if (err)
+		goto err_pernet;
+	return 0;
+
+err_pernet:
+#ifdef CONFIG_SYSCTL
+	unregister_sysctl_table(nlm_sysctl_table);
+#endif
+err_sysctl:
+	return err;
 }
 
 static void __exit exit_nlm(void)
 {
 	/* FIXME: delete all NLM clients */
 	nlm_shutdown_hosts();
+	unregister_pernet_subsys(&lockd_net_ops);
 #ifdef CONFIG_SYSCTL
 	unregister_sysctl_table(nlm_sysctl_table);
 #endif

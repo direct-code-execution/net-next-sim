@@ -17,6 +17,8 @@ struct device_node;
 extern void request_event_sources_irqs(struct device_node *np,
 				       irq_handler_t handler, const char *name);
 
+#include <linux/of.h>
+
 extern void __init fw_feature_init(const char *hypertas, unsigned long len);
 
 struct pt_regs;
@@ -45,6 +47,17 @@ extern void pSeries_final_fixup(void);
 /* Poweron flag used for enabling auto ups restart */
 extern unsigned long rtas_poweron_auto;
 
-extern void find_udbg_vterm(void);
+/* Provided by HVC VIO */
+extern void hvc_vio_init_early(void);
+
+/* Dynamic logical Partitioning/Mobility */
+extern void dlpar_free_cc_nodes(struct device_node *);
+extern void dlpar_free_cc_property(struct property *);
+extern struct device_node *dlpar_configure_connector(u32);
+extern int dlpar_attach_node(struct device_node *);
+extern int dlpar_detach_node(struct device_node *);
+
+/* Snooze Delay, pseries_idle */
+DECLARE_PER_CPU(long, smt_snooze_delay);
 
 #endif /* _PSERIES_PSERIES_H */

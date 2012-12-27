@@ -225,7 +225,6 @@
 	/* toolMode codes
 	 */
 #define AIPTEK_TOOL_BUTTON_PEN_MODE			BTN_TOOL_PEN
-#define AIPTEK_TOOL_BUTTON_PEN_MODE			BTN_TOOL_PEN
 #define AIPTEK_TOOL_BUTTON_PENCIL_MODE			BTN_TOOL_PENCIL
 #define AIPTEK_TOOL_BUTTON_BRUSH_MODE			BTN_TOOL_BRUSH
 #define AIPTEK_TOOL_BUTTON_AIRBRUSH_MODE		BTN_TOOL_AIRBRUSH
@@ -1097,7 +1096,7 @@ store_tabletPointerMode(struct device *dev, struct device_attribute *attr, const
 }
 
 static DEVICE_ATTR(pointer_mode,
-		   S_IRUGO | S_IWUGO,
+		   S_IRUGO | S_IWUSR,
 		   show_tabletPointerMode, store_tabletPointerMode);
 
 /***********************************************************************
@@ -1134,7 +1133,7 @@ store_tabletCoordinateMode(struct device *dev, struct device_attribute *attr, co
 }
 
 static DEVICE_ATTR(coordinate_mode,
-		   S_IRUGO | S_IWUGO,
+		   S_IRUGO | S_IWUSR,
 		   show_tabletCoordinateMode, store_tabletCoordinateMode);
 
 /***********************************************************************
@@ -1176,7 +1175,7 @@ store_tabletToolMode(struct device *dev, struct device_attribute *attr, const ch
 }
 
 static DEVICE_ATTR(tool_mode,
-		   S_IRUGO | S_IWUGO,
+		   S_IRUGO | S_IWUSR,
 		   show_tabletToolMode, store_tabletToolMode);
 
 /***********************************************************************
@@ -1199,9 +1198,9 @@ static ssize_t
 store_tabletXtilt(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct aiptek *aiptek = dev_get_drvdata(dev);
-	long x;
+	int x;
 
-	if (strict_strtol(buf, 10, &x)) {
+	if (kstrtoint(buf, 10, &x)) {
 		size_t len = buf[count - 1] == '\n' ? count - 1 : count;
 
 		if (strncmp(buf, "disable", len))
@@ -1219,7 +1218,7 @@ store_tabletXtilt(struct device *dev, struct device_attribute *attr, const char 
 }
 
 static DEVICE_ATTR(xtilt,
-		   S_IRUGO | S_IWUGO, show_tabletXtilt, store_tabletXtilt);
+		   S_IRUGO | S_IWUSR, show_tabletXtilt, store_tabletXtilt);
 
 /***********************************************************************
  * support routines for the 'ytilt' file. Note that this file
@@ -1241,9 +1240,9 @@ static ssize_t
 store_tabletYtilt(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct aiptek *aiptek = dev_get_drvdata(dev);
-	long y;
+	int y;
 
-	if (strict_strtol(buf, 10, &y)) {
+	if (kstrtoint(buf, 10, &y)) {
 		size_t len = buf[count - 1] == '\n' ? count - 1 : count;
 
 		if (strncmp(buf, "disable", len))
@@ -1261,7 +1260,7 @@ store_tabletYtilt(struct device *dev, struct device_attribute *attr, const char 
 }
 
 static DEVICE_ATTR(ytilt,
-		   S_IRUGO | S_IWUGO, show_tabletYtilt, store_tabletYtilt);
+		   S_IRUGO | S_IWUSR, show_tabletYtilt, store_tabletYtilt);
 
 /***********************************************************************
  * support routines for the 'jitter' file. Note that this file
@@ -1278,17 +1277,18 @@ static ssize_t
 store_tabletJitterDelay(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct aiptek *aiptek = dev_get_drvdata(dev);
-	long j;
+	int err, j;
 
-	if (strict_strtol(buf, 10, &j))
-		return -EINVAL;
+	err = kstrtoint(buf, 10, &j);
+	if (err)
+		return err;
 
-	aiptek->newSetting.jitterDelay = (int)j;
+	aiptek->newSetting.jitterDelay = j;
 	return count;
 }
 
 static DEVICE_ATTR(jitter,
-		   S_IRUGO | S_IWUGO,
+		   S_IRUGO | S_IWUSR,
 		   show_tabletJitterDelay, store_tabletJitterDelay);
 
 /***********************************************************************
@@ -1307,17 +1307,18 @@ static ssize_t
 store_tabletProgrammableDelay(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct aiptek *aiptek = dev_get_drvdata(dev);
-	long d;
+	int err, d;
 
-	if (strict_strtol(buf, 10, &d))
-		return -EINVAL;
+	err = kstrtoint(buf, 10, &d);
+	if (err)
+		return err;
 
-	aiptek->newSetting.programmableDelay = (int)d;
+	aiptek->newSetting.programmableDelay = d;
 	return count;
 }
 
 static DEVICE_ATTR(delay,
-		   S_IRUGO | S_IWUGO,
+		   S_IRUGO | S_IWUSR,
 		   show_tabletProgrammableDelay, store_tabletProgrammableDelay);
 
 /***********************************************************************
@@ -1406,7 +1407,7 @@ store_tabletStylusUpper(struct device *dev, struct device_attribute *attr, const
 }
 
 static DEVICE_ATTR(stylus_upper,
-		   S_IRUGO | S_IWUGO,
+		   S_IRUGO | S_IWUSR,
 		   show_tabletStylusUpper, store_tabletStylusUpper);
 
 /***********************************************************************
@@ -1437,7 +1438,7 @@ store_tabletStylusLower(struct device *dev, struct device_attribute *attr, const
 }
 
 static DEVICE_ATTR(stylus_lower,
-		   S_IRUGO | S_IWUGO,
+		   S_IRUGO | S_IWUSR,
 		   show_tabletStylusLower, store_tabletStylusLower);
 
 /***********************************************************************
@@ -1475,7 +1476,7 @@ store_tabletMouseLeft(struct device *dev, struct device_attribute *attr, const c
 }
 
 static DEVICE_ATTR(mouse_left,
-		   S_IRUGO | S_IWUGO,
+		   S_IRUGO | S_IWUSR,
 		   show_tabletMouseLeft, store_tabletMouseLeft);
 
 /***********************************************************************
@@ -1505,7 +1506,7 @@ store_tabletMouseMiddle(struct device *dev, struct device_attribute *attr, const
 }
 
 static DEVICE_ATTR(mouse_middle,
-		   S_IRUGO | S_IWUGO,
+		   S_IRUGO | S_IWUSR,
 		   show_tabletMouseMiddle, store_tabletMouseMiddle);
 
 /***********************************************************************
@@ -1535,7 +1536,7 @@ store_tabletMouseRight(struct device *dev, struct device_attribute *attr, const 
 }
 
 static DEVICE_ATTR(mouse_right,
-		   S_IRUGO | S_IWUGO,
+		   S_IRUGO | S_IWUSR,
 		   show_tabletMouseRight, store_tabletMouseRight);
 
 /***********************************************************************
@@ -1558,16 +1559,18 @@ static ssize_t
 store_tabletWheel(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct aiptek *aiptek = dev_get_drvdata(dev);
-	long w;
+	int err, w;
 
-	if (strict_strtol(buf, 10, &w)) return -EINVAL;
+	err = kstrtoint(buf, 10, &w);
+	if (err)
+		return err;
 
-	aiptek->newSetting.wheel = (int)w;
+	aiptek->newSetting.wheel = w;
 	return count;
 }
 
 static DEVICE_ATTR(wheel,
-		   S_IRUGO | S_IWUGO, show_tabletWheel, store_tabletWheel);
+		   S_IRUGO | S_IWUSR, show_tabletWheel, store_tabletWheel);
 
 /***********************************************************************
  * support routines for the 'execute' file. Note that this file
@@ -1600,7 +1603,7 @@ store_tabletExecute(struct device *dev, struct device_attribute *attr, const cha
 }
 
 static DEVICE_ATTR(execute,
-		   S_IRUGO | S_IWUGO, show_tabletExecute, store_tabletExecute);
+		   S_IRUGO | S_IWUSR, show_tabletExecute, store_tabletExecute);
 
 /***********************************************************************
  * support routines for the 'odm_code' file. Note that this file
@@ -1920,21 +1923,7 @@ static struct usb_driver aiptek_driver = {
 	.id_table = aiptek_ids,
 };
 
-static int __init aiptek_init(void)
-{
-	int result = usb_register(&aiptek_driver);
-	if (result == 0) {
-		printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_VERSION ":"
-		       DRIVER_DESC "\n");
-		printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_AUTHOR "\n");
-	}
-	return result;
-}
-
-static void __exit aiptek_exit(void)
-{
-	usb_deregister(&aiptek_driver);
-}
+module_usb_driver(aiptek_driver);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
@@ -1944,6 +1933,3 @@ module_param(programmableDelay, int, 0);
 MODULE_PARM_DESC(programmableDelay, "delay used during tablet programming");
 module_param(jitterDelay, int, 0);
 MODULE_PARM_DESC(jitterDelay, "stylus/mouse settlement delay");
-
-module_init(aiptek_init);
-module_exit(aiptek_exit);

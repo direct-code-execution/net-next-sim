@@ -27,11 +27,10 @@
 #ifndef __ipw2200_h__
 #define __ipw2200_h__
 
-#define WEXT_USECHANNELS 1
-
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/mutex.h>
 
 #include <linux/pci.h>
@@ -961,7 +960,7 @@ struct ipw_country_channel_info {
 struct ipw_country_info {
 	u8 id;
 	u8 length;
-	u8 country_str[3];
+	u8 country_str[IEEE80211_COUNTRY_STRING_LEN];
 	struct ipw_country_channel_info groups[7];
 } __packed;
 
@@ -1298,8 +1297,6 @@ struct ipw_priv {
 	int user_requested_scan;
 	u8 direct_scan_ssid[IW_ESSID_MAX_SIZE];
 	u8 direct_scan_ssid_len;
-
-	struct workqueue_struct *workqueue;
 
 	struct delayed_work adhoc_check;
 	struct work_struct associate;
@@ -1999,18 +1996,6 @@ struct ipw_cmd_log {
 #define CFG_SYS_ANTENNA_A               0x01	/* force antenna A */
 #define CFG_SYS_ANTENNA_B               0x03	/* force antenna B */
 #define CFG_SYS_ANTENNA_SLOW_DIV        0x02	/* consider background noise */
-
-/*
- * The definitions below were lifted off the ipw2100 driver, which only
- * supports 'b' mode, so I'm sure these are not exactly correct.
- *
- * Somebody fix these!!
- */
-#define REG_MIN_CHANNEL             0
-#define REG_MAX_CHANNEL             14
-
-#define REG_CHANNEL_MASK            0x00003FFF
-#define IPW_IBSS_11B_DEFAULT_MASK   0x87ff
 
 #define IPW_MAX_CONFIG_RETRIES 10
 

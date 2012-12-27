@@ -5,11 +5,10 @@ Arnaud
 
 TODO:
 - clean ups
-- fix build warnings when module
 - sort out dup ids with SiS driver
 - remove useless/wrong/unused #ifdef/code/...
 - fix printk usages
 - get rid of non-linux related stuff
 
 Please send patches to:
-Arnaud Patard <apatard@mandriva.com>
+Arnaud Patard <arnaud.patard@rtp-net.org>

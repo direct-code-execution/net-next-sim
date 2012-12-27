@@ -16,7 +16,7 @@
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/uaccess.h>		/* put_/get_user			*/
 #include <asm/io.h>
 
@@ -162,6 +162,7 @@ static const struct file_operations d7s_fops = {
 	.compat_ioctl =		d7s_ioctl,
 	.open =			d7s_open,
 	.release =		d7s_release,
+	.llseek = noop_llseek,
 };
 
 static struct miscdevice d7s_miscdev = {
@@ -170,8 +171,7 @@ static struct miscdevice d7s_miscdev = {
 	.fops		= &d7s_fops
 };
 
-static int __devinit d7s_probe(struct platform_device *op,
-			       const struct of_device_id *match)
+static int __devinit d7s_probe(struct platform_device *op)
 {
 	struct device_node *opts;
 	int err = -EINVAL;
@@ -265,7 +265,7 @@ static const struct of_device_id d7s_match[] = {
 };
 MODULE_DEVICE_TABLE(of, d7s_match);
 
-static struct of_platform_driver d7s_driver = {
+static struct platform_driver d7s_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
 		.owner = THIS_MODULE,
@@ -275,15 +275,4 @@ static struct of_platform_driver d7s_driver = {
 	.remove		= __devexit_p(d7s_remove),
 };
 
-static int __init d7s_init(void)
-{
-	return of_register_platform_driver(&d7s_driver);
-}
-
-static void __exit d7s_exit(void)
-{
-	of_unregister_platform_driver(&d7s_driver);
-}
-
-module_init(d7s_init);
-module_exit(d7s_exit);
+module_platform_driver(d7s_driver);

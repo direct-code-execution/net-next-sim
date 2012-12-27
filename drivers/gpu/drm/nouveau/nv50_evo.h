@@ -24,6 +24,9 @@
  *
  */
 
+#ifndef __NV50_EVO_H__
+#define __NV50_EVO_H__
+
 #define NV50_EVO_UPDATE                                              0x00000080
 #define NV50_EVO_UNK84                                               0x00000084
 #define NV50_EVO_UNK84_NOTIFY                                        0x40000000
@@ -101,7 +104,8 @@
 #define NV50_EVO_CRTC_SCALE_CTRL_INACTIVE                            0x00000000
 #define NV50_EVO_CRTC_SCALE_CTRL_ACTIVE                              0x00000009
 #define NV50_EVO_CRTC_COLOR_CTRL                                     0x000008a8
-#define NV50_EVO_CRTC_COLOR_CTRL_COLOR                               0x00040000
+#define NV50_EVO_CRTC_COLOR_CTRL_VIBRANCE                            0x000fff00
+#define NV50_EVO_CRTC_COLOR_CTRL_HUE                                 0xfff00000
 #define NV50_EVO_CRTC_FB_POS                                         0x000008c0
 #define NV50_EVO_CRTC_REAL_RES                                       0x000008c8
 #define NV50_EVO_CRTC_SCALE_CENTER_OFFSET                            0x000008d4
@@ -110,4 +114,7 @@
 /* Both of these are needed, otherwise nothing happens. */
 #define NV50_EVO_CRTC_SCALE_RES1                                     0x000008d8
 #define NV50_EVO_CRTC_SCALE_RES2                                     0x000008dc
+#define NV50_EVO_CRTC_UNK900                                         0x00000900
+#define NV50_EVO_CRTC_UNK904                                         0x00000904
 
+#endif

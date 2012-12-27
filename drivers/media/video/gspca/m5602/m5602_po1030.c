@@ -16,6 +16,8 @@
  *
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include "m5602_po1030.h"
 
 static int po1030_get_exposure(struct gspca_dev *gspca_dev, __s32 *val);
@@ -58,14 +60,14 @@ static const struct ctrl po1030_ctrls[] = {
 #define GAIN_IDX 0
 	{
 		{
-			.id 		= V4L2_CID_GAIN,
-			.type 		= V4L2_CTRL_TYPE_INTEGER,
-			.name 		= "gain",
-			.minimum 	= 0x00,
-			.maximum 	= 0x4f,
-			.step 		= 0x1,
-			.default_value 	= PO1030_GLOBAL_GAIN_DEFAULT,
-			.flags         	= V4L2_CTRL_FLAG_SLIDER
+			.id		= V4L2_CID_GAIN,
+			.type		= V4L2_CTRL_TYPE_INTEGER,
+			.name		= "gain",
+			.minimum	= 0x00,
+			.maximum	= 0x4f,
+			.step		= 0x1,
+			.default_value	= PO1030_GLOBAL_GAIN_DEFAULT,
+			.flags		= V4L2_CTRL_FLAG_SLIDER
 		},
 		.set = po1030_set_gain,
 		.get = po1030_get_gain
@@ -73,14 +75,14 @@ static const struct ctrl po1030_ctrls[] = {
 #define EXPOSURE_IDX 1
 	{
 		{
-			.id 		= V4L2_CID_EXPOSURE,
-			.type 		= V4L2_CTRL_TYPE_INTEGER,
-			.name 		= "exposure",
-			.minimum 	= 0x00,
-			.maximum 	= 0x02ff,
-			.step 		= 0x1,
-			.default_value 	= PO1030_EXPOSURE_DEFAULT,
-			.flags         	= V4L2_CTRL_FLAG_SLIDER
+			.id		= V4L2_CID_EXPOSURE,
+			.type		= V4L2_CTRL_TYPE_INTEGER,
+			.name		= "exposure",
+			.minimum	= 0x00,
+			.maximum	= 0x02ff,
+			.step		= 0x1,
+			.default_value	= PO1030_EXPOSURE_DEFAULT,
+			.flags		= V4L2_CTRL_FLAG_SLIDER
 		},
 		.set = po1030_set_exposure,
 		.get = po1030_get_exposure
@@ -88,14 +90,14 @@ static const struct ctrl po1030_ctrls[] = {
 #define RED_BALANCE_IDX 2
 	{
 		{
-			.id 		= V4L2_CID_RED_BALANCE,
-			.type 		= V4L2_CTRL_TYPE_INTEGER,
-			.name 		= "red balance",
-			.minimum 	= 0x00,
-			.maximum 	= 0xff,
-			.step 		= 0x1,
-			.default_value 	= PO1030_RED_GAIN_DEFAULT,
-			.flags         	= V4L2_CTRL_FLAG_SLIDER
+			.id		= V4L2_CID_RED_BALANCE,
+			.type		= V4L2_CTRL_TYPE_INTEGER,
+			.name		= "red balance",
+			.minimum	= 0x00,
+			.maximum	= 0xff,
+			.step		= 0x1,
+			.default_value	= PO1030_RED_GAIN_DEFAULT,
+			.flags		= V4L2_CTRL_FLAG_SLIDER
 		},
 		.set = po1030_set_red_balance,
 		.get = po1030_get_red_balance
@@ -103,14 +105,14 @@ static const struct ctrl po1030_ctrls[] = {
 #define BLUE_BALANCE_IDX 3
 	{
 		{
-			.id 		= V4L2_CID_BLUE_BALANCE,
-			.type 		= V4L2_CTRL_TYPE_INTEGER,
-			.name 		= "blue balance",
-			.minimum 	= 0x00,
-			.maximum 	= 0xff,
-			.step 		= 0x1,
-			.default_value 	= PO1030_BLUE_GAIN_DEFAULT,
-			.flags         	= V4L2_CTRL_FLAG_SLIDER
+			.id		= V4L2_CID_BLUE_BALANCE,
+			.type		= V4L2_CTRL_TYPE_INTEGER,
+			.name		= "blue balance",
+			.minimum	= 0x00,
+			.maximum	= 0xff,
+			.step		= 0x1,
+			.default_value	= PO1030_BLUE_GAIN_DEFAULT,
+			.flags		= V4L2_CTRL_FLAG_SLIDER
 		},
 		.set = po1030_set_blue_balance,
 		.get = po1030_get_blue_balance
@@ -118,13 +120,13 @@ static const struct ctrl po1030_ctrls[] = {
 #define HFLIP_IDX 4
 	{
 		{
-			.id 		= V4L2_CID_HFLIP,
-			.type 		= V4L2_CTRL_TYPE_BOOLEAN,
-			.name 		= "horizontal flip",
-			.minimum 	= 0,
-			.maximum 	= 1,
-			.step 		= 1,
-			.default_value 	= 0,
+			.id		= V4L2_CID_HFLIP,
+			.type		= V4L2_CTRL_TYPE_BOOLEAN,
+			.name		= "horizontal flip",
+			.minimum	= 0,
+			.maximum	= 1,
+			.step		= 1,
+			.default_value	= 0,
 		},
 		.set = po1030_set_hflip,
 		.get = po1030_get_hflip
@@ -132,13 +134,13 @@ static const struct ctrl po1030_ctrls[] = {
 #define VFLIP_IDX 5
 	{
 		{
-			.id 		= V4L2_CID_VFLIP,
-			.type 		= V4L2_CTRL_TYPE_BOOLEAN,
-			.name 		= "vertical flip",
-			.minimum 	= 0,
-			.maximum 	= 1,
-			.step 		= 1,
-			.default_value 	= 0,
+			.id		= V4L2_CID_VFLIP,
+			.type		= V4L2_CTRL_TYPE_BOOLEAN,
+			.name		= "vertical flip",
+			.minimum	= 0,
+			.maximum	= 1,
+			.step		= 1,
+			.default_value	= 0,
 		},
 		.set = po1030_set_vflip,
 		.get = po1030_get_vflip
@@ -146,13 +148,13 @@ static const struct ctrl po1030_ctrls[] = {
 #define AUTO_WHITE_BALANCE_IDX 6
 	{
 		{
-			.id 		= V4L2_CID_AUTO_WHITE_BALANCE,
-			.type 		= V4L2_CTRL_TYPE_BOOLEAN,
-			.name 		= "auto white balance",
-			.minimum 	= 0,
-			.maximum 	= 1,
-			.step 		= 1,
-			.default_value 	= 0,
+			.id		= V4L2_CID_AUTO_WHITE_BALANCE,
+			.type		= V4L2_CTRL_TYPE_BOOLEAN,
+			.name		= "auto white balance",
+			.minimum	= 0,
+			.maximum	= 1,
+			.step		= 1,
+			.default_value	= 0,
 		},
 		.set = po1030_set_auto_white_balance,
 		.get = po1030_get_auto_white_balance
@@ -160,13 +162,13 @@ static const struct ctrl po1030_ctrls[] = {
 #define AUTO_EXPOSURE_IDX 7
 	{
 		{
-			.id 		= V4L2_CID_EXPOSURE_AUTO,
-			.type 		= V4L2_CTRL_TYPE_BOOLEAN,
-			.name 		= "auto exposure",
-			.minimum 	= 0,
-			.maximum 	= 1,
-			.step 		= 1,
-			.default_value 	= 0,
+			.id		= V4L2_CID_EXPOSURE_AUTO,
+			.type		= V4L2_CTRL_TYPE_BOOLEAN,
+			.name		= "auto exposure",
+			.minimum	= 0,
+			.maximum	= 1,
+			.step		= 1,
+			.default_value	= 0,
 		},
 		.set = po1030_set_auto_exposure,
 		.get = po1030_get_auto_exposure
@@ -174,14 +176,14 @@ static const struct ctrl po1030_ctrls[] = {
 #define GREEN_BALANCE_IDX 8
 	{
 		{
-			.id 		= M5602_V4L2_CID_GREEN_BALANCE,
-			.type 		= V4L2_CTRL_TYPE_INTEGER,
-			.name 		= "green balance",
-			.minimum 	= 0x00,
-			.maximum 	= 0xff,
-			.step 		= 0x1,
-			.default_value 	= PO1030_GREEN_GAIN_DEFAULT,
-			.flags         	= V4L2_CTRL_FLAG_SLIDER
+			.id		= M5602_V4L2_CID_GREEN_BALANCE,
+			.type		= V4L2_CTRL_TYPE_INTEGER,
+			.name		= "green balance",
+			.minimum	= 0x00,
+			.maximum	= 0xff,
+			.step		= 0x1,
+			.default_value	= PO1030_GREEN_GAIN_DEFAULT,
+			.flags		= V4L2_CTRL_FLAG_SLIDER
 		},
 		.set = po1030_set_green_balance,
 		.get = po1030_get_green_balance
@@ -197,7 +199,7 @@ int po1030_probe(struct sd *sd)
 
 	if (force_sensor) {
 		if (force_sensor == PO1030_SENSOR) {
-			info("Forcing a %s sensor", po1030.name);
+			pr_info("Forcing a %s sensor\n", po1030.name);
 			goto sensor_found;
 		}
 		/* If we want to force another sensor, don't try to probe this
@@ -221,7 +223,7 @@ int po1030_probe(struct sd *sd)
 		return -ENODEV;
 
 	if (dev_id_h == 0x30) {
-		info("Detected a po1030 sensor");
+		pr_info("Detected a po1030 sensor\n");
 		goto sensor_found;
 	}
 	return -ENODEV;
@@ -267,7 +269,7 @@ int po1030_init(struct sd *sd)
 			break;
 
 		default:
-			info("Invalid stream command, exiting init");
+			pr_info("Invalid stream command, exiting init\n");
 			return -EINVAL;
 		}
 	}
@@ -733,16 +735,15 @@ static void po1030_dump_registers(struct sd *sd)
 	int address;
 	u8 value = 0;
 
-	info("Dumping the po1030 sensor core registers");
+	pr_info("Dumping the po1030 sensor core registers\n");
 	for (address = 0; address < 0x7f; address++) {
 		m5602_read_sensor(sd, address, &value, 1);
-		info("register 0x%x contains 0x%x",
-		     address, value);
+		pr_info("register 0x%x contains 0x%x\n", address, value);
 	}
 
-	info("po1030 register state dump complete");
+	pr_info("po1030 register state dump complete\n");
 
-	info("Probing for which registers that are read/write");
+	pr_info("Probing for which registers that are read/write\n");
 	for (address = 0; address < 0xff; address++) {
 		u8 old_value, ctrl_value;
 		u8 test_value[2] = {0xff, 0xff};
@@ -752,9 +753,9 @@ static void po1030_dump_registers(struct sd *sd)
 		m5602_read_sensor(sd, address, &ctrl_value, 1);
 
 		if (ctrl_value == test_value[0])
-			info("register 0x%x is writeable", address);
+			pr_info("register 0x%x is writeable\n", address);
 		else
-			info("register 0x%x is read only", address);
+			pr_info("register 0x%x is read only\n", address);
 
 		/* Restore original value */
 		m5602_write_sensor(sd, address, &old_value, 1);

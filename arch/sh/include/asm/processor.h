@@ -35,7 +35,7 @@ enum cpu_type {
 	CPU_SH7723, CPU_SH7724, CPU_SH7757, CPU_SHX3,
 
 	/* SH4AL-DSP types */
-	CPU_SH7343, CPU_SH7722, CPU_SH7366,
+	CPU_SH7343, CPU_SH7722, CPU_SH7366, CPU_SH7372,
 
 	/* SH-5 types */
         CPU_SH5_101, CPU_SH5_103,
@@ -89,6 +89,7 @@ struct sh_cpuinfo {
 	struct task_struct *idle;
 #endif
 
+	unsigned int phys_bits;
 	unsigned long flags;
 } __attribute__ ((aligned(L1_CACHE_BYTES)));
 
@@ -99,6 +100,10 @@ extern struct sh_cpuinfo cpu_data[];
 
 #define cpu_sleep()	__asm__ __volatile__ ("sleep" : : : "memory")
 #define cpu_relax()	barrier()
+
+void default_idle(void);
+void cpu_idle_wait(void);
+void stop_this_cpu(void *);
 
 /* Forward decl */
 struct seq_operations;
@@ -158,6 +163,17 @@ int test_mode_pin(int pin);
 int vsyscall_init(void);
 #else
 #define vsyscall_init() do { } while (0)
+#endif
+
+/*
+ * SH-2A has both 16 and 32-bit opcodes, do lame encoding checks.
+ */
+#ifdef CONFIG_CPU_SH2A
+extern unsigned int instruction_size(unsigned int insn);
+#elif defined(CONFIG_SUPERH32)
+#define instruction_size(insn)	(2)
+#else
+#define instruction_size(insn)	(4)
 #endif
 
 #endif /* __ASSEMBLY__ */

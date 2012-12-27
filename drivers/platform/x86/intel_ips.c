@@ -75,6 +75,9 @@
 #include <drm/i915_drm.h>
 #include <asm/msr.h>
 #include <asm/processor.h>
+#include "intel_ips.h"
+
+#include <asm-generic/io-64-nonatomic-lo-hi.h>
 
 #define PCI_DEVICE_ID_INTEL_THERMAL_SENSOR 0x3b32
 
@@ -245,6 +248,7 @@
 #define thm_writel(off, val) writel((val), ips->regmap + (off))
 
 static const int IPS_ADJUST_PERIOD = 5000; /* ms */
+static bool late_i915_load = false;
 
 /* For initial average collection */
 static const int IPS_SAMPLE_PERIOD = 200; /* ms */
@@ -339,6 +343,9 @@ struct ips_driver {
 	u64 orig_turbo_ratios;
 };
 
+static bool
+ips_gpu_turbo_enabled(struct ips_driver *ips);
+
 /**
  * ips_cpu_busy - is CPU busy?
  * @ips: IPS driver struct
@@ -385,7 +392,7 @@ static void ips_cpu_raise(struct ips_driver *ips)
 
 	thm_writew(THM_MPCPC, (new_tdp_limit * 10) / 8);
 
-	turbo_override |= TURBO_TDC_OVR_EN | TURBO_TDC_OVR_EN;
+	turbo_override |= TURBO_TDC_OVR_EN | TURBO_TDP_OVR_EN;
 	wrmsrl(TURBO_POWER_CURRENT_LIMIT, turbo_override);
 
 	turbo_override &= ~TURBO_TDP_MASK;
@@ -420,7 +427,7 @@ static void ips_cpu_lower(struct ips_driver *ips)
 
 	thm_writew(THM_MPCPC, (new_limit * 10) / 8);
 
-	turbo_override |= TURBO_TDC_OVR_EN | TURBO_TDC_OVR_EN;
+	turbo_override |= TURBO_TDC_OVR_EN | TURBO_TDP_OVR_EN;
 	wrmsrl(TURBO_POWER_CURRENT_LIMIT, turbo_override);
 
 	turbo_override &= ~TURBO_TDP_MASK;
@@ -517,7 +524,7 @@ static void ips_disable_cpu_turbo(struct ips_driver *ips)
  */
 static bool ips_gpu_busy(struct ips_driver *ips)
 {
-	if (!ips->gpu_turbo_enabled)
+	if (!ips_gpu_turbo_enabled(ips))
 		return false;
 
 	return ips->gpu_busy();
@@ -532,7 +539,7 @@ static bool ips_gpu_busy(struct ips_driver *ips)
  */
 static void ips_gpu_raise(struct ips_driver *ips)
 {
-	if (!ips->gpu_turbo_enabled)
+	if (!ips_gpu_turbo_enabled(ips))
 		return;
 
 	if (!ips->gpu_raise())
@@ -549,7 +556,7 @@ static void ips_gpu_raise(struct ips_driver *ips)
  */
 static void ips_gpu_lower(struct ips_driver *ips)
 {
-	if (!ips->gpu_turbo_enabled)
+	if (!ips_gpu_turbo_enabled(ips))
 		return;
 
 	if (!ips->gpu_lower())
@@ -602,25 +609,16 @@ static bool mcp_exceeded(struct ips_driver *ips)
 	bool ret = false;
 	u32 temp_limit;
 	u32 avg_power;
-	const char *msg = "MCP limit exceeded: ";
 
 	spin_lock_irqsave(&ips->turbo_status_lock, flags);
 
 	temp_limit = ips->mcp_temp_limit * 100;
-	if (ips->mcp_avg_temp > temp_limit) {
-		dev_info(&ips->dev->dev,
-			"%sAvg temp %u, limit %u\n", msg, ips->mcp_avg_temp,
-			temp_limit);
+	if (ips->mcp_avg_temp > temp_limit)
 		ret = true;
-	}
 
 	avg_power = ips->cpu_avg_power + ips->mch_avg_power;
-	if (avg_power > ips->mcp_power_limit) {
-		dev_info(&ips->dev->dev,
-			"%sAvg power %u, limit %u\n", msg, avg_power,
-			ips->mcp_power_limit);
+	if (avg_power > ips->mcp_power_limit)
 		ret = true;
-	}
 
 	spin_unlock_irqrestore(&ips->turbo_status_lock, flags);
 
@@ -1106,7 +1104,7 @@ static int ips_monitor(void *data)
 		last_msecs = jiffies_to_msecs(jiffies);
 		expire = jiffies + msecs_to_jiffies(IPS_SAMPLE_PERIOD);
 
-		__set_current_state(TASK_UNINTERRUPTIBLE);
+		__set_current_state(TASK_INTERRUPTIBLE);
 		mod_timer(&timer, expire);
 		schedule();
 
@@ -1454,6 +1452,31 @@ out_err:
 	return false;
 }
 
+static bool
+ips_gpu_turbo_enabled(struct ips_driver *ips)
+{
+	if (!ips->gpu_busy && late_i915_load) {
+		if (ips_get_i915_syms(ips)) {
+			dev_info(&ips->dev->dev,
+				 "i915 driver attached, reenabling gpu turbo\n");
+			ips->gpu_turbo_enabled = !(thm_readl(THM_HTS) & HTS_GTD_DIS);
+		}
+	}
+
+	return ips->gpu_turbo_enabled;
+}
+
+void
+ips_link_to_i915_driver(void)
+{
+	/* We can't cleanly get at the various ips_driver structs from
+	 * this caller (the i915 driver), so just set a flag saying
+	 * that it's time to try getting the symbols again.
+	 */
+	late_i915_load = true;
+}
+EXPORT_SYMBOL_GPL(ips_link_to_i915_driver);
+
 static DEFINE_PCI_DEVICE_TABLE(ips_id_table) = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL,
 		     PCI_DEVICE_ID_INTEL_THERMAL_SENSOR), },
@@ -1542,7 +1565,7 @@ static int ips_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		ips->poll_turbo_status = true;
 
 	if (!ips_get_i915_syms(ips)) {
-		dev_err(&dev->dev, "failed to get i915 symbols, graphics turbo disabled\n");
+		dev_info(&dev->dev, "failed to get i915 symbols, graphics turbo disabled until i915 loads\n");
 		ips->gpu_turbo_enabled = false;
 	} else {
 		dev_dbg(&dev->dev, "graphics turbo enabled\n");

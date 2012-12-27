@@ -18,6 +18,7 @@
  */
 
 #include <linux/fs.h>
+#include <linux/namei.h>
 #include <linux/ctype.h>
 #include <linux/quotaops.h>
 #include <linux/exportfs.h>
@@ -71,7 +72,7 @@ static inline void free_ea_wmap(struct inode *inode)
  * RETURN:	Errors from subroutines
  *
  */
-static int jfs_create(struct inode *dip, struct dentry *dentry, int mode,
+static int jfs_create(struct inode *dip, struct dentry *dentry, umode_t mode,
 		struct nameidata *nd)
 {
 	int rc = 0;
@@ -114,7 +115,7 @@ static int jfs_create(struct inode *dip, struct dentry *dentry, int mode,
 	if (rc)
 		goto out3;
 
-	rc = jfs_init_security(tid, ip, dip);
+	rc = jfs_init_security(tid, ip, dip, &dentry->d_name);
 	if (rc) {
 		txAbort(tid, 0);
 		goto out3;
@@ -171,7 +172,7 @@ static int jfs_create(struct inode *dip, struct dentry *dentry, int mode,
 	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 	if (rc) {
 		free_ea_wmap(ip);
-		ip->i_nlink = 0;
+		clear_nlink(ip);
 		unlock_new_inode(ip);
 		iput(ip);
 	} else {
@@ -204,7 +205,7 @@ static int jfs_create(struct inode *dip, struct dentry *dentry, int mode,
  * note:
  * EACCESS: user needs search+write permission on the parent directory
  */
-static int jfs_mkdir(struct inode *dip, struct dentry *dentry, int mode)
+static int jfs_mkdir(struct inode *dip, struct dentry *dentry, umode_t mode)
 {
 	int rc = 0;
 	tid_t tid;		/* transaction id */
@@ -218,12 +219,6 @@ static int jfs_mkdir(struct inode *dip, struct dentry *dentry, int mode)
 	jfs_info("jfs_mkdir: dip:0x%p name:%s", dip, dentry->d_name.name);
 
 	dquot_initialize(dip);
-
-	/* link count overflow on parent directory ? */
-	if (dip->i_nlink == JFS_LINK_MAX) {
-		rc = -EMLINK;
-		goto out1;
-	}
 
 	/*
 	 * search parent directory for entry/freespace
@@ -252,7 +247,7 @@ static int jfs_mkdir(struct inode *dip, struct dentry *dentry, int mode)
 	if (rc)
 		goto out3;
 
-	rc = jfs_init_security(tid, ip, dip);
+	rc = jfs_init_security(tid, ip, dip, &dentry->d_name);
 	if (rc) {
 		txAbort(tid, 0);
 		goto out3;
@@ -291,7 +286,7 @@ static int jfs_mkdir(struct inode *dip, struct dentry *dentry, int mode)
 		goto out3;
 	}
 
-	ip->i_nlink = 2;	/* for '.' */
+	set_nlink(ip, 2);	/* for '.' */
 	ip->i_op = &jfs_dir_inode_operations;
 	ip->i_fop = &jfs_dir_operations;
 
@@ -310,7 +305,7 @@ static int jfs_mkdir(struct inode *dip, struct dentry *dentry, int mode)
 	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 	if (rc) {
 		free_ea_wmap(ip);
-		ip->i_nlink = 0;
+		clear_nlink(ip);
 		unlock_new_inode(ip);
 		iput(ip);
 	} else {
@@ -805,12 +800,6 @@ static int jfs_link(struct dentry *old_dentry,
 	jfs_info("jfs_link: %s %s", old_dentry->d_name.name,
 		 dentry->d_name.name);
 
-	if (ip->i_nlink == JFS_LINK_MAX)
-		return -EMLINK;
-
-	if (ip->i_nlink == 0)
-		return -ENOENT;
-
 	dquot_initialize(dir);
 
 	tid = txBegin(ip->i_sb, 0);
@@ -839,14 +828,14 @@ static int jfs_link(struct dentry *old_dentry,
 	ip->i_ctime = CURRENT_TIME;
 	dir->i_ctime = dir->i_mtime = CURRENT_TIME;
 	mark_inode_dirty(dir);
-	atomic_inc(&ip->i_count);
+	ihold(ip);
 
 	iplist[0] = ip;
 	iplist[1] = dir;
 	rc = txCommit(tid, 2, &iplist[0], 0);
 
 	if (rc) {
-		ip->i_nlink--; /* never instantiated */
+		drop_nlink(ip); /* never instantiated */
 		iput(ip);
 	} else
 		d_instantiate(dentry, ip);
@@ -895,7 +884,7 @@ static int jfs_symlink(struct inode *dip, struct dentry *dentry,
 	unchar *i_fastsymlink;
 	s64 xlen = 0;
 	int bmask = 0, xsize;
-	s64 extent = 0, xaddr;
+	s64 xaddr;
 	struct metapage *mp;
 	struct super_block *sb;
 	struct tblock *tblk;
@@ -931,7 +920,7 @@ static int jfs_symlink(struct inode *dip, struct dentry *dentry,
 	mutex_lock_nested(&JFS_IP(dip)->commit_mutex, COMMIT_MUTEX_PARENT);
 	mutex_lock_nested(&JFS_IP(ip)->commit_mutex, COMMIT_MUTEX_CHILD);
 
-	rc = jfs_init_security(tid, ip, dip);
+	rc = jfs_init_security(tid, ip, dip, &dentry->d_name);
 	if (rc)
 		goto out3;
 
@@ -995,7 +984,6 @@ static int jfs_symlink(struct inode *dip, struct dentry *dentry,
 			txAbort(tid, 0);
 			goto out3;
 		}
-		extent = xaddr;
 		ip->i_size = ssize - 1;
 		while (ssize) {
 			/* This is kind of silly since PATH_MAX == 4K */
@@ -1051,7 +1039,7 @@ static int jfs_symlink(struct inode *dip, struct dentry *dentry,
 	mutex_unlock(&JFS_IP(dip)->commit_mutex);
 	if (rc) {
 		free_ea_wmap(ip);
-		ip->i_nlink = 0;
+		clear_nlink(ip);
 		unlock_new_inode(ip);
 		iput(ip);
 	} else {
@@ -1141,10 +1129,6 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 				rc = -ENOTEMPTY;
 				goto out3;
 			}
-		} else if ((new_dir != old_dir) &&
-			   (new_dir->i_nlink == JFS_LINK_MAX)) {
-			rc = -EMLINK;
-			goto out3;
 		}
 	} else if (new_ip) {
 		IWRITE_LOCK(new_ip, RDWRLOCK_NORMAL);
@@ -1356,7 +1340,7 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
  * FUNCTION:	Create a special file (device)
  */
 static int jfs_mknod(struct inode *dir, struct dentry *dentry,
-		int mode, dev_t rdev)
+		umode_t mode, dev_t rdev)
 {
 	struct jfs_inode_info *jfs_ip;
 	struct btstack btstack;
@@ -1394,7 +1378,7 @@ static int jfs_mknod(struct inode *dir, struct dentry *dentry,
 	if (rc)
 		goto out3;
 
-	rc = jfs_init_security(tid, ip, dir);
+	rc = jfs_init_security(tid, ip, dir, &dentry->d_name);
 	if (rc) {
 		txAbort(tid, 0);
 		goto out3;
@@ -1436,7 +1420,7 @@ static int jfs_mknod(struct inode *dir, struct dentry *dentry,
 	mutex_unlock(&JFS_IP(dir)->commit_mutex);
 	if (rc) {
 		free_ea_wmap(ip);
-		ip->i_nlink = 0;
+		clear_nlink(ip);
 		unlock_new_inode(ip);
 		iput(ip);
 	} else {
@@ -1458,45 +1442,26 @@ static struct dentry *jfs_lookup(struct inode *dip, struct dentry *dentry, struc
 	ino_t inum;
 	struct inode *ip;
 	struct component_name key;
-	const char *name = dentry->d_name.name;
-	int len = dentry->d_name.len;
 	int rc;
 
-	jfs_info("jfs_lookup: name = %s", name);
+	jfs_info("jfs_lookup: name = %s", dentry->d_name.name);
 
-	if (JFS_SBI(dip->i_sb)->mntflag & JFS_OS2)
-		dentry->d_op = &jfs_ci_dentry_operations;
-
-	if ((name[0] == '.') && (len == 1))
-		inum = dip->i_ino;
-	else if (strcmp(name, "..") == 0)
-		inum = PARENT(dip);
-	else {
-		if ((rc = get_UCSname(&key, dentry)))
-			return ERR_PTR(rc);
-		rc = dtSearch(dip, &key, &inum, &btstack, JFS_LOOKUP);
-		free_UCSname(&key);
-		if (rc == -ENOENT) {
-			d_add(dentry, NULL);
-			return NULL;
-		} else if (rc) {
-			jfs_err("jfs_lookup: dtSearch returned %d", rc);
-			return ERR_PTR(rc);
-		}
+	if ((rc = get_UCSname(&key, dentry)))
+		return ERR_PTR(rc);
+	rc = dtSearch(dip, &key, &inum, &btstack, JFS_LOOKUP);
+	free_UCSname(&key);
+	if (rc == -ENOENT) {
+		ip = NULL;
+	} else if (rc) {
+		jfs_err("jfs_lookup: dtSearch returned %d", rc);
+		ip = ERR_PTR(rc);
+	} else {
+		ip = jfs_iget(dip->i_sb, inum);
+		if (IS_ERR(ip))
+			jfs_err("jfs_lookup: iget failed on inum %d", (uint)inum);
 	}
 
-	ip = jfs_iget(dip->i_sb, inum);
-	if (IS_ERR(ip)) {
-		jfs_err("jfs_lookup: iget failed on inum %d", (uint) inum);
-		return ERR_CAST(ip);
-	}
-
-	dentry = d_splice_alias(ip, dentry);
-
-	if (dentry && (JFS_SBI(dip->i_sb)->mntflag & JFS_OS2))
-		dentry->d_op = &jfs_ci_dentry_operations;
-
-	return dentry;
+	return d_splice_alias(ip, dentry);
 }
 
 static struct inode *jfs_nfs_get_inode(struct super_block *sb,
@@ -1558,7 +1523,7 @@ const struct inode_operations jfs_dir_inode_operations = {
 	.removexattr	= jfs_removexattr,
 	.setattr	= jfs_setattr,
 #ifdef CONFIG_JFS_POSIX_ACL
-	.check_acl	= jfs_check_acl,
+	.get_acl	= jfs_get_acl,
 #endif
 };
 
@@ -1573,7 +1538,8 @@ const struct file_operations jfs_dir_operations = {
 	.llseek		= generic_file_llseek,
 };
 
-static int jfs_ci_hash(struct dentry *dir, struct qstr *this)
+static int jfs_ci_hash(const struct dentry *dir, const struct inode *inode,
+		struct qstr *this)
 {
 	unsigned long hash;
 	int i;
@@ -1586,32 +1552,59 @@ static int jfs_ci_hash(struct dentry *dir, struct qstr *this)
 	return 0;
 }
 
-static int jfs_ci_compare(struct dentry *dir, struct qstr *a, struct qstr *b)
+static int jfs_ci_compare(const struct dentry *parent,
+		const struct inode *pinode,
+		const struct dentry *dentry, const struct inode *inode,
+		unsigned int len, const char *str, const struct qstr *name)
 {
 	int i, result = 1;
 
-	if (a->len != b->len)
+	if (len != name->len)
 		goto out;
-	for (i=0; i < a->len; i++) {
-		if (tolower(a->name[i]) != tolower(b->name[i]))
+	for (i=0; i < len; i++) {
+		if (tolower(str[i]) != tolower(name->name[i]))
 			goto out;
 	}
 	result = 0;
-
-	/*
-	 * We want creates to preserve case.  A negative dentry, a, that
-	 * has a different case than b may cause a new entry to be created
-	 * with the wrong case.  Since we can't tell if a comes from a negative
-	 * dentry, we blindly replace it with b.  This should be harmless if
-	 * a is not a negative dentry.
-	 */
-	memcpy((unsigned char *)a->name, b->name, a->len);
 out:
 	return result;
+}
+
+static int jfs_ci_revalidate(struct dentry *dentry, struct nameidata *nd)
+{
+	/*
+	 * This is not negative dentry. Always valid.
+	 *
+	 * Note, rename() to existing directory entry will have ->d_inode,
+	 * and will use existing name which isn't specified name by user.
+	 *
+	 * We may be able to drop this positive dentry here. But dropping
+	 * positive dentry isn't good idea. So it's unsupported like
+	 * rename("filename", "FILENAME") for now.
+	 */
+	if (dentry->d_inode)
+		return 1;
+
+	/*
+	 * This may be nfsd (or something), anyway, we can't see the
+	 * intent of this. So, since this can be for creation, drop it.
+	 */
+	if (!nd)
+		return 0;
+
+	/*
+	 * Drop the negative dentry, in order to make sure to use the
+	 * case sensitive name which is specified by user if this is
+	 * for creation.
+	 */
+	if (nd->flags & (LOOKUP_CREATE | LOOKUP_RENAME_TARGET))
+		return 0;
+	return 1;
 }
 
 const struct dentry_operations jfs_ci_dentry_operations =
 {
 	.d_hash = jfs_ci_hash,
 	.d_compare = jfs_ci_compare,
+	.d_revalidate = jfs_ci_revalidate,
 };

@@ -24,6 +24,7 @@
 #include "led.h"
 #include "driver-ops.h"
 #include "wme.h"
+#include "rate.h"
 
 /**
  * DOC: Interface list locking
@@ -94,21 +95,14 @@ static inline int identical_mac_addr_allowed(int type1, int type2)
 			 type2 == NL80211_IFTYPE_AP_VLAN));
 }
 
-static int ieee80211_open(struct net_device *dev)
+static int ieee80211_check_concurrent_iface(struct ieee80211_sub_if_data *sdata,
+					    enum nl80211_iftype iftype)
 {
-	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
-	struct ieee80211_sub_if_data *nsdata;
 	struct ieee80211_local *local = sdata->local;
-	struct sta_info *sta;
-	u32 changed = 0;
-	int res;
-	u32 hw_reconf_flags = 0;
-	u8 null_addr[ETH_ALEN] = {0};
+	struct ieee80211_sub_if_data *nsdata;
+	struct net_device *dev = sdata->dev;
 
-	/* fail early if user set an invalid address */
-	if (compare_ether_addr(dev->dev_addr, null_addr) &&
-	    !is_valid_ether_addr(dev->dev_addr))
-		return -EADDRNOTAVAIL;
+	ASSERT_RTNL();
 
 	/* we hold the RTNL here so can safely walk the list */
 	list_for_each_entry(nsdata, &local->interfaces, list) {
@@ -125,7 +119,7 @@ static int ieee80211_open(struct net_device *dev)
 			 * belonging to the same hardware. Then, however, we're
 			 * faced with having to adopt two different TSF timers...
 			 */
-			if (sdata->vif.type == NL80211_IFTYPE_ADHOC &&
+			if (iftype == NL80211_IFTYPE_ADHOC &&
 			    nsdata->vif.type == NL80211_IFTYPE_ADHOC)
 				return -EBUSY;
 
@@ -139,45 +133,90 @@ static int ieee80211_open(struct net_device *dev)
 			/*
 			 * check whether it may have the same address
 			 */
-			if (!identical_mac_addr_allowed(sdata->vif.type,
+			if (!identical_mac_addr_allowed(iftype,
 							nsdata->vif.type))
 				return -ENOTUNIQ;
 
 			/*
 			 * can only add VLANs to enabled APs
 			 */
-			if (sdata->vif.type == NL80211_IFTYPE_AP_VLAN &&
+			if (iftype == NL80211_IFTYPE_AP_VLAN &&
 			    nsdata->vif.type == NL80211_IFTYPE_AP)
 				sdata->bss = &nsdata->u.ap;
 		}
 	}
+
+	return 0;
+}
+
+void ieee80211_adjust_monitor_flags(struct ieee80211_sub_if_data *sdata,
+				    const int offset)
+{
+	struct ieee80211_local *local = sdata->local;
+	u32 flags = sdata->u.mntr_flags;
+
+#define ADJUST(_f, _s)	do {					\
+	if (flags & MONITOR_FLAG_##_f)				\
+		local->fif_##_s += offset;			\
+	} while (0)
+
+	ADJUST(FCSFAIL, fcsfail);
+	ADJUST(PLCPFAIL, plcpfail);
+	ADJUST(CONTROL, control);
+	ADJUST(CONTROL, pspoll);
+	ADJUST(OTHER_BSS, other_bss);
+
+#undef ADJUST
+}
+
+/*
+ * NOTE: Be very careful when changing this function, it must NOT return
+ * an error on interface type changes that have been pre-checked, so most
+ * checks should be in ieee80211_check_concurrent_iface.
+ */
+static int ieee80211_do_open(struct net_device *dev, bool coming_up)
+{
+	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
+	struct ieee80211_local *local = sdata->local;
+	struct sta_info *sta;
+	u32 changed = 0;
+	int res;
+	u32 hw_reconf_flags = 0;
 
 	switch (sdata->vif.type) {
 	case NL80211_IFTYPE_WDS:
 		if (!is_valid_ether_addr(sdata->u.wds.remote_addr))
 			return -ENOLINK;
 		break;
-	case NL80211_IFTYPE_AP_VLAN:
+	case NL80211_IFTYPE_AP_VLAN: {
+		struct ieee80211_sub_if_data *master;
+
 		if (!sdata->bss)
 			return -ENOLINK;
+
 		list_add(&sdata->u.vlan.list, &sdata->bss->vlans);
+
+		master = container_of(sdata->bss,
+				      struct ieee80211_sub_if_data, u.ap);
+		sdata->control_port_protocol =
+			master->control_port_protocol;
+		sdata->control_port_no_encrypt =
+			master->control_port_no_encrypt;
 		break;
+		}
 	case NL80211_IFTYPE_AP:
 		sdata->bss = &sdata->u.ap;
 		break;
 	case NL80211_IFTYPE_MESH_POINT:
-		if (!ieee80211_vif_is_mesh(&sdata->vif))
-			break;
-		/* mesh ifaces must set allmulti to forward mcast traffic */
-		atomic_inc(&local->iff_allmultis);
-		break;
 	case NL80211_IFTYPE_STATION:
 	case NL80211_IFTYPE_MONITOR:
 	case NL80211_IFTYPE_ADHOC:
 		/* no special treatment */
 		break;
 	case NL80211_IFTYPE_UNSPECIFIED:
-	case __NL80211_IFTYPE_AFTER_LAST:
+	case NUM_NL80211_IFTYPES:
+	case NL80211_IFTYPE_P2P_CLIENT:
+	case NL80211_IFTYPE_P2P_GO:
 		/* cannot happen */
 		WARN_ON(1);
 		break;
@@ -187,37 +226,30 @@ static int ieee80211_open(struct net_device *dev)
 		res = drv_start(local);
 		if (res)
 			goto err_del_bss;
+		if (local->ops->napi_poll)
+			napi_enable(&local->napi);
 		/* we're brought up, everything changes */
 		hw_reconf_flags = ~0;
 		ieee80211_led_radio(local, true);
+		ieee80211_mod_tpt_led_trig(local,
+					   IEEE80211_TPT_LEDTRIG_FL_RADIO, 0);
 	}
 
 	/*
-	 * Check all interfaces and copy the hopefully now-present
-	 * MAC address to those that have the special null one.
+	 * Copy the hopefully now-present MAC address to
+	 * this interface, if it has the special null one.
 	 */
-	list_for_each_entry(nsdata, &local->interfaces, list) {
-		struct net_device *ndev = nsdata->dev;
+	if (is_zero_ether_addr(dev->dev_addr)) {
+		memcpy(dev->dev_addr,
+		       local->hw.wiphy->perm_addr,
+		       ETH_ALEN);
+		memcpy(dev->perm_addr, dev->dev_addr, ETH_ALEN);
 
-		/*
-		 * No need to check running since we do not allow
-		 * it to start up with this invalid address.
-		 */
-		if (compare_ether_addr(null_addr, ndev->dev_addr) == 0) {
-			memcpy(ndev->dev_addr,
-			       local->hw.wiphy->perm_addr,
-			       ETH_ALEN);
-			memcpy(ndev->perm_addr, ndev->dev_addr, ETH_ALEN);
+		if (!is_valid_ether_addr(dev->dev_addr)) {
+			if (!local->open_count)
+				drv_stop(local);
+			return -EADDRNOTAVAIL;
 		}
-	}
-
-	/*
-	 * Validate the MAC address for this device.
-	 */
-	if (!is_valid_ether_addr(dev->dev_addr)) {
-		if (!local->open_count)
-			drv_stop(local);
-		return -EADDRNOTAVAIL;
 	}
 
 	switch (sdata->vif.type) {
@@ -237,45 +269,45 @@ static int ieee80211_open(struct net_device *dev)
 			hw_reconf_flags |= IEEE80211_CONF_CHANGE_MONITOR;
 		}
 
-		if (sdata->u.mntr_flags & MONITOR_FLAG_FCSFAIL)
-			local->fif_fcsfail++;
-		if (sdata->u.mntr_flags & MONITOR_FLAG_PLCPFAIL)
-			local->fif_plcpfail++;
-		if (sdata->u.mntr_flags & MONITOR_FLAG_CONTROL) {
-			local->fif_control++;
-			local->fif_pspoll++;
-		}
-		if (sdata->u.mntr_flags & MONITOR_FLAG_OTHER_BSS)
-			local->fif_other_bss++;
-
+		ieee80211_adjust_monitor_flags(sdata, 1);
 		ieee80211_configure_filter(local);
 
 		netif_carrier_on(dev);
 		break;
 	default:
-		res = drv_add_interface(local, &sdata->vif);
-		if (res)
-			goto err_stop;
+		if (coming_up) {
+			res = drv_add_interface(local, sdata);
+			if (res)
+				goto err_stop;
+		}
 
-		if (ieee80211_vif_is_mesh(&sdata->vif)) {
-			local->fif_other_bss++;
-			ieee80211_configure_filter(local);
-
-			ieee80211_start_mesh(sdata);
-		} else if (sdata->vif.type == NL80211_IFTYPE_AP) {
+		if (sdata->vif.type == NL80211_IFTYPE_AP) {
 			local->fif_pspoll++;
+			local->fif_probe_req++;
 
 			ieee80211_configure_filter(local);
+		} else if (sdata->vif.type == NL80211_IFTYPE_ADHOC) {
+			local->fif_probe_req++;
 		}
 
 		changed |= ieee80211_reset_erp_info(sdata);
 		ieee80211_bss_info_change_notify(sdata, changed);
 
-		if (sdata->vif.type == NL80211_IFTYPE_STATION)
+		if (sdata->vif.type == NL80211_IFTYPE_STATION ||
+		    sdata->vif.type == NL80211_IFTYPE_ADHOC)
 			netif_carrier_off(dev);
 		else
 			netif_carrier_on(dev);
+
+		/*
+		 * set default queue parameters so drivers don't
+		 * need to initialise the hardware if the hardware
+		 * doesn't start up with sane defaults
+		 */
+		ieee80211_set_wmm_default(sdata, true);
 	}
+
+	set_bit(SDATA_STATE_RUNNING, &sdata->state);
 
 	if (sdata->vif.type == NL80211_IFTYPE_WDS) {
 		/* Create STA entry for the WDS peer */
@@ -286,14 +318,17 @@ static int ieee80211_open(struct net_device *dev)
 			goto err_del_interface;
 		}
 
-		/* no locking required since STA is not live yet */
-		sta->flags |= WLAN_STA_AUTHORIZED;
+		sta_info_pre_move_state(sta, IEEE80211_STA_AUTH);
+		sta_info_pre_move_state(sta, IEEE80211_STA_ASSOC);
+		sta_info_pre_move_state(sta, IEEE80211_STA_AUTHORIZED);
 
 		res = sta_info_insert(sta);
 		if (res) {
 			/* STA has been freed */
 			goto err_del_interface;
 		}
+
+		rate_control_rate_init(sta);
 	}
 
 	/*
@@ -307,18 +342,15 @@ static int ieee80211_open(struct net_device *dev)
 	if (sdata->flags & IEEE80211_SDATA_PROMISC)
 		atomic_inc(&local->iff_promiscs);
 
+	mutex_lock(&local->mtx);
 	hw_reconf_flags |= __ieee80211_recalc_idle(local);
+	mutex_unlock(&local->mtx);
 
-	local->open_count++;
-	if (hw_reconf_flags) {
+	if (coming_up)
+		local->open_count++;
+
+	if (hw_reconf_flags)
 		ieee80211_hw_config(local, hw_reconf_flags);
-		/*
-		 * set default queue parameters so drivers don't
-		 * need to initialise the hardware if the hardware
-		 * doesn't start up with sane defaults
-		 */
-		ieee80211_set_wmm_default(sdata);
-	}
 
 	ieee80211_recalc_ps(local, -1);
 
@@ -326,7 +358,7 @@ static int ieee80211_open(struct net_device *dev)
 
 	return 0;
  err_del_interface:
-	drv_remove_interface(local, &sdata->vif);
+	drv_remove_interface(local, sdata);
  err_stop:
 	if (!local->open_count)
 		drv_stop(local);
@@ -334,22 +366,45 @@ static int ieee80211_open(struct net_device *dev)
 	sdata->bss = NULL;
 	if (sdata->vif.type == NL80211_IFTYPE_AP_VLAN)
 		list_del(&sdata->u.vlan.list);
+	clear_bit(SDATA_STATE_RUNNING, &sdata->state);
 	return res;
 }
 
-static int ieee80211_stop(struct net_device *dev)
+static int ieee80211_open(struct net_device *dev)
 {
 	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
+	int err;
+
+	/* fail early if user set an invalid address */
+	if (!is_valid_ether_addr(dev->dev_addr))
+		return -EADDRNOTAVAIL;
+
+	err = ieee80211_check_concurrent_iface(sdata, sdata->vif.type);
+	if (err)
+		return err;
+
+	return ieee80211_do_open(dev, true);
+}
+
+static void ieee80211_do_stop(struct ieee80211_sub_if_data *sdata,
+			      bool going_down)
+{
 	struct ieee80211_local *local = sdata->local;
 	unsigned long flags;
 	struct sk_buff *skb, *tmp;
 	u32 hw_reconf_flags = 0;
 	int i;
+	enum nl80211_channel_type orig_ct;
+
+	clear_bit(SDATA_STATE_RUNNING, &sdata->state);
+
+	if (local->scan_sdata == sdata)
+		ieee80211_scan_cancel(local);
 
 	/*
 	 * Stop TX on this interface first.
 	 */
-	netif_tx_stop_all_queues(dev);
+	netif_tx_stop_all_queues(sdata->dev);
 
 	/*
 	 * Purge work for this interface.
@@ -366,12 +421,9 @@ static int ieee80211_stop(struct net_device *dev)
 	 * (because if we remove a STA after ops->remove_interface()
 	 * the driver will have removed the vif info already!)
 	 *
-	 * We could relax this and only unlink the stations from the
-	 * hash table and list but keep them on a per-sdata list that
-	 * will be inserted back again when the interface is brought
-	 * up again, but I don't currently see a use case for that,
-	 * except with WDS which gets a STA entry created when it is
-	 * brought up.
+	 * This is relevant only in AP, WDS and mesh modes, since in
+	 * all other modes we've already removed all stations when
+	 * disconnecting etc.
 	 */
 	sta_info_flush(local, sdata);
 
@@ -387,14 +439,19 @@ static int ieee80211_stop(struct net_device *dev)
 	if (sdata->flags & IEEE80211_SDATA_PROMISC)
 		atomic_dec(&local->iff_promiscs);
 
-	if (sdata->vif.type == NL80211_IFTYPE_AP)
+	if (sdata->vif.type == NL80211_IFTYPE_AP) {
 		local->fif_pspoll--;
+		local->fif_probe_req--;
+	} else if (sdata->vif.type == NL80211_IFTYPE_ADHOC) {
+		local->fif_probe_req--;
+	}
 
-	netif_addr_lock_bh(dev);
+	netif_addr_lock_bh(sdata->dev);
 	spin_lock_bh(&local->filter_lock);
-	__hw_addr_unsync(&local->mc_list, &dev->mc, dev->addr_len);
+	__hw_addr_unsync(&local->mc_list, &sdata->dev->mc,
+			 sdata->dev->addr_len);
 	spin_unlock_bh(&local->filter_lock);
-	netif_addr_unlock_bh(dev);
+	netif_addr_unlock_bh(sdata->dev);
 
 	ieee80211_configure_filter(local);
 
@@ -404,21 +461,37 @@ static int ieee80211_stop(struct net_device *dev)
 	/* APs need special treatment */
 	if (sdata->vif.type == NL80211_IFTYPE_AP) {
 		struct ieee80211_sub_if_data *vlan, *tmpsdata;
-		struct beacon_data *old_beacon = sdata->u.ap.beacon;
+		struct beacon_data *old_beacon =
+			rtnl_dereference(sdata->u.ap.beacon);
+		struct sk_buff *old_probe_resp =
+			rtnl_dereference(sdata->u.ap.probe_resp);
 
-		/* remove beacon */
-		rcu_assign_pointer(sdata->u.ap.beacon, NULL);
+		/* sdata_running will return false, so this will disable */
+		ieee80211_bss_info_change_notify(sdata,
+						 BSS_CHANGED_BEACON_ENABLED);
+
+		/* remove beacon and probe response */
+		RCU_INIT_POINTER(sdata->u.ap.beacon, NULL);
+		RCU_INIT_POINTER(sdata->u.ap.probe_resp, NULL);
 		synchronize_rcu();
 		kfree(old_beacon);
+		kfree_skb(old_probe_resp);
 
 		/* down all dependent devices, that is VLANs */
 		list_for_each_entry_safe(vlan, tmpsdata, &sdata->u.ap.vlans,
 					 u.vlan.list)
 			dev_close(vlan->dev);
 		WARN_ON(!list_empty(&sdata->u.ap.vlans));
+
+		/* free all potentially still buffered bcast frames */
+		local->total_ps_buffered -= skb_queue_len(&sdata->u.ap.ps_bc_buf);
+		skb_queue_purge(&sdata->u.ap.ps_bc_buf);
+	} else if (sdata->vif.type == NL80211_IFTYPE_STATION) {
+		ieee80211_mgd_stop(sdata);
 	}
 
-	local->open_count--;
+	if (going_down)
+		local->open_count--;
 
 	switch (sdata->vif.type) {
 	case NL80211_IFTYPE_AP_VLAN:
@@ -437,52 +510,9 @@ static int ieee80211_stop(struct net_device *dev)
 			hw_reconf_flags |= IEEE80211_CONF_CHANGE_MONITOR;
 		}
 
-		if (sdata->u.mntr_flags & MONITOR_FLAG_FCSFAIL)
-			local->fif_fcsfail--;
-		if (sdata->u.mntr_flags & MONITOR_FLAG_PLCPFAIL)
-			local->fif_plcpfail--;
-		if (sdata->u.mntr_flags & MONITOR_FLAG_CONTROL) {
-			local->fif_pspoll--;
-			local->fif_control--;
-		}
-		if (sdata->u.mntr_flags & MONITOR_FLAG_OTHER_BSS)
-			local->fif_other_bss--;
-
+		ieee80211_adjust_monitor_flags(sdata, -1);
 		ieee80211_configure_filter(local);
 		break;
-	case NL80211_IFTYPE_STATION:
-		del_timer_sync(&sdata->u.mgd.chswitch_timer);
-		del_timer_sync(&sdata->u.mgd.timer);
-		del_timer_sync(&sdata->u.mgd.conn_mon_timer);
-		del_timer_sync(&sdata->u.mgd.bcn_mon_timer);
-		/*
-		 * If any of the timers fired while we waited for it, it will
-		 * have queued its work. Now the work will be running again
-		 * but will not rearm the timer again because it checks
-		 * whether the interface is running, which, at this point,
-		 * it no longer is.
-		 */
-		cancel_work_sync(&sdata->u.mgd.chswitch_work);
-		cancel_work_sync(&sdata->u.mgd.monitor_work);
-		cancel_work_sync(&sdata->u.mgd.beacon_connection_loss_work);
-
-		/* fall through */
-	case NL80211_IFTYPE_ADHOC:
-		if (sdata->vif.type == NL80211_IFTYPE_ADHOC)
-			del_timer_sync(&sdata->u.ibss.timer);
-		/* fall through */
-	case NL80211_IFTYPE_MESH_POINT:
-		if (ieee80211_vif_is_mesh(&sdata->vif)) {
-			/* other_bss and allmulti are always set on mesh
-			 * ifaces */
-			local->fif_other_bss--;
-			atomic_dec(&local->iff_allmultis);
-
-			ieee80211_configure_filter(local);
-
-			ieee80211_stop_mesh(sdata);
-		}
-		/* fall through */
 	default:
 		flush_work(&sdata->work);
 		/*
@@ -494,31 +524,35 @@ static int ieee80211_stop(struct net_device *dev)
 		synchronize_rcu();
 		skb_queue_purge(&sdata->skb_queue);
 
-		if (local->scan_sdata == sdata)
-			ieee80211_scan_cancel(local);
-
 		/*
-		 * Disable beaconing for AP and mesh, IBSS can't
-		 * still be joined to a network at this point.
+		 * Disable beaconing here for mesh only, AP and IBSS
+		 * are already taken care of.
 		 */
-		if (sdata->vif.type == NL80211_IFTYPE_AP ||
-		    sdata->vif.type == NL80211_IFTYPE_MESH_POINT) {
+		if (sdata->vif.type == NL80211_IFTYPE_MESH_POINT)
 			ieee80211_bss_info_change_notify(sdata,
 				BSS_CHANGED_BEACON_ENABLED);
-		}
 
-		/* free all remaining keys, there shouldn't be any */
+		/*
+		 * Free all remaining keys, there shouldn't be any,
+		 * except maybe group keys in AP more or WDS?
+		 */
 		ieee80211_free_keys(sdata);
-		drv_remove_interface(local, &sdata->vif);
+
+		if (going_down)
+			drv_remove_interface(local, sdata);
 	}
 
 	sdata->bss = NULL;
 
+	mutex_lock(&local->mtx);
 	hw_reconf_flags |= __ieee80211_recalc_idle(local);
+	mutex_unlock(&local->mtx);
 
 	ieee80211_recalc_ps(local, -1);
 
 	if (local->open_count == 0) {
+		if (local->ops->napi_poll)
+			napi_disable(&local->napi);
 		ieee80211_clear_tx_pending(local);
 		ieee80211_stop_device(local);
 
@@ -526,8 +560,14 @@ static int ieee80211_stop(struct net_device *dev)
 		hw_reconf_flags = 0;
 	}
 
+	/* Re-calculate channel-type, in case there are multiple vifs
+	 * on different channel types.
+	 */
+	orig_ct = local->_oper_channel_type;
+	ieee80211_set_channel_type(local, NULL, NL80211_CHAN_NO_HT);
+
 	/* do after stop to avoid reconfiguring when we stop anyway */
-	if (hw_reconf_flags)
+	if (hw_reconf_flags || (orig_ct != local->_oper_channel_type))
 		ieee80211_hw_config(local, hw_reconf_flags);
 
 	spin_lock_irqsave(&local->queue_stop_reason_lock, flags);
@@ -541,6 +581,13 @@ static int ieee80211_stop(struct net_device *dev)
 		}
 	}
 	spin_unlock_irqrestore(&local->queue_stop_reason_lock, flags);
+}
+
+static int ieee80211_stop(struct net_device *dev)
+{
+	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
+
+	ieee80211_do_stop(sdata, true);
 
 	return 0;
 }
@@ -585,8 +632,6 @@ static void ieee80211_teardown_sdata(struct net_device *dev)
 {
 	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
 	struct ieee80211_local *local = sdata->local;
-	struct beacon_data *beacon;
-	struct sk_buff *skb;
 	int flushed;
 	int i;
 
@@ -599,37 +644,8 @@ static void ieee80211_teardown_sdata(struct net_device *dev)
 		__skb_queue_purge(&sdata->fragments[i].skb_list);
 	sdata->fragment_next = 0;
 
-	switch (sdata->vif.type) {
-	case NL80211_IFTYPE_AP:
-		beacon = sdata->u.ap.beacon;
-		rcu_assign_pointer(sdata->u.ap.beacon, NULL);
-		synchronize_rcu();
-		kfree(beacon);
-
-		while ((skb = skb_dequeue(&sdata->u.ap.ps_bc_buf))) {
-			local->total_ps_buffered--;
-			dev_kfree_skb(skb);
-		}
-
-		break;
-	case NL80211_IFTYPE_MESH_POINT:
-		if (ieee80211_vif_is_mesh(&sdata->vif))
-			mesh_rmc_free(sdata);
-		break;
-	case NL80211_IFTYPE_ADHOC:
-		if (WARN_ON(sdata->u.ibss.presp))
-			kfree_skb(sdata->u.ibss.presp);
-		break;
-	case NL80211_IFTYPE_STATION:
-	case NL80211_IFTYPE_WDS:
-	case NL80211_IFTYPE_AP_VLAN:
-	case NL80211_IFTYPE_MONITOR:
-		break;
-	case NL80211_IFTYPE_UNSPECIFIED:
-	case __NL80211_IFTYPE_AFTER_LAST:
-		BUG();
-		break;
-	}
+	if (ieee80211_vif_is_mesh(&sdata->vif))
+		mesh_rmc_free(sdata);
 
 	flushed = sta_info_flush(local, sdata);
 	WARN_ON(flushed);
@@ -646,7 +662,7 @@ static const struct net_device_ops ieee80211_dataif_ops = {
 	.ndo_stop		= ieee80211_stop,
 	.ndo_uninit		= ieee80211_teardown_sdata,
 	.ndo_start_xmit		= ieee80211_subif_start_xmit,
-	.ndo_set_multicast_list = ieee80211_set_multicast_list,
+	.ndo_set_rx_mode	= ieee80211_set_multicast_list,
 	.ndo_change_mtu 	= ieee80211_change_mtu,
 	.ndo_set_mac_address 	= ieee80211_change_mac,
 	.ndo_select_queue	= ieee80211_netdev_select_queue,
@@ -659,7 +675,6 @@ static u16 ieee80211_monitor_select_queue(struct net_device *dev,
 	struct ieee80211_local *local = sdata->local;
 	struct ieee80211_hdr *hdr;
 	struct ieee80211_radiotap_header *rtap = (void *)skb->data;
-	u8 *p;
 
 	if (local->hw.queues < 4)
 		return 0;
@@ -670,19 +685,7 @@ static u16 ieee80211_monitor_select_queue(struct net_device *dev,
 
 	hdr = (void *)((u8 *)skb->data + le16_to_cpu(rtap->it_len));
 
-	if (!ieee80211_is_data(hdr->frame_control)) {
-		skb->priority = 7;
-		return ieee802_1d_to_ac[skb->priority];
-	}
-	if (!ieee80211_is_data_qos(hdr->frame_control)) {
-		skb->priority = 0;
-		return ieee802_1d_to_ac[skb->priority];
-	}
-
-	p = ieee80211_get_qos_ctl(hdr);
-	skb->priority = *p & IEEE80211_QOS_CTL_TAG1D_MASK;
-
-	return ieee80211_downgrade_queue(local, skb);
+	return ieee80211_select_queue_80211(local, skb, hdr);
 }
 
 static const struct net_device_ops ieee80211_monitorif_ops = {
@@ -690,7 +693,7 @@ static const struct net_device_ops ieee80211_monitorif_ops = {
 	.ndo_stop		= ieee80211_stop,
 	.ndo_uninit		= ieee80211_teardown_sdata,
 	.ndo_start_xmit		= ieee80211_monitor_start_xmit,
-	.ndo_set_multicast_list = ieee80211_set_multicast_list,
+	.ndo_set_rx_mode	= ieee80211_set_multicast_list,
 	.ndo_change_mtu 	= ieee80211_change_mtu,
 	.ndo_set_mac_address 	= eth_mac_addr,
 	.ndo_select_queue	= ieee80211_monitor_select_queue,
@@ -699,6 +702,7 @@ static const struct net_device_ops ieee80211_monitorif_ops = {
 static void ieee80211_if_setup(struct net_device *dev)
 {
 	ether_setup(dev);
+	dev->priv_flags &= ~IFF_TX_SKB_SHARING;
 	dev->netdev_ops = &ieee80211_dataif_ops;
 	dev->destructor = free_netdev;
 }
@@ -791,7 +795,8 @@ static void ieee80211_iface_work(struct work_struct *work)
 
 				__ieee80211_stop_rx_ba_session(
 					sta, tid, WLAN_BACK_RECIPIENT,
-					WLAN_REASON_QSTA_REQUIRE_SETUP);
+					WLAN_REASON_QSTA_REQUIRE_SETUP,
+					true);
 			}
 			mutex_unlock(&local->sta_mtx);
 		} else switch (sdata->vif.type) {
@@ -844,8 +849,14 @@ static void ieee80211_setup_sdata(struct ieee80211_sub_if_data *sdata,
 
 	/* and set some type-dependent values */
 	sdata->vif.type = type;
+	sdata->vif.p2p = false;
 	sdata->dev->netdev_ops = &ieee80211_dataif_ops;
 	sdata->wdev.iftype = type;
+
+	sdata->control_port_protocol = cpu_to_be16(ETH_P_PAE);
+	sdata->control_port_no_encrypt = false;
+
+	sdata->noack_map = 0;
 
 	/* only monitor differs */
 	sdata->dev->type = ARPHRD_ETHER;
@@ -854,10 +865,20 @@ static void ieee80211_setup_sdata(struct ieee80211_sub_if_data *sdata,
 	INIT_WORK(&sdata->work, ieee80211_iface_work);
 
 	switch (type) {
+	case NL80211_IFTYPE_P2P_GO:
+		type = NL80211_IFTYPE_AP;
+		sdata->vif.type = type;
+		sdata->vif.p2p = true;
+		/* fall through */
 	case NL80211_IFTYPE_AP:
 		skb_queue_head_init(&sdata->u.ap.ps_bc_buf);
 		INIT_LIST_HEAD(&sdata->u.ap.vlans);
 		break;
+	case NL80211_IFTYPE_P2P_CLIENT:
+		type = NL80211_IFTYPE_STATION;
+		sdata->vif.type = type;
+		sdata->vif.p2p = true;
+		/* fall through */
 	case NL80211_IFTYPE_STATION:
 		ieee80211_sta_setup_sdata(sdata);
 		break;
@@ -878,7 +899,7 @@ static void ieee80211_setup_sdata(struct ieee80211_sub_if_data *sdata,
 	case NL80211_IFTYPE_AP_VLAN:
 		break;
 	case NL80211_IFTYPE_UNSPECIFIED:
-	case __NL80211_IFTYPE_AFTER_LAST:
+	case NUM_NL80211_IFTYPES:
 		BUG();
 		break;
 	}
@@ -886,12 +907,85 @@ static void ieee80211_setup_sdata(struct ieee80211_sub_if_data *sdata,
 	ieee80211_debugfs_add_netdev(sdata);
 }
 
+static int ieee80211_runtime_change_iftype(struct ieee80211_sub_if_data *sdata,
+					   enum nl80211_iftype type)
+{
+	struct ieee80211_local *local = sdata->local;
+	int ret, err;
+	enum nl80211_iftype internal_type = type;
+	bool p2p = false;
+
+	ASSERT_RTNL();
+
+	if (!local->ops->change_interface)
+		return -EBUSY;
+
+	switch (sdata->vif.type) {
+	case NL80211_IFTYPE_AP:
+	case NL80211_IFTYPE_STATION:
+	case NL80211_IFTYPE_ADHOC:
+		/*
+		 * Could maybe also all others here?
+		 * Just not sure how that interacts
+		 * with the RX/config path e.g. for
+		 * mesh.
+		 */
+		break;
+	default:
+		return -EBUSY;
+	}
+
+	switch (type) {
+	case NL80211_IFTYPE_AP:
+	case NL80211_IFTYPE_STATION:
+	case NL80211_IFTYPE_ADHOC:
+		/*
+		 * Could probably support everything
+		 * but WDS here (WDS do_open can fail
+		 * under memory pressure, which this
+		 * code isn't prepared to handle).
+		 */
+		break;
+	case NL80211_IFTYPE_P2P_CLIENT:
+		p2p = true;
+		internal_type = NL80211_IFTYPE_STATION;
+		break;
+	case NL80211_IFTYPE_P2P_GO:
+		p2p = true;
+		internal_type = NL80211_IFTYPE_AP;
+		break;
+	default:
+		return -EBUSY;
+	}
+
+	ret = ieee80211_check_concurrent_iface(sdata, internal_type);
+	if (ret)
+		return ret;
+
+	ieee80211_do_stop(sdata, false);
+
+	ieee80211_teardown_sdata(sdata->dev);
+
+	ret = drv_change_interface(local, sdata, internal_type, p2p);
+	if (ret)
+		type = sdata->vif.type;
+
+	ieee80211_setup_sdata(sdata, type);
+
+	err = ieee80211_do_open(sdata->dev, false);
+	WARN(err, "type change: do_open returned %d", err);
+
+	return ret;
+}
+
 int ieee80211_if_change_type(struct ieee80211_sub_if_data *sdata,
 			     enum nl80211_iftype type)
 {
+	int ret;
+
 	ASSERT_RTNL();
 
-	if (type == sdata->vif.type)
+	if (type == ieee80211_vif_type_p2p(&sdata->vif))
 		return 0;
 
 	/* Setting ad-hoc mode on non-IBSS channel is not supported. */
@@ -899,18 +993,15 @@ int ieee80211_if_change_type(struct ieee80211_sub_if_data *sdata,
 	    type == NL80211_IFTYPE_ADHOC)
 		return -EOPNOTSUPP;
 
-	/*
-	 * We could, here, on changes between IBSS/STA/MESH modes,
-	 * invoke an MLME function instead that disassociates etc.
-	 * and goes into the requested mode.
-	 */
-
-	if (ieee80211_sdata_running(sdata))
-		return -EBUSY;
-
-	/* Purge and reset type-dependent state. */
-	ieee80211_teardown_sdata(sdata->dev);
-	ieee80211_setup_sdata(sdata, type);
+	if (ieee80211_sdata_running(sdata)) {
+		ret = ieee80211_runtime_change_iftype(sdata, type);
+		if (ret)
+			return ret;
+	} else {
+		/* Purge and reset type-dependent state. */
+		ieee80211_teardown_sdata(sdata->dev);
+		ieee80211_setup_sdata(sdata, type);
+	}
 
 	/* reset some values that shouldn't be kept across type changes */
 	sdata->vif.bss_conf.basic_rates =
@@ -1045,8 +1136,8 @@ int ieee80211_if_add(struct ieee80211_local *local, const char *name,
 
 	ASSERT_RTNL();
 
-	ndev = alloc_netdev_mq(sizeof(*sdata) + local->hw.vif_data_size,
-			       name, ieee80211_if_setup, local->hw.queues);
+	ndev = alloc_netdev_mqs(sizeof(*sdata) + local->hw.vif_data_size,
+				name, ieee80211_if_setup, local->hw.queues, 1);
 	if (!ndev)
 		return -ENOMEM;
 	dev_net_set(ndev, wiphy_net(local->hw.wiphy));
@@ -1092,6 +1183,13 @@ int ieee80211_if_add(struct ieee80211_local *local, const char *name,
 		sband = local->hw.wiphy->bands[i];
 		sdata->rc_rateidx_mask[i] =
 			sband ? (1 << sband->n_bitrates) - 1 : 0;
+		if (sband)
+			memcpy(sdata->rc_rateidx_mcs_mask[i],
+			       sband->ht_cap.mcs.rx_mask,
+			       sizeof(sdata->rc_rateidx_mcs_mask[i]));
+		else
+			memset(sdata->rc_rateidx_mcs_mask[i], 0,
+			       sizeof(sdata->rc_rateidx_mcs_mask[i]));
 	}
 
 	/* setup type-dependent data */
@@ -1106,12 +1204,6 @@ int ieee80211_if_add(struct ieee80211_local *local, const char *name,
 	ret = register_netdevice(ndev);
 	if (ret)
 		goto fail;
-
-	if (ieee80211_vif_is_mesh(&sdata->vif) &&
-	    params && params->mesh_id_len)
-		ieee80211_sdata_set_mesh_id(sdata,
-					    params->mesh_id_len,
-					    params->mesh_id);
 
 	mutex_lock(&local->iflist_mtx);
 	list_add_tail_rcu(&sdata->list, &local->interfaces);
@@ -1135,6 +1227,9 @@ void ieee80211_if_remove(struct ieee80211_sub_if_data *sdata)
 	list_del_rcu(&sdata->list);
 	mutex_unlock(&sdata->local->iflist_mtx);
 
+	if (ieee80211_vif_is_mesh(&sdata->vif))
+		mesh_path_flush_by_iface(sdata);
+
 	synchronize_rcu();
 	unregister_netdevice(sdata->dev);
 }
@@ -1154,10 +1249,14 @@ void ieee80211_remove_interfaces(struct ieee80211_local *local)
 	list_for_each_entry_safe(sdata, tmp, &local->interfaces, list) {
 		list_del(&sdata->list);
 
+		if (ieee80211_vif_is_mesh(&sdata->vif))
+			mesh_path_flush_by_iface(sdata);
+
 		unregister_netdevice_queue(sdata->dev, &unreg_list);
 	}
 	mutex_unlock(&local->iflist_mtx);
 	unregister_netdevice_many(&unreg_list);
+	list_del(&unreg_list);
 }
 
 static u32 ieee80211_idle_off(struct ieee80211_local *local,
@@ -1167,8 +1266,7 @@ static u32 ieee80211_idle_off(struct ieee80211_local *local,
 		return 0;
 
 #ifdef CONFIG_MAC80211_VERBOSE_DEBUG
-	printk(KERN_DEBUG "%s: device no longer idle - %s\n",
-	       wiphy_name(local->hw.wiphy), reason);
+	wiphy_debug(local->hw.wiphy, "device no longer idle - %s\n", reason);
 #endif
 
 	local->hw.conf.flags &= ~IEEE80211_CONF_IDLE;
@@ -1181,8 +1279,7 @@ static u32 ieee80211_idle_on(struct ieee80211_local *local)
 		return 0;
 
 #ifdef CONFIG_MAC80211_VERBOSE_DEBUG
-	printk(KERN_DEBUG "%s: device now idle\n",
-	       wiphy_name(local->hw.wiphy));
+	wiphy_debug(local->hw.wiphy, "device now idle\n");
 #endif
 
 	drv_flush(local, false);
@@ -1195,28 +1292,86 @@ u32 __ieee80211_recalc_idle(struct ieee80211_local *local)
 {
 	struct ieee80211_sub_if_data *sdata;
 	int count = 0;
+	bool working = false, scanning = false, hw_roc = false;
+	struct ieee80211_work *wk;
+	unsigned int led_trig_start = 0, led_trig_stop = 0;
 
-	if (!list_empty(&local->work_list))
-		return ieee80211_idle_off(local, "working");
-
-	if (local->scanning)
-		return ieee80211_idle_off(local, "scanning");
+#ifdef CONFIG_PROVE_LOCKING
+	WARN_ON(debug_locks && !lockdep_rtnl_is_held() &&
+		!lockdep_is_held(&local->iflist_mtx));
+#endif
+	lockdep_assert_held(&local->mtx);
 
 	list_for_each_entry(sdata, &local->interfaces, list) {
-		if (!ieee80211_sdata_running(sdata))
+		if (!ieee80211_sdata_running(sdata)) {
+			sdata->vif.bss_conf.idle = true;
 			continue;
+		}
+
+		sdata->old_idle = sdata->vif.bss_conf.idle;
+
 		/* do not count disabled managed interfaces */
 		if (sdata->vif.type == NL80211_IFTYPE_STATION &&
-		    !sdata->u.mgd.associated)
+		    !sdata->u.mgd.associated &&
+		    !sdata->u.mgd.auth_data &&
+		    !sdata->u.mgd.assoc_data) {
+			sdata->vif.bss_conf.idle = true;
 			continue;
+		}
 		/* do not count unused IBSS interfaces */
 		if (sdata->vif.type == NL80211_IFTYPE_ADHOC &&
-		    !sdata->u.ibss.ssid_len)
+		    !sdata->u.ibss.ssid_len) {
+			sdata->vif.bss_conf.idle = true;
 			continue;
+		}
 		/* count everything else */
+		sdata->vif.bss_conf.idle = false;
 		count++;
 	}
 
+	list_for_each_entry(wk, &local->work_list, list) {
+		working = true;
+		wk->sdata->vif.bss_conf.idle = false;
+	}
+
+	if (local->scan_sdata &&
+	    !(local->hw.flags & IEEE80211_HW_SCAN_WHILE_IDLE)) {
+		scanning = true;
+		local->scan_sdata->vif.bss_conf.idle = false;
+	}
+
+	if (local->hw_roc_channel)
+		hw_roc = true;
+
+	list_for_each_entry(sdata, &local->interfaces, list) {
+		if (sdata->vif.type == NL80211_IFTYPE_MONITOR ||
+		    sdata->vif.type == NL80211_IFTYPE_AP_VLAN)
+			continue;
+		if (sdata->old_idle == sdata->vif.bss_conf.idle)
+			continue;
+		if (!ieee80211_sdata_running(sdata))
+			continue;
+		ieee80211_bss_info_change_notify(sdata, BSS_CHANGED_IDLE);
+	}
+
+	if (working || scanning || hw_roc)
+		led_trig_start |= IEEE80211_TPT_LEDTRIG_FL_WORK;
+	else
+		led_trig_stop |= IEEE80211_TPT_LEDTRIG_FL_WORK;
+
+	if (count)
+		led_trig_start |= IEEE80211_TPT_LEDTRIG_FL_CONNECTED;
+	else
+		led_trig_stop |= IEEE80211_TPT_LEDTRIG_FL_CONNECTED;
+
+	ieee80211_mod_tpt_led_trig(local, led_trig_start, led_trig_stop);
+
+	if (hw_roc)
+		return ieee80211_idle_off(local, "hw remain-on-channel");
+	if (working)
+		return ieee80211_idle_off(local, "working");
+	if (scanning)
+		return ieee80211_idle_off(local, "scanning");
 	if (!count)
 		return ieee80211_idle_on(local);
 	else

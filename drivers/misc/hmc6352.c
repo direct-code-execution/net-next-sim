@@ -75,7 +75,7 @@ static ssize_t compass_heading_data_show(struct device *dev,
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	unsigned char i2c_data[2];
-	unsigned int ret;
+	int ret;
 
 	mutex_lock(&compass_mutex);
 	ret = compass_command(client, 'A');
@@ -86,7 +86,7 @@ static ssize_t compass_heading_data_show(struct device *dev,
 	msleep(10); /* sending 'A' cmd we need to wait for 7-10 millisecs */
 	ret = i2c_master_recv(client, i2c_data, 2);
 	mutex_unlock(&compass_mutex);
-	if (ret != 1) {
+	if (ret < 0) {
 		dev_warn(dev, "i2c read data cmd failed\n");
 		return ret;
 	}
@@ -148,18 +148,7 @@ static struct i2c_driver hmc6352_driver = {
 	.id_table = hmc6352_id,
 };
 
-static int __init sensor_hmc6352_init(void)
-{
-	return i2c_add_driver(&hmc6352_driver);
-}
-
-static void  __exit sensor_hmc6352_exit(void)
-{
-	i2c_del_driver(&hmc6352_driver);
-}
-
-module_init(sensor_hmc6352_init);
-module_exit(sensor_hmc6352_exit);
+module_i2c_driver(hmc6352_driver);
 
 MODULE_AUTHOR("Kalhan Trisal <kalhan.trisal@intel.com");
 MODULE_DESCRIPTION("hmc6352 Compass Driver");

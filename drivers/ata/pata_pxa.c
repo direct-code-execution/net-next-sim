@@ -292,7 +292,6 @@ static int __devinit pxa_ata_probe(struct platform_device *pdev)
 	ap->ops		= &pxa_ata_port_ops;
 	ap->pio_mask	= ATA_PIO4;
 	ap->mwdma_mask	= ATA_MWDMA2;
-	ap->flags	= ATA_FLAG_MMIO;
 
 	ap->ioaddr.cmd_addr	= devm_ioremap(&pdev->dev, cmd_res->start,
 						resource_size(cmd_res));
@@ -391,18 +390,7 @@ static struct platform_driver pxa_ata_driver = {
 	},
 };
 
-static int __init pxa_ata_init(void)
-{
-	return platform_driver_register(&pxa_ata_driver);
-}
-
-static void __exit pxa_ata_exit(void)
-{
-	platform_driver_unregister(&pxa_ata_driver);
-}
-
-module_init(pxa_ata_init);
-module_exit(pxa_ata_exit);
+module_platform_driver(pxa_ata_driver);
 
 MODULE_AUTHOR("Marek Vasut <marek.vasut@gmail.com>");
 MODULE_DESCRIPTION("DMA-capable driver for PATA on PXA CPU");

@@ -84,9 +84,9 @@ static int cy8ctmg110_write_regs(struct cy8ctmg110 *tsc, unsigned char reg,
 	memcpy(i2c_data + 1, value, len);
 
 	ret = i2c_master_send(client, i2c_data, len + 1);
-	if (ret != 1) {
+	if (ret != len + 1) {
 		dev_err(&client->dev, "i2c write data cmd failed\n");
-		return ret ? ret : -EIO;
+		return ret < 0 ? ret : -EIO;
 	}
 
 	return 0;
@@ -193,6 +193,8 @@ static int __devinit cy8ctmg110_probe(struct i2c_client *client,
 
 	ts->client = client;
 	ts->input = input_dev;
+	ts->reset_pin = pdata->reset_pin;
+	ts->irq_pin = pdata->irq_pin;
 
 	snprintf(ts->phys, sizeof(ts->phys),
 		 "%s/input0", dev_name(&client->dev));
@@ -206,9 +208,9 @@ static int __devinit cy8ctmg110_probe(struct i2c_client *client,
 	input_dev->keybit[BIT_WORD(BTN_TOUCH)] = BIT_MASK(BTN_TOUCH);
 
 	input_set_abs_params(input_dev, ABS_X,
-			CY8CTMG110_X_MIN, CY8CTMG110_X_MAX, 0, 0);
+			CY8CTMG110_X_MIN, CY8CTMG110_X_MAX, 4, 0);
 	input_set_abs_params(input_dev, ABS_Y,
-			CY8CTMG110_Y_MIN, CY8CTMG110_Y_MAX, 0, 0);
+			CY8CTMG110_Y_MIN, CY8CTMG110_Y_MAX, 4, 0);
 
 	if (ts->reset_pin) {
 		err = gpio_request(ts->reset_pin, NULL);
@@ -280,8 +282,9 @@ err_free_mem:
 }
 
 #ifdef CONFIG_PM
-static int cy8ctmg110_suspend(struct i2c_client *client, pm_message_t mesg)
+static int cy8ctmg110_suspend(struct device *dev)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct cy8ctmg110 *ts = i2c_get_clientdata(client);
 
 	if (device_may_wakeup(&client->dev))
@@ -293,8 +296,9 @@ static int cy8ctmg110_suspend(struct i2c_client *client, pm_message_t mesg)
 	return 0;
 }
 
-static int cy8ctmg110_resume(struct i2c_client *client)
+static int cy8ctmg110_resume(struct device *dev)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct cy8ctmg110 *ts = i2c_get_clientdata(client);
 
 	if (device_may_wakeup(&client->dev))
@@ -305,6 +309,8 @@ static int cy8ctmg110_resume(struct i2c_client *client)
 	}
 	return 0;
 }
+
+static SIMPLE_DEV_PM_OPS(cy8ctmg110_pm, cy8ctmg110_suspend, cy8ctmg110_resume);
 #endif
 
 static int __devexit cy8ctmg110_remove(struct i2c_client *client)
@@ -324,7 +330,7 @@ static int __devexit cy8ctmg110_remove(struct i2c_client *client)
 	return 0;
 }
 
-static struct i2c_device_id cy8ctmg110_idtable[] = {
+static const struct i2c_device_id cy8ctmg110_idtable[] = {
 	{ CY8CTMG110_DRIVER_NAME, 1 },
 	{ }
 };
@@ -335,28 +341,16 @@ static struct i2c_driver cy8ctmg110_driver = {
 	.driver		= {
 		.owner	= THIS_MODULE,
 		.name	= CY8CTMG110_DRIVER_NAME,
+#ifdef CONFIG_PM
+		.pm	= &cy8ctmg110_pm,
+#endif
 	},
 	.id_table	= cy8ctmg110_idtable,
 	.probe		= cy8ctmg110_probe,
 	.remove		= __devexit_p(cy8ctmg110_remove),
-#ifdef CONFIG_PM
-	.suspend	= cy8ctmg110_suspend,
-	.resume		= cy8ctmg110_resume,
-#endif
 };
 
-static int __init cy8ctmg110_init(void)
-{
-	return i2c_add_driver(&cy8ctmg110_driver);
-}
-
-static void __exit cy8ctmg110_exit(void)
-{
-	i2c_del_driver(&cy8ctmg110_driver);
-}
-
-module_init(cy8ctmg110_init);
-module_exit(cy8ctmg110_exit);
+module_i2c_driver(cy8ctmg110_driver);
 
 MODULE_AUTHOR("Samuli Konttila <samuli.konttila@aavamobile.com>");
 MODULE_DESCRIPTION("cy8ctmg110 TouchScreen Driver");

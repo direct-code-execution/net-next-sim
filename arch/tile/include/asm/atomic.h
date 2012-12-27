@@ -17,10 +17,12 @@
 #ifndef _ASM_TILE_ATOMIC_H
 #define _ASM_TILE_ATOMIC_H
 
+#include <asm/cmpxchg.h>
+
 #ifndef __ASSEMBLY__
 
 #include <linux/compiler.h>
-#include <asm/system.h>
+#include <linux/types.h>
 
 #define ATOMIC_INIT(i)	{ (i) }
 
@@ -32,7 +34,7 @@
  */
 static inline int atomic_read(const atomic_t *v)
 {
-       return v->counter;
+	return ACCESS_ONCE(v->counter);
 }
 
 /**
@@ -121,39 +123,12 @@ static inline int atomic_read(const atomic_t *v)
  */
 #define atomic_add_negative(i, v)	(atomic_add_return((i), (v)) < 0)
 
-/**
- * atomic_inc_not_zero - increment unless the number is zero
- * @v: pointer of type atomic_t
- *
- * Atomically increments @v by 1, so long as @v is non-zero.
- * Returns non-zero if @v was non-zero, and zero otherwise.
- */
-#define atomic_inc_not_zero(v)		atomic_add_unless((v), 1, 0)
-
-
-/*
- * We define xchg() and cmpxchg() in the included headers.
- * Note that we do not define __HAVE_ARCH_CMPXCHG, since that would imply
- * that cmpxchg() is an efficient operation, which is not particularly true.
- */
-
-/* Nonexistent functions intended to cause link errors. */
-extern unsigned long __xchg_called_with_bad_pointer(void);
-extern unsigned long __cmpxchg_called_with_bad_pointer(void);
-
-#define tas(ptr) (xchg((ptr), 1))
-
 #endif /* __ASSEMBLY__ */
 
 #ifndef __tilegx__
 #include <asm/atomic_32.h>
 #else
 #include <asm/atomic_64.h>
-#endif
-
-/* Provide the appropriate atomic_long_t definitions. */
-#ifndef __ASSEMBLY__
-#include <asm-generic/atomic-long.h>
 #endif
 
 #endif /* _ASM_TILE_ATOMIC_H */

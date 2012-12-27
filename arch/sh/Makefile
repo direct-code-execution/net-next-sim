@@ -80,6 +80,7 @@ defaultimage-$(CONFIG_SH_RSK)			:= uImage
 defaultimage-$(CONFIG_SH_URQUELL)		:= uImage
 defaultimage-$(CONFIG_SH_MIGOR)			:= uImage
 defaultimage-$(CONFIG_SH_AP325RXA)		:= uImage
+defaultimage-$(CONFIG_SH_SH7757LCR)		:= uImage
 defaultimage-$(CONFIG_SH_7724_SOLUTION_ENGINE)	:= uImage
 defaultimage-$(CONFIG_SH_7206_SOLUTION_ENGINE)	:= vmlinux
 defaultimage-$(CONFIG_SH_7619_SOLUTION_ENGINE)	:= vmlinux
@@ -133,10 +134,7 @@ machdir-$(CONFIG_SOLUTION_ENGINE)		+= mach-se
 machdir-$(CONFIG_SH_HP6XX)			+= mach-hp6xx
 machdir-$(CONFIG_SH_DREAMCAST)			+= mach-dreamcast
 machdir-$(CONFIG_SH_SH03)			+= mach-sh03
-machdir-$(CONFIG_SH_SECUREEDGE5410)		+= mach-snapgear
 machdir-$(CONFIG_SH_RTS7751R2D)			+= mach-r2d
-machdir-$(CONFIG_SH_7751_SYSTEMH)		+= mach-systemh
-machdir-$(CONFIG_SH_EDOSK7705)			+= mach-edosk7705
 machdir-$(CONFIG_SH_HIGHLANDER)			+= mach-highlander
 machdir-$(CONFIG_SH_MIGOR)			+= mach-migor
 machdir-$(CONFIG_SH_AP325RXA)			+= mach-ap325rxa
@@ -176,6 +174,7 @@ core-$(CONFIG_HD6446X_SERIES)	+= arch/sh/cchips/hd6446x/
 cpuincdir-$(CONFIG_CPU_SH2A)	+= cpu-sh2a
 cpuincdir-$(CONFIG_CPU_SH2)	+= cpu-sh2
 cpuincdir-$(CONFIG_CPU_SH3)	+= cpu-sh3
+cpuincdir-$(CONFIG_CPU_SH4A)	+= cpu-sh4a
 cpuincdir-$(CONFIG_CPU_SH4)	+= cpu-sh4
 cpuincdir-$(CONFIG_CPU_SH5)	+= cpu-sh5
 cpuincdir-y			+= cpu-common	# Must be last
@@ -203,7 +202,7 @@ endif
 libs-$(CONFIG_SUPERH32)		:= arch/sh/lib/	$(libs-y)
 libs-$(CONFIG_SUPERH64)		:= arch/sh/lib64/ $(libs-y)
 
-BOOT_TARGETS = uImage uImage.bz2 uImage.gz uImage.lzma uImage.lzo \
+BOOT_TARGETS = uImage uImage.bz2 uImage.gz uImage.lzma uImage.xz uImage.lzo \
 	       uImage.srec uImage.bin zImage vmlinux.bin vmlinux.srec \
 	       romImage
 PHONY += $(BOOT_TARGETS)
@@ -233,5 +232,6 @@ define archhelp
 	@echo '* uImage.gz	           - Kernel-only image for U-Boot (gzip)'
 	@echo '  uImage.bz2	           - Kernel-only image for U-Boot (bzip2)'
 	@echo '  uImage.lzma	           - Kernel-only image for U-Boot (lzma)'
+	@echo '  uImage.xz	           - Kernel-only image for U-Boot (xz)'
 	@echo '  uImage.lzo	           - Kernel-only image for U-Boot (lzo)'
 endef

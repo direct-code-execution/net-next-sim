@@ -21,6 +21,7 @@
 #include <asm/irq.h>
 #include <asm/mach-types.h>
 #include <asm/setup.h>
+#include <asm/system_misc.h>
 #include <asm/hardware/dec21285.h>
 
 #include <asm/mach/irq.h>
@@ -75,20 +76,20 @@ static const int fb_irq_mask[] = {
 	IRQ_MASK_PCI_PERR,	/* 19 */
 };
 
-static void fb_mask_irq(unsigned int irq)
+static void fb_mask_irq(struct irq_data *d)
 {
-	*CSR_IRQ_DISABLE = fb_irq_mask[_DC21285_INR(irq)];
+	*CSR_IRQ_DISABLE = fb_irq_mask[_DC21285_INR(d->irq)];
 }
 
-static void fb_unmask_irq(unsigned int irq)
+static void fb_unmask_irq(struct irq_data *d)
 {
-	*CSR_IRQ_ENABLE = fb_irq_mask[_DC21285_INR(irq)];
+	*CSR_IRQ_ENABLE = fb_irq_mask[_DC21285_INR(d->irq)];
 }
 
 static struct irq_chip fb_chip = {
-	.ack	= fb_mask_irq,
-	.mask	= fb_mask_irq,
-	.unmask = fb_unmask_irq,
+	.irq_ack	= fb_mask_irq,
+	.irq_mask	= fb_mask_irq,
+	.irq_unmask	= fb_unmask_irq,
 };
 
 static void __init __fb_init_irq(void)
@@ -102,8 +103,7 @@ static void __init __fb_init_irq(void)
 	*CSR_FIQ_DISABLE = -1;
 
 	for (irq = _DC21285_IRQ(0); irq < _DC21285_IRQ(20); irq++) {
-		set_irq_chip(irq, &fb_chip);
-		set_irq_handler(irq, handle_level_irq);
+		irq_set_chip_and_handler(irq, &fb_chip, handle_level_irq);
 		set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
 	}
 }
@@ -198,6 +198,33 @@ void __init footbridge_map_io(void)
 	 */
 	if (footbridge_cfn_mode())
 		iotable_init(ebsa285_host_io_desc, ARRAY_SIZE(ebsa285_host_io_desc));
+}
+
+void footbridge_restart(char mode, const char *cmd)
+{
+	if (mode == 's') {
+		/* Jump into the ROM */
+		soft_restart(0x41000000);
+	} else {
+		/*
+		 * Force the watchdog to do a CPU reset.
+		 *
+		 * After making sure that the watchdog is disabled
+		 * (so we can change the timer registers) we first
+		 * enable the timer to autoreload itself.  Next, the
+		 * timer interval is set really short and any
+		 * current interrupt request is cleared (so we can
+		 * see an edge transition).  Finally, TIMER4 is
+		 * enabled as the watchdog.
+		 */
+		*CSR_SA110_CNTL &= ~(1 << 13);
+		*CSR_TIMER4_CNTL = TIMER_CNTL_ENABLE |
+				   TIMER_CNTL_AUTORELOAD |
+				   TIMER_CNTL_DIV16;
+		*CSR_TIMER4_LOAD = 0x2;
+		*CSR_TIMER4_CLR  = 0;
+		*CSR_SA110_CNTL |= (1 << 13);
+	}
 }
 
 #ifdef CONFIG_FOOTBRIDGE_ADDIN

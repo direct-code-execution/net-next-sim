@@ -867,7 +867,7 @@ void asd_build_initiate_link_adm_task(struct asd_ascb *ascb, int phy_id,
  * resources they have with this SCB, and then call this one at the
  * end of their timeout function.  To do this, one should initialize
  * the ascb->timer.{function, data, expires} prior to calling the post
- * funcion.  The timer is started by the post function.
+ * function. The timer is started by the post function.
  */
 void asd_ascb_timedout(unsigned long data)
 {
@@ -906,6 +906,7 @@ int asd_control_phy(struct asd_sas_phy *phy, enum phy_func func, void *arg)
 
 	switch (func) {
 	case PHY_FUNC_CLEAR_ERROR_LOG:
+	case PHY_FUNC_GET_EVENTS:
 		return -ENOSYS;
 	case PHY_FUNC_SET_LINK_RATE:
 		rates = arg;

@@ -17,7 +17,6 @@
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/device.h>
-#include <linux/sysdev.h>
 #include <linux/timer.h>
 #include <linux/rwsem.h>
 #include <linux/leds.h>
@@ -113,7 +112,7 @@ void led_trigger_set(struct led_classdev *led_cdev, struct led_trigger *trigger)
 		if (led_cdev->trigger->deactivate)
 			led_cdev->trigger->deactivate(led_cdev);
 		led_cdev->trigger = NULL;
-		led_set_brightness(led_cdev, LED_OFF);
+		led_brightness_set(led_cdev, LED_OFF);
 	}
 	if (trigger) {
 		write_lock_irqsave(&trigger->leddev_list_lock, flags);
@@ -231,6 +230,26 @@ void led_trigger_event(struct led_trigger *trigger,
 }
 EXPORT_SYMBOL_GPL(led_trigger_event);
 
+void led_trigger_blink(struct led_trigger *trigger,
+		       unsigned long *delay_on,
+		       unsigned long *delay_off)
+{
+	struct list_head *entry;
+
+	if (!trigger)
+		return;
+
+	read_lock(&trigger->leddev_list_lock);
+	list_for_each(entry, &trigger->led_cdevs) {
+		struct led_classdev *led_cdev;
+
+		led_cdev = list_entry(entry, struct led_classdev, trig_list);
+		led_blink_set(led_cdev, delay_on, delay_off);
+	}
+	read_unlock(&trigger->leddev_list_lock);
+}
+EXPORT_SYMBOL_GPL(led_trigger_blink);
+
 void led_trigger_register_simple(const char *name, struct led_trigger **tp)
 {
 	struct led_trigger *trigger;
@@ -241,9 +260,12 @@ void led_trigger_register_simple(const char *name, struct led_trigger **tp)
 	if (trigger) {
 		trigger->name = name;
 		err = led_trigger_register(trigger);
-		if (err < 0)
+		if (err < 0) {
+			kfree(trigger);
+			trigger = NULL;
 			printk(KERN_WARNING "LED trigger %s failed to register"
 				" (%d)\n", name, err);
+		}
 	} else
 		printk(KERN_WARNING "LED trigger %s failed to register"
 			" (no memory)\n", name);

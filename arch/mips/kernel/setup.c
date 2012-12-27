@@ -12,8 +12,9 @@
  */
 #include <linux/init.h>
 #include <linux/ioport.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/screen_info.h>
+#include <linux/memblock.h>
 #include <linux/bootmem.h>
 #include <linux/initrd.h>
 #include <linux/root_dev.h>
@@ -30,7 +31,7 @@
 #include <asm/sections.h>
 #include <asm/setup.h>
 #include <asm/smp-ops.h>
-#include <asm/system.h>
+#include <asm/prom.h>
 
 struct cpuinfo_mips cpu_data[NR_CPUS] __read_mostly;
 
@@ -69,7 +70,7 @@ static char __initdata builtin_cmdline[COMMAND_LINE_SIZE] = CONFIG_CMDLINE;
  * mips_io_port_base is the begin of the address space to which x86 style
  * I/O ports are mapped.
  */
-const unsigned long mips_io_port_base __read_mostly = -1;
+const unsigned long mips_io_port_base = -1;
 EXPORT_SYMBOL(mips_io_port_base);
 
 static struct resource code_resource = { .name = "Kernel code", };
@@ -119,6 +120,9 @@ static void __init print_memory_map(void)
 		switch (boot_mem_map.map[i].type) {
 		case BOOT_MEM_RAM:
 			printk(KERN_CONT "(usable)\n");
+			break;
+		case BOOT_MEM_INIT_RAM:
+			printk(KERN_CONT "(usable after init)\n");
 			break;
 		case BOOT_MEM_ROM_DATA:
 			printk(KERN_CONT "(ROM data)\n");
@@ -351,7 +355,7 @@ static void __init bootmem_init(void)
 			continue;
 #endif
 
-		add_active_range(0, start, end);
+		memblock_add_node(PFN_PHYS(start), PFN_PHYS(end - start), 0);
 	}
 
 	/*
@@ -360,15 +364,24 @@ static void __init bootmem_init(void)
 	for (i = 0; i < boot_mem_map.nr_map; i++) {
 		unsigned long start, end, size;
 
-		/*
-		 * Reserve usable memory.
-		 */
-		if (boot_mem_map.map[i].type != BOOT_MEM_RAM)
-			continue;
-
 		start = PFN_UP(boot_mem_map.map[i].addr);
 		end   = PFN_DOWN(boot_mem_map.map[i].addr
 				    + boot_mem_map.map[i].size);
+
+		/*
+		 * Reserve usable memory.
+		 */
+		switch (boot_mem_map.map[i].type) {
+		case BOOT_MEM_RAM:
+			break;
+		case BOOT_MEM_INIT_RAM:
+			memory_present(0, start, end);
+			continue;
+		default:
+			/* Not usable memory */
+			continue;
+		}
+
 		/*
 		 * We are rounding up the start address of usable memory
 		 * and at the end of the usable range downwards.
@@ -454,10 +467,32 @@ early_param("mem", early_parse_mem);
 
 static void __init arch_mem_init(char **cmdline_p)
 {
+	phys_t init_mem, init_end, init_size;
+
 	extern void plat_mem_setup(void);
 
 	/* call board setup routine */
 	plat_mem_setup();
+
+	init_mem = PFN_UP(__pa_symbol(&__init_begin)) << PAGE_SHIFT;
+	init_end = PFN_DOWN(__pa_symbol(&__init_end)) << PAGE_SHIFT;
+	init_size = init_end - init_mem;
+	if (init_size) {
+		/* Make sure it is in the boot_mem_map */
+		int i, found;
+		found = 0;
+		for (i = 0; i < boot_mem_map.nr_map; i++) {
+			if (init_mem >= boot_mem_map.map[i].addr &&
+			    init_mem < (boot_mem_map.map[i].addr +
+					boot_mem_map.map[i].size)) {
+				found = 1;
+				break;
+			}
+		}
+		if (!found)
+			add_memory_region(init_mem, init_size,
+					  BOOT_MEM_INIT_RAM);
+	}
 
 	pr_info("Determined physical RAM map:\n");
 	print_memory_map();
@@ -487,7 +522,9 @@ static void __init arch_mem_init(char **cmdline_p)
 	}
 
 	bootmem_init();
+	device_tree_init();
 	sparse_init();
+	plat_swiotlb_setup();
 	paging_init();
 }
 
@@ -520,6 +557,7 @@ static void __init resource_init(void)
 		res = alloc_bootmem(sizeof(struct resource));
 		switch (boot_mem_map.map[i].type) {
 		case BOOT_MEM_RAM:
+		case BOOT_MEM_INIT_RAM:
 		case BOOT_MEM_ROM_DATA:
 			res->name = "System RAM";
 			break;

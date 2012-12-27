@@ -355,8 +355,7 @@ static void bcm54xx_adjust_rxrefclk(struct phy_device *phydev)
 		}
 	}
 
-	if (clk125en == false ||
-	    (phydev->dev_flags & PHY_BRCM_AUTO_PWRDWN_ENABLE))
+	if (!clk125en || (phydev->dev_flags & PHY_BRCM_AUTO_PWRDWN_ENABLE))
 		val &= ~BCM54XX_SHD_SCR3_DLLAPD_DIS;
 	else
 		val |= BCM54XX_SHD_SCR3_DLLAPD_DIS;
@@ -373,8 +372,7 @@ static void bcm54xx_adjust_rxrefclk(struct phy_device *phydev)
 
 	orig = val;
 
-	if (clk125en == false ||
-	    (phydev->dev_flags & PHY_BRCM_AUTO_PWRDWN_ENABLE))
+	if (!clk125en || (phydev->dev_flags & PHY_BRCM_AUTO_PWRDWN_ENABLE))
 		val |= BCM54XX_SHD_APD_EN;
 	else
 		val &= ~BCM54XX_SHD_APD_EN;
@@ -553,7 +551,7 @@ static int bcm5481_config_aneg(struct phy_device *phydev)
 		/*
 		 * There is no BCM5481 specification available, so down
 		 * here is everything we know about "register 0x18". This
-		 * at least helps BCM5481 to successfuly receive packets
+		 * at least helps BCM5481 to successfully receive packets
 		 * on MPC8360E-RDK board. Peter Barada <peterb@logicpd.com>
 		 * says: "This sets delay between the RXD and RXC signals
 		 * instead of using trace lengths to achieve timing".
@@ -930,7 +928,7 @@ static void __exit broadcom_exit(void)
 module_init(broadcom_init);
 module_exit(broadcom_exit);
 
-static struct mdio_device_id broadcom_tbl[] = {
+static struct mdio_device_id __maybe_unused broadcom_tbl[] = {
 	{ PHY_ID_BCM5411, 0xfffffff0 },
 	{ PHY_ID_BCM5421, 0xfffffff0 },
 	{ PHY_ID_BCM5461, 0xfffffff0 },

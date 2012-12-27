@@ -263,30 +263,21 @@ static int m48t59_rtc_setalarm(struct device *dev, struct rtc_wkalrm *alrm)
 /*
  * Handle commands from user-space
  */
-static int m48t59_rtc_ioctl(struct device *dev, unsigned int cmd,
-			unsigned long arg)
+static int m48t59_rtc_alarm_irq_enable(struct device *dev, unsigned int enabled)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct m48t59_plat_data *pdata = pdev->dev.platform_data;
 	struct m48t59_private *m48t59 = platform_get_drvdata(pdev);
 	unsigned long flags;
-	int ret = 0;
 
 	spin_lock_irqsave(&m48t59->lock, flags);
-	switch (cmd) {
-	case RTC_AIE_OFF:	/* alarm interrupt off */
-		M48T59_WRITE(0x00, M48T59_INTR);
-		break;
-	case RTC_AIE_ON:	/* alarm interrupt on */
+	if (enabled)
 		M48T59_WRITE(M48T59_INTR_AFE, M48T59_INTR);
-		break;
-	default:
-		ret = -ENOIOCTLCMD;
-		break;
-	}
+	else
+		M48T59_WRITE(0x00, M48T59_INTR);
 	spin_unlock_irqrestore(&m48t59->lock, flags);
 
-	return ret;
+	return 0;
 }
 
 static int m48t59_rtc_proc(struct device *dev, struct seq_file *seq)
@@ -330,12 +321,12 @@ static irqreturn_t m48t59_rtc_interrupt(int irq, void *dev_id)
 }
 
 static const struct rtc_class_ops m48t59_rtc_ops = {
-	.ioctl		= m48t59_rtc_ioctl,
 	.read_time	= m48t59_rtc_read_time,
 	.set_time	= m48t59_rtc_set_time,
 	.read_alarm	= m48t59_rtc_readalarm,
 	.set_alarm	= m48t59_rtc_setalarm,
 	.proc		= m48t59_rtc_proc,
+	.alarm_irq_enable = m48t59_rtc_alarm_irq_enable,
 };
 
 static const struct rtc_class_ops m48t02_rtc_ops = {
@@ -442,7 +433,7 @@ static int __devinit m48t59_rtc_probe(struct platform_device *pdev)
 
 	if (!m48t59->ioaddr) {
 		/* ioaddr not mapped externally */
-		m48t59->ioaddr = ioremap(res->start, res->end - res->start + 1);
+		m48t59->ioaddr = ioremap(res->start, resource_size(res));
 		if (!m48t59->ioaddr)
 			goto out;
 	}
@@ -539,18 +530,7 @@ static struct platform_driver m48t59_rtc_driver = {
 	.remove		= __devexit_p(m48t59_rtc_remove),
 };
 
-static int __init m48t59_rtc_init(void)
-{
-	return platform_driver_register(&m48t59_rtc_driver);
-}
-
-static void __exit m48t59_rtc_exit(void)
-{
-	platform_driver_unregister(&m48t59_rtc_driver);
-}
-
-module_init(m48t59_rtc_init);
-module_exit(m48t59_rtc_exit);
+module_platform_driver(m48t59_rtc_driver);
 
 MODULE_AUTHOR("Mark Zhan <rongkai.zhan@windriver.com>");
 MODULE_DESCRIPTION("M48T59/M48T02/M48T08 RTC driver");

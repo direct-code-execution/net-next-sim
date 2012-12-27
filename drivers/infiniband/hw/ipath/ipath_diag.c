@@ -45,6 +45,7 @@
 #include <linux/pci.h>
 #include <linux/vmalloc.h>
 #include <linux/fs.h>
+#include <linux/export.h>
 #include <asm/uaccess.h>
 
 #include "ipath_kernel.h"
@@ -65,7 +66,8 @@ static const struct file_operations diag_file_ops = {
 	.write = ipath_diag_write,
 	.read = ipath_diag_read,
 	.open = ipath_diag_open,
-	.release = ipath_diag_release
+	.release = ipath_diag_release,
+	.llseek = default_llseek,
 };
 
 static ssize_t ipath_diagpkt_write(struct file *fp,
@@ -75,6 +77,7 @@ static ssize_t ipath_diagpkt_write(struct file *fp,
 static const struct file_operations diagpkt_file_ops = {
 	.owner = THIS_MODULE,
 	.write = ipath_diagpkt_write,
+	.llseek = noop_llseek,
 };
 
 static atomic_t diagpkt_count = ATOMIC_INIT(0);

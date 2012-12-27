@@ -17,11 +17,11 @@
 #include <linux/stat.h>
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
+#include <linux/module.h>
 #include <asm/dbdma.h>
 #include <asm/io.h>
 #include <asm/pgtable.h>
 #include <asm/prom.h>
-#include <asm/system.h>
 #include <asm/pci-bridge.h>
 #include <asm/macio.h>
 
@@ -66,7 +66,7 @@ static void cmd_done(struct fsc_state *, int result);
 static void set_dma_cmds(struct fsc_state *, struct scsi_cmnd *);
 
 
-static int mac53c94_queue(struct scsi_cmnd *cmd, void (*done)(struct scsi_cmnd *))
+static int mac53c94_queue_lck(struct scsi_cmnd *cmd, void (*done)(struct scsi_cmnd *))
 {
 	struct fsc_state *state;
 
@@ -98,6 +98,8 @@ static int mac53c94_queue(struct scsi_cmnd *cmd, void (*done)(struct scsi_cmnd *
 
 	return 0;
 }
+
+static DEF_SCSI_QCMD(mac53c94_queue)
 
 static int mac53c94_host_reset(struct scsi_cmnd *cmd)
 {

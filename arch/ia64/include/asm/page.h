@@ -189,6 +189,7 @@ get_order (unsigned long size)
 # define pgprot_val(x)	((x).pgprot)
 
 # define __pte(x)	((pte_t) { (x) } )
+# define __pmd(x)	((pmd_t) { (x) } )
 # define __pgprot(x)	((pgprot_t) { (x) } )
 
 #else /* !STRICT_MM_TYPECHECKS */
@@ -219,5 +220,15 @@ get_order (unsigned long size)
 					 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC |		\
 					 (((current->personality & READ_IMPLIES_EXEC) != 0)	\
 					  ? VM_EXEC : 0))
+
+#define GATE_ADDR		RGN_BASE(RGN_GATE)
+
+/*
+ * 0xa000000000000000+2*PERCPU_PAGE_SIZE
+ * - 0xa000000000000000+3*PERCPU_PAGE_SIZE remain unmapped (guard page)
+ */
+#define KERNEL_START		 (GATE_ADDR+__IA64_UL_CONST(0x100000000))
+#define PERCPU_ADDR		(-PERCPU_PAGE_SIZE)
+#define LOAD_OFFSET		(KERNEL_START - KERNEL_TR_PAGE_SIZE)
 
 #endif /* _ASM_IA64_PAGE_H */

@@ -4,12 +4,12 @@
  * Copyright (C) 2010 Stephane Duverger
  *
  * Released under the GPLv2.
- *
  */
 
 /* verbose messages */
 #include <linux/kernel.h>
 #include <linux/device.h>
+#include <linux/module.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
 
@@ -173,7 +173,9 @@ fail_1:
 
 static int __enable_ep(struct usb_ep *ep, struct usb_endpoint_descriptor *desc)
 {
-	int err = usb_ep_enable(ep, desc);
+	int err;
+	ep->desc = desc;
+	err = usb_ep_enable(ep);
 	ep->driver_data = dbgp.gadget;
 	return err;
 }
@@ -261,15 +263,15 @@ static int __init dbgp_configure_endpoints(struct usb_gadget *gadget)
 	o_desc.wMaxPacketSize =
 		__constant_cpu_to_le16(USB_DEBUG_MAX_PACKET_SIZE);
 
-	dbg_desc.bDebugInEndpoint = i_desc.bEndpointAddress & 0x7f;
-	dbg_desc.bDebugOutEndpoint = o_desc.bEndpointAddress & 0x7f;
+	dbg_desc.bDebugInEndpoint = i_desc.bEndpointAddress;
+	dbg_desc.bDebugOutEndpoint = o_desc.bEndpointAddress;
 
 #ifdef CONFIG_USB_G_DBGP_SERIAL
 	dbgp.serial->in = dbgp.i_ep;
 	dbgp.serial->out = dbgp.o_ep;
 
-	dbgp.serial->in_desc = &i_desc;
-	dbgp.serial->out_desc = &o_desc;
+	dbgp.serial->in->desc = &i_desc;
+	dbgp.serial->out->desc = &o_desc;
 
 	if (gserial_setup(gadget, 1) < 0) {
 		stp = 3;
@@ -350,9 +352,9 @@ static int dbgp_setup(struct usb_gadget *gadget,
 	u8 request = ctrl->bRequest;
 	u16 value = le16_to_cpu(ctrl->wValue);
 	u16 length = le16_to_cpu(ctrl->wLength);
-	int err = 0;
-	void *data;
-	u16 len;
+	int err = -EOPNOTSUPP;
+	void *data = NULL;
+	u16 len = 0;
 
 	gadget->ep0->driver_data = gadget;
 
@@ -362,6 +364,7 @@ static int dbgp_setup(struct usb_gadget *gadget,
 			dev_dbg(&dbgp.gadget->dev, "setup: desc device\n");
 			len = sizeof device_desc;
 			data = &device_desc;
+			device_desc.bMaxPacketSize0 = gadget->ep0->maxpacket;
 			break;
 		case USB_DT_DEBUG:
 			dev_dbg(&dbgp.gadget->dev, "setup: desc debug\n");
@@ -371,10 +374,9 @@ static int dbgp_setup(struct usb_gadget *gadget,
 		default:
 			goto fail;
 		}
+		err = 0;
 	} else if (request == USB_REQ_SET_FEATURE &&
 		   value == USB_DEVICE_DEBUG_MODE) {
-		len = 0;
-		data = NULL;
 		dev_dbg(&dbgp.gadget->dev, "setup: feat debug\n");
 #ifdef CONFIG_USB_G_DBGP_PRINTK
 		err = dbgp_enable_ep();
@@ -386,15 +388,13 @@ static int dbgp_setup(struct usb_gadget *gadget,
 	} else
 		goto fail;
 
-	if (len >= 0) {
-		req->length = min(length, len);
-		req->zero = len < req->length;
-		if (data && req->length)
-			memcpy(req->buf, data, req->length);
+	req->length = min(length, len);
+	req->zero = len < req->length;
+	if (data && req->length)
+		memcpy(req->buf, data, req->length);
 
-		req->complete = dbgp_setup_complete;
-		return usb_ep_queue(gadget->ep0, req, GFP_ATOMIC);
-	}
+	req->complete = dbgp_setup_complete;
+	return usb_ep_queue(gadget->ep0, req, GFP_ATOMIC);
 
 fail:
 	dev_dbg(&dbgp.gadget->dev,
@@ -404,8 +404,7 @@ fail:
 
 static struct usb_gadget_driver dbgp_driver = {
 	.function = "dbgp",
-	.speed = USB_SPEED_HIGH,
-	.bind = dbgp_bind,
+	.max_speed = USB_SPEED_HIGH,
 	.unbind = dbgp_unbind,
 	.setup = dbgp_setup,
 	.disconnect = dbgp_disconnect,
@@ -417,7 +416,7 @@ static struct usb_gadget_driver dbgp_driver = {
 
 static int __init dbgp_init(void)
 {
-	return usb_gadget_register_driver(&dbgp_driver);
+	return usb_gadget_probe_driver(&dbgp_driver, dbgp_bind);
 }
 
 static void __exit dbgp_exit(void)

@@ -3,6 +3,8 @@
 #include "sim.h"
 #include "sim-assert.h"
 
+int dmesg_restrict = 1;
+
 int printk(const char * fmt, ...)
 {
   va_list args;

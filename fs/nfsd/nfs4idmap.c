@@ -33,10 +33,20 @@
  */
 
 #include <linux/module.h>
-#include <linux/nfsd_idmap.h>
 #include <linux/seq_file.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <net/net_namespace.h>
+#include "idmap.h"
+#include "nfsd.h"
+
+/*
+ * Turn off idmapping when using AUTH_SYS.
+ */
+static bool nfs4_disable_idmapping = true;
+module_param(nfs4_disable_idmapping, bool, 0644);
+MODULE_PARM_DESC(nfs4_disable_idmapping,
+		"Turn off server's NFSv4 idmapping when using 'sec=sys'");
 
 /*
  * Cache entry
@@ -62,7 +72,6 @@ struct ent {
 
 #define ENT_HASHBITS          8
 #define ENT_HASHMAX           (1 << ENT_HASHBITS)
-#define ENT_HASHMASK          (ENT_HASHMAX - 1)
 
 static void
 ent_init(struct cache_head *cnew, struct cache_head *citm)
@@ -466,102 +475,20 @@ nfsd_idmap_init(void)
 {
 	int rv;
 
-	rv = cache_register(&idtoname_cache);
+	rv = cache_register_net(&idtoname_cache, &init_net);
 	if (rv)
 		return rv;
-	rv = cache_register(&nametoid_cache);
+	rv = cache_register_net(&nametoid_cache, &init_net);
 	if (rv)
-		cache_unregister(&idtoname_cache);
+		cache_unregister_net(&idtoname_cache, &init_net);
 	return rv;
 }
 
 void
 nfsd_idmap_shutdown(void)
 {
-	cache_unregister(&idtoname_cache);
-	cache_unregister(&nametoid_cache);
-}
-
-/*
- * Deferred request handling
- */
-
-struct idmap_defer_req {
-       struct cache_req		req;
-       struct cache_deferred_req deferred_req;
-       wait_queue_head_t	waitq;
-       atomic_t			count;
-};
-
-static inline void
-put_mdr(struct idmap_defer_req *mdr)
-{
-	if (atomic_dec_and_test(&mdr->count))
-		kfree(mdr);
-}
-
-static inline void
-get_mdr(struct idmap_defer_req *mdr)
-{
-	atomic_inc(&mdr->count);
-}
-
-static void
-idmap_revisit(struct cache_deferred_req *dreq, int toomany)
-{
-	struct idmap_defer_req *mdr =
-		container_of(dreq, struct idmap_defer_req, deferred_req);
-
-	wake_up(&mdr->waitq);
-	put_mdr(mdr);
-}
-
-static struct cache_deferred_req *
-idmap_defer(struct cache_req *req)
-{
-	struct idmap_defer_req *mdr =
-		container_of(req, struct idmap_defer_req, req);
-
-	mdr->deferred_req.revisit = idmap_revisit;
-	get_mdr(mdr);
-	return (&mdr->deferred_req);
-}
-
-static inline int
-do_idmap_lookup(struct ent *(*lookup_fn)(struct ent *), struct ent *key,
-		struct cache_detail *detail, struct ent **item,
-		struct idmap_defer_req *mdr)
-{
-	*item = lookup_fn(key);
-	if (!*item)
-		return -ENOMEM;
-	return cache_check(detail, &(*item)->h, &mdr->req);
-}
-
-static inline int
-do_idmap_lookup_nowait(struct ent *(*lookup_fn)(struct ent *),
-			struct ent *key, struct cache_detail *detail,
-			struct ent **item)
-{
-	int ret = -ENOMEM;
-
-	*item = lookup_fn(key);
-	if (!*item)
-		goto out_err;
-	ret = -ETIMEDOUT;
-	if (!test_bit(CACHE_VALID, &(*item)->h.flags)
-			|| (*item)->h.expiry_time < get_seconds()
-			|| detail->flush_time > (*item)->h.last_refresh)
-		goto out_put;
-	ret = -ENOENT;
-	if (test_bit(CACHE_NEGATIVE, &(*item)->h.flags))
-		goto out_put;
-	return 0;
-out_put:
-	cache_put(&(*item)->h, detail);
-out_err:
-	*item = NULL;
-	return ret;
+	cache_unregister_net(&idtoname_cache, &init_net);
+	cache_unregister_net(&nametoid_cache, &init_net);
 }
 
 static int
@@ -569,22 +496,21 @@ idmap_lookup(struct svc_rqst *rqstp,
 		struct ent *(*lookup_fn)(struct ent *), struct ent *key,
 		struct cache_detail *detail, struct ent **item)
 {
-	struct idmap_defer_req *mdr;
 	int ret;
 
-	mdr = kzalloc(sizeof(*mdr), GFP_KERNEL);
-	if (!mdr)
+	*item = lookup_fn(key);
+	if (!*item)
 		return -ENOMEM;
-	atomic_set(&mdr->count, 1);
-	init_waitqueue_head(&mdr->waitq);
-	mdr->req.defer = idmap_defer;
-	ret = do_idmap_lookup(lookup_fn, key, detail, item, mdr);
-	if (ret == -EAGAIN) {
-		wait_event_interruptible_timeout(mdr->waitq,
-			test_bit(CACHE_VALID, &(*item)->h.flags), 1 * HZ);
-		ret = do_idmap_lookup_nowait(lookup_fn, key, detail, item);
+ retry:
+	ret = cache_check(detail, &(*item)->h, &rqstp->rq_chandle);
+
+	if (ret == -ETIMEDOUT) {
+		struct ent *prev_item = *item;
+		*item = lookup_fn(key);
+		if (*item != prev_item)
+			goto retry;
+		cache_put(&(*item)->h, detail);
 	}
-	put_mdr(mdr);
 	return ret;
 }
 
@@ -597,7 +523,7 @@ rqst_authname(struct svc_rqst *rqstp)
 	return clp->name;
 }
 
-static int
+static __be32
 idmap_name_to_id(struct svc_rqst *rqstp, int type, const char *name, u32 namelen,
 		uid_t *id)
 {
@@ -607,15 +533,15 @@ idmap_name_to_id(struct svc_rqst *rqstp, int type, const char *name, u32 namelen
 	int ret;
 
 	if (namelen + 1 > sizeof(key.name))
-		return -EINVAL;
+		return nfserr_badowner;
 	memcpy(key.name, name, namelen);
 	key.name[namelen] = '\0';
 	strlcpy(key.authname, rqst_authname(rqstp), sizeof(key.authname));
 	ret = idmap_lookup(rqstp, nametoid_lookup, &key, &nametoid_cache, &item);
 	if (ret == -ENOENT)
-		ret = -ESRCH; /* nfserr_badname */
+		return nfserr_badowner;
 	if (ret)
-		return ret;
+		return nfserrno(ret);
 	*id = item->id;
 	cache_put(&item->h, &nametoid_cache);
 	return 0;
@@ -643,28 +569,65 @@ idmap_id_to_name(struct svc_rqst *rqstp, int type, uid_t id, char *name)
 	return ret;
 }
 
-int
+static bool
+numeric_name_to_id(struct svc_rqst *rqstp, int type, const char *name, u32 namelen, uid_t *id)
+{
+	int ret;
+	char buf[11];
+
+	if (namelen + 1 > sizeof(buf))
+		/* too long to represent a 32-bit id: */
+		return false;
+	/* Just to make sure it's null-terminated: */
+	memcpy(buf, name, namelen);
+	buf[namelen] = '\0';
+	ret = kstrtouint(name, 10, id);
+	return ret == 0;
+}
+
+static __be32
+do_name_to_id(struct svc_rqst *rqstp, int type, const char *name, u32 namelen, uid_t *id)
+{
+	if (nfs4_disable_idmapping && rqstp->rq_flavor < RPC_AUTH_GSS)
+		if (numeric_name_to_id(rqstp, type, name, namelen, id))
+			return 0;
+		/*
+		 * otherwise, fall through and try idmapping, for
+		 * backwards compatibility with clients sending names:
+		 */
+	return idmap_name_to_id(rqstp, type, name, namelen, id);
+}
+
+static int
+do_id_to_name(struct svc_rqst *rqstp, int type, uid_t id, char *name)
+{
+	if (nfs4_disable_idmapping && rqstp->rq_flavor < RPC_AUTH_GSS)
+		return sprintf(name, "%u", id);
+	return idmap_id_to_name(rqstp, type, id, name);
+}
+
+__be32
 nfsd_map_name_to_uid(struct svc_rqst *rqstp, const char *name, size_t namelen,
 		__u32 *id)
 {
-	return idmap_name_to_id(rqstp, IDMAP_TYPE_USER, name, namelen, id);
+	return do_name_to_id(rqstp, IDMAP_TYPE_USER, name, namelen, id);
 }
 
-int
+__be32
 nfsd_map_name_to_gid(struct svc_rqst *rqstp, const char *name, size_t namelen,
 		__u32 *id)
 {
-	return idmap_name_to_id(rqstp, IDMAP_TYPE_GROUP, name, namelen, id);
+	return do_name_to_id(rqstp, IDMAP_TYPE_GROUP, name, namelen, id);
 }
 
 int
 nfsd_map_uid_to_name(struct svc_rqst *rqstp, __u32 id, char *name)
 {
-	return idmap_id_to_name(rqstp, IDMAP_TYPE_USER, id, name);
+	return do_id_to_name(rqstp, IDMAP_TYPE_USER, id, name);
 }
 
 int
 nfsd_map_gid_to_name(struct svc_rqst *rqstp, __u32 id, char *name)
 {
-	return idmap_id_to_name(rqstp, IDMAP_TYPE_GROUP, id, name);
+	return do_id_to_name(rqstp, IDMAP_TYPE_GROUP, id, name);
 }

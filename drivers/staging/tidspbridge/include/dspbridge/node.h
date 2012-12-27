@@ -22,7 +22,7 @@
 #include <dspbridge/procpriv.h>
 
 #include <dspbridge/nodedefs.h>
-#include <dspbridge/dispdefs.h>
+#include <dspbridge/disp.h>
 #include <dspbridge/nldrdefs.h>
 #include <dspbridge/drv.h>
 
@@ -44,10 +44,9 @@
  *      -ESPIPE:        iAlg functions not found for a DAIS node.
  *      -EDOM:         attr_in != NULL and attr_in->prio out of
  *                          range.
- *      -EPERM:          A failure occured, unable to allocate node.
+ *      -EPERM:          A failure occurred, unable to allocate node.
  *      -EBADR:    Proccessor is not in the running state.
  *  Requires:
- *      node_init(void) called.
  *      hprocessor != NULL.
  *      node_uuid != NULL.
  *      noderes != NULL.
@@ -81,7 +80,6 @@ extern int node_allocate(struct proc_object *hprocessor,
  *      -EPERM:      General Failure.
  *      -EINVAL:      Invalid Size.
  *  Requires:
- *      node_init(void) called.
  *      pbuffer != NULL.
  *  Ensures:
  */
@@ -106,35 +104,16 @@ extern int node_alloc_msg_buf(struct node_object *hnode,
  *                          or NODE_RUNNING state.
  *      -ETIME:       A timeout occurred before the DSP responded.
  *  Requires:
- *      node_init(void) called.
  *  Ensures:
  *      0 && (Node's current priority == prio)
  */
 extern int node_change_priority(struct node_object *hnode, s32 prio);
 
 /*
- *  ======== node_close_orphans ========
- *  Purpose:
- *      Delete all nodes whose owning processor is being destroyed.
- *  Parameters:
- *      hnode_mgr:       Node manager object.
- *      proc:          Handle to processor object being destroyed.
- *  Returns:
- *      0:        Success.
- *      -EPERM:      Unable to delete all nodes belonging to proc.
- *  Requires:
- *      Valid hnode_mgr.
- *      proc != NULL.
- *  Ensures:
- */
-extern int node_close_orphans(struct node_mgr *hnode_mgr,
-				     struct proc_object *proc);
-
-/*
  *  ======== node_connect ========
  *  Purpose:
  *      Connect two nodes on the DSP, or a node on the DSP to the GPP. In the
- *      case that the connnection is being made between a node on the DSP and
+ *      case that the connection is being made between a node on the DSP and
  *      the GPP, one of the node handles (either node1 or node2) must be
  *      the constant NODE_HGPPNODE.
  *  Parameters:
@@ -175,7 +154,6 @@ extern int node_close_orphans(struct node_mgr *hnode_mgr,
  *                              Device node to device node, or device node to
  *                              GPP), the two nodes are on different DSPs.
  *  Requires:
- *      node_init(void) called.
  *  Ensures:
  */
 extern int node_connect(struct node_object *node1,
@@ -203,7 +181,6 @@ extern int node_connect(struct node_object *node1,
  *      -ETIME:       A timeout occurred before the DSP responded.
  *      -EPERM:          A failure occurred, unable to create node.
  *  Requires:
- *      node_init(void) called.
  *  Ensures:
  */
 extern int node_create(struct node_object *hnode);
@@ -224,7 +201,6 @@ extern int node_create(struct node_object *hnode);
  *      -ENOMEM:    Insufficient memory for requested resources.
  *      -EPERM:      General failure.
  *  Requires:
- *      node_init(void) called.
  *      node_man != NULL.
  *      hdev_obj != NULL.
  *  Ensures:
@@ -252,7 +228,6 @@ extern int node_create_mgr(struct node_mgr **node_man,
  *      -EPERM:          A failure occurred in deleting the node.
  *      -ESPIPE:        Delete function not found in the COFF file.
  *  Requires:
- *      node_init(void) called.
  *  Ensures:
  *      0:            hnode is invalid.
  */
@@ -268,7 +243,6 @@ extern int node_delete(struct node_res_object *noderes,
  *  Returns:
  *      0:        Success.
  *  Requires:
- *      node_init(void) called.
  *      Valid hnode_mgr.
  *  Ensures:
  */
@@ -305,20 +279,6 @@ extern int node_enum_nodes(struct node_mgr *hnode_mgr,
 				  u32 *pu_allocated);
 
 /*
- *  ======== node_exit ========
- *  Purpose:
- *      Discontinue usage of NODE module.
- *  Parameters:
- *  Returns:
- *  Requires:
- *      node_init(void) successfully called before.
- *  Ensures:
- *      Any resources acquired in node_init(void) will be freed when last NODE
- *      client calls node_exit(void).
- */
-extern void node_exit(void);
-
-/*
  *  ======== node_free_msg_buf ========
  *  Purpose:
  *      Free a message buffer previously allocated with node_alloc_msg_buf.
@@ -331,7 +291,6 @@ extern void node_exit(void);
  *      -EFAULT:    Invalid node handle.
  *      -EPERM:      Failure to free the buffer.
  *  Requires:
- *      node_init(void) called.
  *      pbuffer != NULL.
  *  Ensures:
  */
@@ -354,7 +313,6 @@ extern int node_free_msg_buf(struct node_object *hnode,
  *      0:        Success.
  *      -EFAULT:    Invalid hnode.
  *  Requires:
- *      node_init(void) called.
  *      pattr != NULL.
  *  Ensures:
  *      0:        *pattrs contains the node's current attributes.
@@ -381,7 +339,6 @@ extern int node_get_attr(struct node_object *hnode,
  *              Error occurred while trying to retrieve a message.
  *      -ETIME:   Timeout occurred and no message is available.
  *  Requires:
- *      node_init(void) called.
  *      message != NULL.
  *  Ensures:
  */
@@ -402,17 +359,6 @@ extern int node_get_message(struct node_object *hnode,
  */
 extern int node_get_nldr_obj(struct node_mgr *hnode_mgr,
 				    struct nldr_object **nldr_ovlyobj);
-
-/*
- *  ======== node_init ========
- *  Purpose:
- *      Initialize the NODE module.
- *  Parameters:
- *  Returns:
- *      TRUE if initialization succeeded, FALSE otherwise.
- *  Ensures:
- */
-extern bool node_init(void);
 
 /*
  *  ======== node_on_exit ========
@@ -443,7 +389,6 @@ void node_on_exit(struct node_object *hnode, s32 node_status);
  *      -ETIME:       A timeout occurred before the DSP responded.
  *      DSP_EWRONGSTSATE:   Node is not in NODE_RUNNING state.
  *  Requires:
- *      node_init(void) called.
  *  Ensures:
  */
 extern int node_pause(struct node_object *hnode);
@@ -467,7 +412,6 @@ extern int node_pause(struct node_object *hnode);
  *      -ETIME:       Timeout occurred before message could be set.
  *      -EBADR:    Node is in invalid state for sending messages.
  *  Requires:
- *      node_init(void) called.
  *      pmsg != NULL.
  *  Ensures:
  */
@@ -491,7 +435,6 @@ extern int node_put_message(struct node_object *hnode,
  *      -ENOSYS:   Notification type specified by notify_type is not
  *                      supported.
  *  Requires:
- *      node_init(void) called.
  *      hnotification != NULL.
  *  Ensures:
  */
@@ -518,7 +461,6 @@ extern int node_register_notify(struct node_object *hnode,
  *      DSP_EWRONGSTSATE:   Node is not in NODE_PAUSED or NODE_CREATED state.
  *      -ESPIPE:        Execute function not found in the COFF file.
  *  Requires:
- *      node_init(void) called.
  *  Ensures:
  */
 extern int node_run(struct node_object *hnode);
@@ -541,7 +483,6 @@ extern int node_run(struct node_object *hnode);
  *              Unable to terminate the node.
  *      -EBADR:    Operation not valid for the current node state.
  *  Requires:
- *      node_init(void) called.
  *      pstatus != NULL.
  *  Ensures:
  */

@@ -20,7 +20,6 @@
 #include <asm/unistd.h>
 #include <asm/vfp.h>
 
-#include "ptrace.h"
 #include "signal.h"
 
 #define _BLOCKABLE (~(sigmask(SIGKILL) | sigmask(SIGSTOP)))
@@ -67,12 +66,13 @@ const unsigned long syscall_restart_code[2] = {
  */
 asmlinkage int sys_sigsuspend(int restart, unsigned long oldmask, old_sigset_t mask)
 {
-	mask &= _BLOCKABLE;
-	spin_lock_irq(&current->sighand->siglock);
+	sigset_t blocked;
+
 	current->saved_sigmask = current->blocked;
-	siginitset(&current->blocked, mask);
-	recalc_sigpending();
-	spin_unlock_irq(&current->sighand->siglock);
+
+	mask &= _BLOCKABLE;
+	siginitset(&blocked, mask);
+	set_current_blocked(&blocked);
 
 	current->state = TASK_INTERRUPTIBLE;
 	schedule();
@@ -180,44 +180,23 @@ static int restore_iwmmxt_context(struct iwmmxt_sigframe *frame)
 
 static int preserve_vfp_context(struct vfp_sigframe __user *frame)
 {
-	struct thread_info *thread = current_thread_info();
-	struct vfp_hard_struct *h = &thread->vfpstate.hard;
 	const unsigned long magic = VFP_MAGIC;
 	const unsigned long size = VFP_STORAGE_SIZE;
 	int err = 0;
 
-	vfp_sync_hwstate(thread);
 	__put_user_error(magic, &frame->magic, err);
 	__put_user_error(size, &frame->size, err);
 
-	/*
-	 * Copy the floating point registers. There can be unused
-	 * registers see asm/hwcap.h for details.
-	 */
-	err |= __copy_to_user(&frame->ufp.fpregs, &h->fpregs,
-			      sizeof(h->fpregs));
-	/*
-	 * Copy the status and control register.
-	 */
-	__put_user_error(h->fpscr, &frame->ufp.fpscr, err);
+	if (err)
+		return -EFAULT;
 
-	/*
-	 * Copy the exception registers.
-	 */
-	__put_user_error(h->fpexc, &frame->ufp_exc.fpexc, err);
-	__put_user_error(h->fpinst, &frame->ufp_exc.fpinst, err);
-	__put_user_error(h->fpinst2, &frame->ufp_exc.fpinst2, err);
-
-	return err ? -EFAULT : 0;
+	return vfp_preserve_user_clear_hwstate(&frame->ufp, &frame->ufp_exc);
 }
 
 static int restore_vfp_context(struct vfp_sigframe __user *frame)
 {
-	struct thread_info *thread = current_thread_info();
-	struct vfp_hard_struct *h = &thread->vfpstate.hard;
 	unsigned long magic;
 	unsigned long size;
-	unsigned long fpexc;
 	int err = 0;
 
 	__get_user_error(magic, &frame->magic, err);
@@ -228,34 +207,7 @@ static int restore_vfp_context(struct vfp_sigframe __user *frame)
 	if (magic != VFP_MAGIC || size != VFP_STORAGE_SIZE)
 		return -EINVAL;
 
-	/*
-	 * Copy the floating point registers. There can be unused
-	 * registers see asm/hwcap.h for details.
-	 */
-	err |= __copy_from_user(&h->fpregs, &frame->ufp.fpregs,
-				sizeof(h->fpregs));
-	/*
-	 * Copy the status and control register.
-	 */
-	__get_user_error(h->fpscr, &frame->ufp.fpscr, err);
-
-	/*
-	 * Sanitise and restore the exception registers.
-	 */
-	__get_user_error(fpexc, &frame->ufp_exc.fpexc, err);
-	/* Ensure the VFP is enabled. */
-	fpexc |= FPEXC_EN;
-	/* Ensure FPINST2 is invalid and the exception flag is cleared. */
-	fpexc &= ~(FPEXC_EX | FPEXC_FP2V);
-	h->fpexc = fpexc;
-
-	__get_user_error(h->fpinst, &frame->ufp_exc.fpinst, err);
-	__get_user_error(h->fpinst2, &frame->ufp_exc.fpinst2, err);
-
-	if (!err)
-		vfp_flush_hwstate(thread);
-
-	return err ? -EFAULT : 0;
+	return vfp_restore_user_hwstate(&frame->ufp, &frame->ufp_exc);
 }
 
 #endif
@@ -282,10 +234,7 @@ static int restore_sigframe(struct pt_regs *regs, struct sigframe __user *sf)
 	err = __copy_from_user(&set, &sf->uc.uc_sigmask, sizeof(set));
 	if (err == 0) {
 		sigdelsetmask(&set, ~_BLOCKABLE);
-		spin_lock_irq(&current->sighand->siglock);
-		current->blocked = set;
-		recalc_sigpending();
-		spin_unlock_irq(&current->sighand->siglock);
+		set_current_blocked(&set);
 	}
 
 	__get_user_error(regs->ARM_r0, &sf->uc.uc_mcontext.arm_r0, err);
@@ -348,8 +297,6 @@ asmlinkage int sys_sigreturn(struct pt_regs *regs)
 	if (restore_sigframe(regs, frame))
 		goto badframe;
 
-	single_step_trap(current);
-
 	return regs->ARM_r0;
 
 badframe:
@@ -382,8 +329,6 @@ asmlinkage int sys_rt_sigreturn(struct pt_regs *regs)
 
 	if (do_sigaltstack(&frame->sig.uc.uc_stack, NULL, regs->ARM_sp) == -EFAULT)
 		goto badframe;
-
-	single_step_trap(current);
 
 	return regs->ARM_r0;
 
@@ -474,7 +419,9 @@ setup_return(struct pt_regs *regs, struct k_sigaction *ka,
 	unsigned long handler = (unsigned long)ka->sa.sa_handler;
 	unsigned long retcode;
 	int thumb = 0;
-	unsigned long cpsr = regs->ARM_cpsr & ~PSR_f;
+	unsigned long cpsr = regs->ARM_cpsr & ~(PSR_f | PSR_E_BIT);
+
+	cpsr |= PSR_ENDSTATE;
 
 	/*
 	 * Maybe we need to deliver a 32-bit signal to a 26-bit task.
@@ -600,44 +547,18 @@ setup_rt_frame(int usig, struct k_sigaction *ka, siginfo_t *info,
 	return err;
 }
 
-static inline void setup_syscall_restart(struct pt_regs *regs)
-{
-	regs->ARM_r0 = regs->ARM_ORIG_r0;
-	regs->ARM_pc -= thumb_mode(regs) ? 2 : 4;
-}
-
 /*
  * OK, we're invoking a handler
  */	
 static int
 handle_signal(unsigned long sig, struct k_sigaction *ka,
 	      siginfo_t *info, sigset_t *oldset,
-	      struct pt_regs * regs, int syscall)
+	      struct pt_regs * regs)
 {
 	struct thread_info *thread = current_thread_info();
 	struct task_struct *tsk = current;
 	int usig = sig;
 	int ret;
-
-	/*
-	 * If we were from a system call, check for system call restarting...
-	 */
-	if (syscall) {
-		switch (regs->ARM_r0) {
-		case -ERESTART_RESTARTBLOCK:
-		case -ERESTARTNOHAND:
-			regs->ARM_r0 = -EINTR;
-			break;
-		case -ERESTARTSYS:
-			if (!(ka->sa.sa_flags & SA_RESTART)) {
-				regs->ARM_r0 = -EINTR;
-				break;
-			}
-			/* fallthrough */
-		case -ERESTARTNOINTR:
-			setup_syscall_restart(regs);
-		}
-	}
 
 	/*
 	 * translate the signal
@@ -666,13 +587,7 @@ handle_signal(unsigned long sig, struct k_sigaction *ka,
 	/*
 	 * Block the signal if we were successful.
 	 */
-	spin_lock_irq(&tsk->sighand->siglock);
-	sigorsets(&tsk->blocked, &tsk->blocked,
-		  &ka->sa.sa_mask);
-	if (!(ka->sa.sa_flags & SA_NODEFER))
-		sigaddset(&tsk->blocked, sig);
-	recalc_sigpending();
-	spin_unlock_irq(&tsk->sighand->siglock);
+	block_sigmask(ka, sig);
 
 	return 0;
 }
@@ -688,6 +603,7 @@ handle_signal(unsigned long sig, struct k_sigaction *ka,
  */
 static void do_signal(struct pt_regs *regs, int syscall)
 {
+	unsigned int retval = 0, continue_addr = 0, restart_addr = 0;
 	struct k_sigaction ka;
 	siginfo_t info;
 	int signr;
@@ -701,20 +617,61 @@ static void do_signal(struct pt_regs *regs, int syscall)
 	if (!user_mode(regs))
 		return;
 
+	/*
+	 * If we were from a system call, check for system call restarting...
+	 */
+	if (syscall) {
+		continue_addr = regs->ARM_pc;
+		restart_addr = continue_addr - (thumb_mode(regs) ? 2 : 4);
+		retval = regs->ARM_r0;
+
+		/*
+		 * Prepare for system call restart.  We do this here so that a
+		 * debugger will see the already changed PSW.
+		 */
+		switch (retval) {
+		case -ERESTARTNOHAND:
+		case -ERESTARTSYS:
+		case -ERESTARTNOINTR:
+			regs->ARM_r0 = regs->ARM_ORIG_r0;
+			regs->ARM_pc = restart_addr;
+			break;
+		case -ERESTART_RESTARTBLOCK:
+			regs->ARM_r0 = -EINTR;
+			break;
+		}
+	}
+
 	if (try_to_freeze())
 		goto no_signal;
 
-	single_step_clear(current);
-
+	/*
+	 * Get the signal to deliver.  When running under ptrace, at this
+	 * point the debugger may change all our registers ...
+	 */
 	signr = get_signal_to_deliver(&info, &ka, regs, NULL);
 	if (signr > 0) {
 		sigset_t *oldset;
+
+		/*
+		 * Depending on the signal settings we may need to revert the
+		 * decision to restart the system call.  But skip this if a
+		 * debugger has chosen to restart at a different PC.
+		 */
+		if (regs->ARM_pc == restart_addr) {
+			if (retval == -ERESTARTNOHAND
+			    || (retval == -ERESTARTSYS
+				&& !(ka.sa.sa_flags & SA_RESTART))) {
+				regs->ARM_r0 = -EINTR;
+				regs->ARM_pc = continue_addr;
+			}
+		}
 
 		if (test_thread_flag(TIF_RESTORE_SIGMASK))
 			oldset = &current->saved_sigmask;
 		else
 			oldset = &current->blocked;
-		if (handle_signal(signr, &ka, &info, oldset, regs, syscall) == 0) {
+		if (handle_signal(signr, &ka, &info, oldset, regs) == 0) {
 			/*
 			 * A signal was successfully delivered; the saved
 			 * sigmask will have been stored in the signal frame,
@@ -724,16 +681,18 @@ static void do_signal(struct pt_regs *regs, int syscall)
 			if (test_thread_flag(TIF_RESTORE_SIGMASK))
 				clear_thread_flag(TIF_RESTORE_SIGMASK);
 		}
-		single_step_set(current);
 		return;
 	}
 
  no_signal:
-	/*
-	 * No signal to deliver to the process - restart the syscall.
-	 */
 	if (syscall) {
-		if (regs->ARM_r0 == -ERESTART_RESTARTBLOCK) {
+		/*
+		 * Handle restarting a different system call.  As above,
+		 * if a debugger has chosen to restart at a different PC,
+		 * ignore the restart.
+		 */
+		if (retval == -ERESTART_RESTARTBLOCK
+		    && regs->ARM_pc == continue_addr) {
 			if (thumb_mode(regs)) {
 				regs->ARM_r7 = __NR_restart_syscall - __NR_SYSCALL_BASE;
 				regs->ARM_pc -= 2;
@@ -756,11 +715,6 @@ static void do_signal(struct pt_regs *regs, int syscall)
 #endif
 			}
 		}
-		if (regs->ARM_r0 == -ERESTARTNOHAND ||
-		    regs->ARM_r0 == -ERESTARTSYS ||
-		    regs->ARM_r0 == -ERESTARTNOINTR) {
-			setup_syscall_restart(regs);
-		}
 
 		/* If there's no signal to deliver, we just put the saved sigmask
 		 * back.
@@ -770,7 +724,6 @@ static void do_signal(struct pt_regs *regs, int syscall)
 			sigprocmask(SIG_SETMASK, &current->saved_sigmask, NULL);
 		}
 	}
-	single_step_set(current);
 }
 
 asmlinkage void

@@ -33,7 +33,7 @@ struct cc_workarea {
 	u32	prop_offset;
 };
 
-static void dlpar_free_cc_property(struct property *prop)
+void dlpar_free_cc_property(struct property *prop)
 {
 	kfree(prop->name);
 	kfree(prop->value);
@@ -55,13 +55,12 @@ static struct property *dlpar_parse_cc_property(struct cc_workarea *ccwa)
 
 	prop->length = ccwa->prop_length;
 	value = (char *)ccwa + ccwa->prop_offset;
-	prop->value = kzalloc(prop->length, GFP_KERNEL);
+	prop->value = kmemdup(value, prop->length, GFP_KERNEL);
 	if (!prop->value) {
 		dlpar_free_cc_property(prop);
 		return NULL;
 	}
 
-	memcpy(prop->value, value, prop->length);
 	return prop;
 }
 
@@ -75,7 +74,7 @@ static struct device_node *dlpar_parse_cc_node(struct cc_workarea *ccwa)
 		return NULL;
 
 	/* The configure connector reported name does not contain a
-	 * preceeding '/', so we allocate a buffer large enough to
+	 * preceding '/', so we allocate a buffer large enough to
 	 * prepend this to the full_name.
 	 */
 	name = (char *)ccwa + ccwa->name_offset;
@@ -102,7 +101,7 @@ static void dlpar_free_one_cc_node(struct device_node *dn)
 	kfree(dn);
 }
 
-static void dlpar_free_cc_nodes(struct device_node *dn)
+void dlpar_free_cc_nodes(struct device_node *dn)
 {
 	if (dn->child)
 		dlpar_free_cc_nodes(dn->child);
@@ -113,6 +112,7 @@ static void dlpar_free_cc_nodes(struct device_node *dn)
 	dlpar_free_one_cc_node(dn);
 }
 
+#define COMPLETE	0
 #define NEXT_SIBLING    1
 #define NEXT_CHILD      2
 #define NEXT_PROPERTY   3
@@ -159,6 +159,9 @@ struct device_node *dlpar_configure_connector(u32 drc_index)
 		spin_unlock(&rtas_data_buf_lock);
 
 		switch (rc) {
+		case COMPLETE:
+			break;
+
 		case NEXT_SIBLING:
 			dn = dlpar_parse_cc_node(ccwa);
 			if (!dn)
@@ -263,12 +266,11 @@ int dlpar_attach_node(struct device_node *dn)
 	if (!dn->parent)
 		return -ENOMEM;
 
-	rc = blocking_notifier_call_chain(&pSeries_reconfig_chain,
-					  PSERIES_RECONFIG_ADD, dn);
-	if (rc == NOTIFY_BAD) {
+	rc = pSeries_reconfig_notify(PSERIES_RECONFIG_ADD, dn);
+	if (rc) {
 		printk(KERN_ERR "Failed to add device node %s\n",
 		       dn->full_name);
-		return -ENOMEM; /* For now, safe to assume kmalloc failure */
+		return rc;
 	}
 
 	of_attach_node(dn);
@@ -298,8 +300,7 @@ int dlpar_detach_node(struct device_node *dn)
 		remove_proc_entry(dn->pde->name, parent->pde);
 #endif
 
-	blocking_notifier_call_chain(&pSeries_reconfig_chain,
-			    PSERIES_RECONFIG_REMOVE, dn);
+	pSeries_reconfig_notify(PSERIES_RECONFIG_REMOVE, dn);
 	of_detach_node(dn);
 	of_node_put(dn); /* Must decrement the refcount */
 

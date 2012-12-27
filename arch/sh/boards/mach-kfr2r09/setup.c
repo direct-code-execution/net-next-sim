@@ -10,7 +10,8 @@
 #include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/interrupt.h>
-#include <linux/mfd/sh_mobile_sdhi.h>
+#include <linux/mmc/host.h>
+#include <linux/mmc/sh_mobile_sdhi.h>
 #include <linux/mfd/tmio.h>
 #include <linux/mtd/physmap.h>
 #include <linux/mtd/onenand.h>
@@ -21,6 +22,7 @@
 #include <linux/input/sh_keysc.h>
 #include <linux/i2c.h>
 #include <linux/usb/r8a66597.h>
+#include <linux/videodev2.h>
 #include <media/rj54n1cb0c.h>
 #include <media/soc_camera.h>
 #include <media/sh_mobile_ceu.h>
@@ -121,8 +123,20 @@ static struct platform_device kfr2r09_sh_keysc_device = {
 	.dev	= {
 		.platform_data	= &kfr2r09_sh_keysc_info,
 	},
-	.archdata = {
-		.hwblk_id = HWBLK_KEYSC,
+};
+
+static const struct fb_videomode kfr2r09_lcdc_modes[] = {
+	{
+		.name = "TX07D34VM0AAA",
+		.xres = 240,
+		.yres = 400,
+		.left_margin = 0,
+		.right_margin = 16,
+		.hsync_len = 8,
+		.upper_margin = 0,
+		.lower_margin = 1,
+		.vsync_len = 1,
+		.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
 	},
 };
 
@@ -130,27 +144,15 @@ static struct sh_mobile_lcdc_info kfr2r09_sh_lcdc_info = {
 	.clock_source = LCDC_CLK_BUS,
 	.ch[0] = {
 		.chan = LCDC_CHAN_MAINLCD,
-		.bpp = 16,
+		.fourcc = V4L2_PIX_FMT_RGB565,
 		.interface_type = SYS18,
 		.clock_divider = 6,
 		.flags = LCDC_FLAGS_DWPOL,
-		.lcd_cfg = {
-			.name = "TX07D34VM0AAA",
-			.xres = 240,
-			.yres = 400,
-			.left_margin = 0,
-			.right_margin = 16,
-			.hsync_len = 8,
-			.upper_margin = 0,
-			.lower_margin = 1,
-			.vsync_len = 1,
-			.sync = FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
-		},
-		.lcd_size_cfg = {
+		.lcd_modes = kfr2r09_lcdc_modes,
+		.num_modes = ARRAY_SIZE(kfr2r09_lcdc_modes),
+		.panel_cfg = {
 			.width = 35,
 			.height = 58,
-		},
-		.board_cfg = {
 			.setup_sys = kfr2r09_lcd_setup,
 			.start_transfer = kfr2r09_lcd_start,
 			.display_on = kfr2r09_lcd_on,
@@ -184,9 +186,6 @@ static struct platform_device kfr2r09_sh_lcdc_device = {
 	.resource	= kfr2r09_sh_lcdc_resources,
 	.dev	= {
 		.platform_data	= &kfr2r09_sh_lcdc_info,
-	},
-	.archdata = {
-		.hwblk_id = HWBLK_LCDC,
 	},
 };
 
@@ -247,9 +246,6 @@ static struct platform_device kfr2r09_ceu_device = {
 	.resource	= kfr2r09_ceu_resources,
 	.dev	= {
 		.platform_data	= &sh_mobile_ceu_info,
-	},
-	.archdata = {
-		.hwblk_id = HWBLK_CEU0,
 	},
 };
 
@@ -333,7 +329,6 @@ static struct soc_camera_link rj54n1_link = {
 	.power		= camera_power,
 	.board_info	= &kfr2r09_i2c_camera,
 	.i2c_adapter_id	= 1,
-	.module_name	= "rj54n1cb0c",
 	.priv		= &rj54n1_priv,
 };
 
@@ -349,7 +344,7 @@ static struct resource kfr2r09_sh_sdhi0_resources[] = {
 	[0] = {
 		.name	= "SDHI0",
 		.start  = 0x04ce0000,
-		.end    = 0x04ce01ff,
+		.end    = 0x04ce00ff,
 		.flags  = IORESOURCE_MEM,
 	},
 	[1] = {
@@ -362,6 +357,7 @@ static struct sh_mobile_sdhi_info sh7724_sdhi0_data = {
 	.dma_slave_tx	= SHDMA_SLAVE_SDHI0_TX,
 	.dma_slave_rx	= SHDMA_SLAVE_SDHI0_RX,
 	.tmio_flags	= TMIO_MMC_WRPROTECT_DISABLE,
+	.tmio_caps      = MMC_CAP_SDIO_IRQ,
 };
 
 static struct platform_device kfr2r09_sh_sdhi0_device = {
@@ -370,9 +366,6 @@ static struct platform_device kfr2r09_sh_sdhi0_device = {
 	.resource       = kfr2r09_sh_sdhi0_resources,
 	.dev = {
 		.platform_data	= &sh7724_sdhi0_data,
-	},
-	.archdata = {
-		.hwblk_id = HWBLK_SDHI0,
 	},
 };
 

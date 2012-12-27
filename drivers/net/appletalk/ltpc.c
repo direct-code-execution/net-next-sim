@@ -229,7 +229,6 @@ static int dma;
 #include <linux/bitops.h>
 #include <linux/gfp.h>
 
-#include <asm/system.h>
 #include <asm/dma.h>
 #include <asm/io.h>
 
@@ -652,9 +651,9 @@ static int do_write(struct net_device *dev, void *cbuf, int cbuflen,
 	int ret;
 
 	if(i) {
-		qels[i].cbuf = (unsigned char *) cbuf;
+		qels[i].cbuf = cbuf;
 		qels[i].cbuflen = cbuflen;
-		qels[i].dbuf = (unsigned char *) dbuf;
+		qels[i].dbuf = dbuf;
 		qels[i].dbuflen = dbuflen;
 		qels[i].QWrite = 1;
 		qels[i].mailbox = i;  /* this should be initted rather */
@@ -676,9 +675,9 @@ static int do_read(struct net_device *dev, void *cbuf, int cbuflen,
 	int ret;
 
 	if(i) {
-		qels[i].cbuf = (unsigned char *) cbuf;
+		qels[i].cbuf = cbuf;
 		qels[i].cbuflen = cbuflen;
-		qels[i].dbuf = (unsigned char *) dbuf;
+		qels[i].dbuf = dbuf;
 		qels[i].dbuflen = dbuflen;
 		qels[i].QWrite = 0;
 		qels[i].mailbox = i;  /* this should be initted rather */
@@ -727,7 +726,7 @@ static int sendup_buffer (struct net_device *dev)
 
 	if (ltc->command != LT_RCVLAP) {
 		printk("unknown command 0x%02x from ltpc card\n",ltc->command);
-		return(-1);
+		return -1;
 	}
 	dnode = ltc->dnode;
 	snode = ltc->snode;
@@ -1014,7 +1013,7 @@ static int __init ltpc_probe_dma(int base, int dma)
 static const struct net_device_ops ltpc_netdev = {
 	.ndo_start_xmit		= ltpc_xmit,
 	.ndo_do_ioctl		= ltpc_ioctl,
-	.ndo_set_multicast_list = set_multicast_list,
+	.ndo_set_rx_mode	= set_multicast_list,
 };
 
 struct net_device * __init ltpc_probe(void)

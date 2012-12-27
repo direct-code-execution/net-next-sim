@@ -13,16 +13,37 @@
 
 #include <linux/dma-mapping.h>
 #include <linux/etherdevice.h>
+#include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/serial_8250.h>
-#include <linux/init.h>
+#include <linux/slab.h>
 
-#include <asm/mach-au1x00/au1xxx.h>
+#include <asm/mach-au1x00/au1000.h>
 #include <asm/mach-au1x00/au1xxx_dbdma.h>
 #include <asm/mach-au1x00/au1100_mmc.h>
 #include <asm/mach-au1x00/au1xxx_eth.h>
 
 #include <prom.h>
+
+static void alchemy_8250_pm(struct uart_port *port, unsigned int state,
+			    unsigned int old_state)
+{
+#ifdef CONFIG_SERIAL_8250
+	switch (state) {
+	case 0:
+		alchemy_uart_enable(CPHYSADDR(port->membase));
+		serial8250_do_pm(port, state, old_state);
+		break;
+	case 3:		/* power off */
+		serial8250_do_pm(port, state, old_state);
+		alchemy_uart_disable(CPHYSADDR(port->membase));
+		break;
+	default:
+		serial8250_do_pm(port, state, old_state);
+		break;
+	}
+#endif
+}
 
 #define PORT(_base, _irq)					\
 	{							\
@@ -33,331 +54,218 @@
 		.flags		= UPF_SKIP_TEST | UPF_IOREMAP |	\
 				  UPF_FIXED_TYPE,		\
 		.type		= PORT_16550A,			\
+		.pm		= alchemy_8250_pm,		\
 	}
 
-static struct plat_serial8250_port au1x00_uart_data[] = {
-#if defined(CONFIG_SOC_AU1000)
-	PORT(UART0_PHYS_ADDR, AU1000_UART0_INT),
-	PORT(UART1_PHYS_ADDR, AU1000_UART1_INT),
-	PORT(UART2_PHYS_ADDR, AU1000_UART2_INT),
-	PORT(UART3_PHYS_ADDR, AU1000_UART3_INT),
-#elif defined(CONFIG_SOC_AU1500)
-	PORT(UART0_PHYS_ADDR, AU1500_UART0_INT),
-	PORT(UART3_PHYS_ADDR, AU1500_UART3_INT),
-#elif defined(CONFIG_SOC_AU1100)
-	PORT(UART0_PHYS_ADDR, AU1100_UART0_INT),
-	PORT(UART1_PHYS_ADDR, AU1100_UART1_INT),
-	PORT(UART3_PHYS_ADDR, AU1100_UART3_INT),
-#elif defined(CONFIG_SOC_AU1550)
-	PORT(UART0_PHYS_ADDR, AU1550_UART0_INT),
-	PORT(UART1_PHYS_ADDR, AU1550_UART1_INT),
-	PORT(UART3_PHYS_ADDR, AU1550_UART3_INT),
-#elif defined(CONFIG_SOC_AU1200)
-	PORT(UART0_PHYS_ADDR, AU1200_UART0_INT),
-	PORT(UART1_PHYS_ADDR, AU1200_UART1_INT),
-#endif
-	{ },
+static struct plat_serial8250_port au1x00_uart_data[][4] __initdata = {
+	[ALCHEMY_CPU_AU1000] = {
+		PORT(AU1000_UART0_PHYS_ADDR, AU1000_UART0_INT),
+		PORT(AU1000_UART1_PHYS_ADDR, AU1000_UART1_INT),
+		PORT(AU1000_UART2_PHYS_ADDR, AU1000_UART2_INT),
+		PORT(AU1000_UART3_PHYS_ADDR, AU1000_UART3_INT),
+	},
+	[ALCHEMY_CPU_AU1500] = {
+		PORT(AU1000_UART0_PHYS_ADDR, AU1500_UART0_INT),
+		PORT(AU1000_UART3_PHYS_ADDR, AU1500_UART3_INT),
+	},
+	[ALCHEMY_CPU_AU1100] = {
+		PORT(AU1000_UART0_PHYS_ADDR, AU1100_UART0_INT),
+		PORT(AU1000_UART1_PHYS_ADDR, AU1100_UART1_INT),
+		PORT(AU1000_UART3_PHYS_ADDR, AU1100_UART3_INT),
+	},
+	[ALCHEMY_CPU_AU1550] = {
+		PORT(AU1000_UART0_PHYS_ADDR, AU1550_UART0_INT),
+		PORT(AU1000_UART1_PHYS_ADDR, AU1550_UART1_INT),
+		PORT(AU1000_UART3_PHYS_ADDR, AU1550_UART3_INT),
+	},
+	[ALCHEMY_CPU_AU1200] = {
+		PORT(AU1000_UART0_PHYS_ADDR, AU1200_UART0_INT),
+		PORT(AU1000_UART1_PHYS_ADDR, AU1200_UART1_INT),
+	},
+	[ALCHEMY_CPU_AU1300] = {
+		PORT(AU1300_UART0_PHYS_ADDR, AU1300_UART0_INT),
+		PORT(AU1300_UART1_PHYS_ADDR, AU1300_UART1_INT),
+		PORT(AU1300_UART2_PHYS_ADDR, AU1300_UART2_INT),
+		PORT(AU1300_UART3_PHYS_ADDR, AU1300_UART3_INT),
+	},
 };
 
 static struct platform_device au1xx0_uart_device = {
 	.name			= "serial8250",
 	.id			= PLAT8250_DEV_AU1X00,
-	.dev			= {
-		.platform_data	= au1x00_uart_data,
-	},
 };
 
-/* OHCI (USB full speed host controller) */
-static struct resource au1xxx_usb_ohci_resources[] = {
-	[0] = {
-		.start		= USB_OHCI_BASE,
-		.end		= USB_OHCI_BASE + USB_OHCI_LEN - 1,
-		.flags		= IORESOURCE_MEM,
-	},
-	[1] = {
-		.start		= FOR_PLATFORM_C_USB_HOST_INT,
-		.end		= FOR_PLATFORM_C_USB_HOST_INT,
-		.flags		= IORESOURCE_IRQ,
-	},
-};
+static void __init alchemy_setup_uarts(int ctype)
+{
+	unsigned int uartclk = get_au1x00_uart_baud_base() * 16;
+	int s = sizeof(struct plat_serial8250_port);
+	int c = alchemy_get_uarts(ctype);
+	struct plat_serial8250_port *ports;
 
-/* The dmamask must be set for OHCI to work */
-static u64 ohci_dmamask = DMA_BIT_MASK(32);
-
-static struct platform_device au1xxx_usb_ohci_device = {
-	.name		= "au1xxx-ohci",
-	.id		= 0,
-	.dev = {
-		.dma_mask		= &ohci_dmamask,
-		.coherent_dma_mask	= DMA_BIT_MASK(32),
-	},
-	.num_resources	= ARRAY_SIZE(au1xxx_usb_ohci_resources),
-	.resource	= au1xxx_usb_ohci_resources,
-};
-
-/*** AU1100 LCD controller ***/
-
-#ifdef CONFIG_FB_AU1100
-static struct resource au1100_lcd_resources[] = {
-	[0] = {
-		.start          = LCD_PHYS_ADDR,
-		.end            = LCD_PHYS_ADDR + 0x800 - 1,
-		.flags          = IORESOURCE_MEM,
-	},
-	[1] = {
-		.start          = AU1100_LCD_INT,
-		.end            = AU1100_LCD_INT,
-		.flags          = IORESOURCE_IRQ,
+	ports = kzalloc(s * (c + 1), GFP_KERNEL);
+	if (!ports) {
+		printk(KERN_INFO "Alchemy: no memory for UART data\n");
+		return;
 	}
+	memcpy(ports, au1x00_uart_data[ctype], s * c);
+	au1xx0_uart_device.dev.platform_data = ports;
+
+	/* Fill up uartclk. */
+	for (s = 0; s < c; s++)
+		ports[s].uartclk = uartclk;
+	if (platform_device_register(&au1xx0_uart_device))
+		printk(KERN_INFO "Alchemy: failed to register UARTs\n");
+}
+
+
+/* The dmamask must be set for OHCI/EHCI to work */
+static u64 alchemy_ohci_dmamask = DMA_BIT_MASK(32);
+static u64 __maybe_unused alchemy_ehci_dmamask = DMA_BIT_MASK(32);
+
+static unsigned long alchemy_ohci_data[][2] __initdata = {
+	[ALCHEMY_CPU_AU1000] = { AU1000_USB_OHCI_PHYS_ADDR, AU1000_USB_HOST_INT },
+	[ALCHEMY_CPU_AU1500] = { AU1000_USB_OHCI_PHYS_ADDR, AU1500_USB_HOST_INT },
+	[ALCHEMY_CPU_AU1100] = { AU1000_USB_OHCI_PHYS_ADDR, AU1100_USB_HOST_INT },
+	[ALCHEMY_CPU_AU1550] = { AU1550_USB_OHCI_PHYS_ADDR, AU1550_USB_HOST_INT },
+	[ALCHEMY_CPU_AU1200] = { AU1200_USB_OHCI_PHYS_ADDR, AU1200_USB_INT },
+	[ALCHEMY_CPU_AU1300] = { AU1300_USB_OHCI0_PHYS_ADDR, AU1300_USB_INT },
 };
 
-static u64 au1100_lcd_dmamask = DMA_BIT_MASK(32);
-
-static struct platform_device au1100_lcd_device = {
-	.name           = "au1100-lcd",
-	.id             = 0,
-	.dev = {
-		.dma_mask               = &au1100_lcd_dmamask,
-		.coherent_dma_mask      = DMA_BIT_MASK(32),
-	},
-	.num_resources  = ARRAY_SIZE(au1100_lcd_resources),
-	.resource       = au1100_lcd_resources,
-};
-#endif
-
-#ifdef CONFIG_SOC_AU1200
-/* EHCI (USB high speed host controller) */
-static struct resource au1xxx_usb_ehci_resources[] = {
-	[0] = {
-		.start		= USB_EHCI_BASE,
-		.end		= USB_EHCI_BASE + USB_EHCI_LEN - 1,
-		.flags		= IORESOURCE_MEM,
-	},
-	[1] = {
-		.start		= AU1200_USB_INT,
-		.end		= AU1200_USB_INT,
-		.flags		= IORESOURCE_IRQ,
-	},
+static unsigned long alchemy_ehci_data[][2] __initdata = {
+	[ALCHEMY_CPU_AU1200] = { AU1200_USB_EHCI_PHYS_ADDR, AU1200_USB_INT },
+	[ALCHEMY_CPU_AU1300] = { AU1300_USB_EHCI_PHYS_ADDR, AU1300_USB_INT },
 };
 
-static u64 ehci_dmamask = DMA_BIT_MASK(32);
-
-static struct platform_device au1xxx_usb_ehci_device = {
-	.name		= "au1xxx-ehci",
-	.id		= 0,
-	.dev = {
-		.dma_mask		= &ehci_dmamask,
-		.coherent_dma_mask	= DMA_BIT_MASK(32),
-	},
-	.num_resources	= ARRAY_SIZE(au1xxx_usb_ehci_resources),
-	.resource	= au1xxx_usb_ehci_resources,
-};
-
-/* Au1200 UDC (USB gadget controller) */
-static struct resource au1xxx_usb_gdt_resources[] = {
-	[0] = {
-		.start		= USB_UDC_BASE,
-		.end		= USB_UDC_BASE + USB_UDC_LEN - 1,
-		.flags		= IORESOURCE_MEM,
-	},
-	[1] = {
-		.start		= AU1200_USB_INT,
-		.end		= AU1200_USB_INT,
-		.flags		= IORESOURCE_IRQ,
-	},
-};
-
-static u64 udc_dmamask = DMA_BIT_MASK(32);
-
-static struct platform_device au1xxx_usb_gdt_device = {
-	.name		= "au1xxx-udc",
-	.id		= 0,
-	.dev = {
-		.dma_mask		= &udc_dmamask,
-		.coherent_dma_mask	= DMA_BIT_MASK(32),
-	},
-	.num_resources	= ARRAY_SIZE(au1xxx_usb_gdt_resources),
-	.resource	= au1xxx_usb_gdt_resources,
-};
-
-/* Au1200 UOC (USB OTG controller) */
-static struct resource au1xxx_usb_otg_resources[] = {
-	[0] = {
-		.start		= USB_UOC_BASE,
-		.end		= USB_UOC_BASE + USB_UOC_LEN - 1,
-		.flags		= IORESOURCE_MEM,
-	},
-	[1] = {
-		.start		= AU1200_USB_INT,
-		.end		= AU1200_USB_INT,
-		.flags		= IORESOURCE_IRQ,
-	},
-};
-
-static u64 uoc_dmamask = DMA_BIT_MASK(32);
-
-static struct platform_device au1xxx_usb_otg_device = {
-	.name		= "au1xxx-uoc",
-	.id		= 0,
-	.dev = {
-		.dma_mask		= &uoc_dmamask,
-		.coherent_dma_mask	= DMA_BIT_MASK(32),
-	},
-	.num_resources	= ARRAY_SIZE(au1xxx_usb_otg_resources),
-	.resource	= au1xxx_usb_otg_resources,
-};
-
-static struct resource au1200_lcd_resources[] = {
-	[0] = {
-		.start          = LCD_PHYS_ADDR,
-		.end            = LCD_PHYS_ADDR + 0x800 - 1,
-		.flags          = IORESOURCE_MEM,
-	},
-	[1] = {
-		.start          = AU1200_LCD_INT,
-		.end            = AU1200_LCD_INT,
-		.flags          = IORESOURCE_IRQ,
+static int __init _new_usbres(struct resource **r, struct platform_device **d)
+{
+	*r = kzalloc(sizeof(struct resource) * 2, GFP_KERNEL);
+	if (!*r)
+		return -ENOMEM;
+	*d = kzalloc(sizeof(struct platform_device), GFP_KERNEL);
+	if (!*d) {
+		kfree(*r);
+		return -ENOMEM;
 	}
-};
 
-static u64 au1200_lcd_dmamask = DMA_BIT_MASK(32);
+	(*d)->dev.coherent_dma_mask = DMA_BIT_MASK(32);
+	(*d)->num_resources = 2;
+	(*d)->resource = *r;
 
-static struct platform_device au1200_lcd_device = {
-	.name           = "au1200-lcd",
-	.id             = 0,
-	.dev = {
-		.dma_mask               = &au1200_lcd_dmamask,
-		.coherent_dma_mask      = DMA_BIT_MASK(32),
-	},
-	.num_resources  = ARRAY_SIZE(au1200_lcd_resources),
-	.resource       = au1200_lcd_resources,
-};
+	return 0;
+}
 
-static u64 au1xxx_mmc_dmamask =  DMA_BIT_MASK(32);
+static void __init alchemy_setup_usb(int ctype)
+{
+	struct resource *res;
+	struct platform_device *pdev;
 
-extern struct au1xmmc_platform_data au1xmmc_platdata[2];
+	/* setup OHCI0.  Every variant has one */
+	if (_new_usbres(&res, &pdev))
+		return;
 
-static struct resource au1200_mmc0_resources[] = {
-	[0] = {
-		.start          = SD0_PHYS_ADDR,
-		.end            = SD0_PHYS_ADDR + 0x7ffff,
-		.flags          = IORESOURCE_MEM,
-	},
-	[1] = {
-		.start		= AU1200_SD_INT,
-		.end		= AU1200_SD_INT,
-		.flags		= IORESOURCE_IRQ,
-	},
-	[2] = {
-		.start		= DSCR_CMD0_SDMS_TX0,
-		.end		= DSCR_CMD0_SDMS_TX0,
-		.flags		= IORESOURCE_DMA,
-	},
-	[3] = {
-		.start          = DSCR_CMD0_SDMS_RX0,
-		.end		= DSCR_CMD0_SDMS_RX0,
-		.flags          = IORESOURCE_DMA,
+	res[0].start = alchemy_ohci_data[ctype][0];
+	res[0].end = res[0].start + 0x100 - 1;
+	res[0].flags = IORESOURCE_MEM;
+	res[1].start = alchemy_ohci_data[ctype][1];
+	res[1].end = res[1].start;
+	res[1].flags = IORESOURCE_IRQ;
+	pdev->name = "au1xxx-ohci";
+	pdev->id = 0;
+	pdev->dev.dma_mask = &alchemy_ohci_dmamask;
+
+	if (platform_device_register(pdev))
+		printk(KERN_INFO "Alchemy USB: cannot add OHCI0\n");
+
+
+	/* setup EHCI0: Au1200/Au1300 */
+	if ((ctype == ALCHEMY_CPU_AU1200) || (ctype == ALCHEMY_CPU_AU1300)) {
+		if (_new_usbres(&res, &pdev))
+			return;
+
+		res[0].start = alchemy_ehci_data[ctype][0];
+		res[0].end = res[0].start + 0x100 - 1;
+		res[0].flags = IORESOURCE_MEM;
+		res[1].start = alchemy_ehci_data[ctype][1];
+		res[1].end = res[1].start;
+		res[1].flags = IORESOURCE_IRQ;
+		pdev->name = "au1xxx-ehci";
+		pdev->id = 0;
+		pdev->dev.dma_mask = &alchemy_ehci_dmamask;
+
+		if (platform_device_register(pdev))
+			printk(KERN_INFO "Alchemy USB: cannot add EHCI0\n");
 	}
-};
 
-static struct platform_device au1200_mmc0_device = {
-	.name = "au1xxx-mmc",
-	.id = 0,
-	.dev = {
-		.dma_mask		= &au1xxx_mmc_dmamask,
-		.coherent_dma_mask	= DMA_BIT_MASK(32),
-		.platform_data		= &au1xmmc_platdata[0],
-	},
-	.num_resources	= ARRAY_SIZE(au1200_mmc0_resources),
-	.resource	= au1200_mmc0_resources,
-};
+	/* Au1300: OHCI1 */
+	if (ctype == ALCHEMY_CPU_AU1300) {
+		if (_new_usbres(&res, &pdev))
+			return;
 
-#ifndef CONFIG_MIPS_DB1200
-static struct resource au1200_mmc1_resources[] = {
-	[0] = {
-		.start          = SD1_PHYS_ADDR,
-		.end            = SD1_PHYS_ADDR + 0x7ffff,
-		.flags          = IORESOURCE_MEM,
-	},
-	[1] = {
-		.start		= AU1200_SD_INT,
-		.end		= AU1200_SD_INT,
-		.flags		= IORESOURCE_IRQ,
-	},
-	[2] = {
-		.start		= DSCR_CMD0_SDMS_TX1,
-		.end		= DSCR_CMD0_SDMS_TX1,
-		.flags		= IORESOURCE_DMA,
-	},
-	[3] = {
-		.start          = DSCR_CMD0_SDMS_RX1,
-		.end		= DSCR_CMD0_SDMS_RX1,
-		.flags          = IORESOURCE_DMA,
+		res[0].start = AU1300_USB_OHCI1_PHYS_ADDR;
+		res[0].end = res[0].start + 0x100 - 1;
+		res[0].flags = IORESOURCE_MEM;
+		res[1].start = AU1300_USB_INT;
+		res[1].end = res[1].start;
+		res[1].flags = IORESOURCE_IRQ;
+		pdev->name = "au1xxx-ohci";
+		pdev->id = 1;
+		pdev->dev.dma_mask = &alchemy_ohci_dmamask;
+
+		if (platform_device_register(pdev))
+			printk(KERN_INFO "Alchemy USB: cannot add OHCI1\n");
 	}
-};
-
-static struct platform_device au1200_mmc1_device = {
-	.name = "au1xxx-mmc",
-	.id = 1,
-	.dev = {
-		.dma_mask		= &au1xxx_mmc_dmamask,
-		.coherent_dma_mask	= DMA_BIT_MASK(32),
-		.platform_data		= &au1xmmc_platdata[1],
-	},
-	.num_resources	= ARRAY_SIZE(au1200_mmc1_resources),
-	.resource	= au1200_mmc1_resources,
-};
-#endif /* #ifndef CONFIG_MIPS_DB1200 */
-#endif /* #ifdef CONFIG_SOC_AU1200 */
-
-/* All Alchemy demoboards with I2C have this #define in their headers */
-#ifdef SMBUS_PSC_BASE
-static struct resource pbdb_smbus_resources[] = {
-	{
-		.start	= CPHYSADDR(SMBUS_PSC_BASE),
-		.end	= CPHYSADDR(SMBUS_PSC_BASE + 0xfffff),
-		.flags	= IORESOURCE_MEM,
-	},
-};
-
-static struct platform_device pbdb_smbus_device = {
-	.name		= "au1xpsc_smbus",
-	.id		= 0,	/* bus number */
-	.num_resources	= ARRAY_SIZE(pbdb_smbus_resources),
-	.resource	= pbdb_smbus_resources,
-};
-#endif
+}
 
 /* Macro to help defining the Ethernet MAC resources */
-#define MAC_RES(_base, _enable, _irq)			\
+#define MAC_RES_COUNT	4	/* MAC regs, MAC en, MAC INT, MACDMA regs */
+#define MAC_RES(_base, _enable, _irq, _macdma)		\
 	{						\
-		.start	= CPHYSADDR(_base),		\
-		.end	= CPHYSADDR(_base + 0xffff),	\
+		.start	= _base,			\
+		.end	= _base + 0xffff,		\
 		.flags	= IORESOURCE_MEM,		\
 	},						\
 	{						\
-		.start	= CPHYSADDR(_enable),		\
-		.end	= CPHYSADDR(_enable + 0x3),	\
+		.start	= _enable,			\
+		.end	= _enable + 0x3,		\
 		.flags	= IORESOURCE_MEM,		\
 	},						\
 	{						\
 		.start	= _irq,				\
 		.end	= _irq,				\
 		.flags	= IORESOURCE_IRQ		\
+	},						\
+	{						\
+		.start	= _macdma,			\
+		.end	= _macdma + 0x1ff,		\
+		.flags	= IORESOURCE_MEM,		\
 	}
 
-static struct resource au1xxx_eth0_resources[] = {
-#if defined(CONFIG_SOC_AU1000)
-	MAC_RES(AU1000_ETH0_BASE, AU1000_MAC0_ENABLE, AU1000_MAC0_DMA_INT),
-#elif defined(CONFIG_SOC_AU1100)
-	MAC_RES(AU1100_ETH0_BASE, AU1100_MAC0_ENABLE, AU1100_MAC0_DMA_INT),
-#elif defined(CONFIG_SOC_AU1550)
-	MAC_RES(AU1550_ETH0_BASE, AU1550_MAC0_ENABLE, AU1550_MAC0_DMA_INT),
-#elif defined(CONFIG_SOC_AU1500)
-	MAC_RES(AU1500_ETH0_BASE, AU1500_MAC0_ENABLE, AU1500_MAC0_DMA_INT),
-#endif
+static struct resource au1xxx_eth0_resources[][MAC_RES_COUNT] __initdata = {
+	[ALCHEMY_CPU_AU1000] = {
+		MAC_RES(AU1000_MAC0_PHYS_ADDR,
+			AU1000_MACEN_PHYS_ADDR,
+			AU1000_MAC0_DMA_INT,
+			AU1000_MACDMA0_PHYS_ADDR)
+	},
+	[ALCHEMY_CPU_AU1500] = {
+		MAC_RES(AU1500_MAC0_PHYS_ADDR,
+			AU1500_MACEN_PHYS_ADDR,
+			AU1500_MAC0_DMA_INT,
+			AU1000_MACDMA0_PHYS_ADDR)
+	},
+	[ALCHEMY_CPU_AU1100] = {
+		MAC_RES(AU1000_MAC0_PHYS_ADDR,
+			AU1000_MACEN_PHYS_ADDR,
+			AU1100_MAC0_DMA_INT,
+			AU1000_MACDMA0_PHYS_ADDR)
+	},
+	[ALCHEMY_CPU_AU1550] = {
+		MAC_RES(AU1000_MAC0_PHYS_ADDR,
+			AU1000_MACEN_PHYS_ADDR,
+			AU1550_MAC0_DMA_INT,
+			AU1000_MACDMA0_PHYS_ADDR)
+	},
 };
-
 
 static struct au1000_eth_platform_data au1xxx_eth0_platform_data = {
 	.phy1_search_mac0 = 1,
@@ -366,20 +274,29 @@ static struct au1000_eth_platform_data au1xxx_eth0_platform_data = {
 static struct platform_device au1xxx_eth0_device = {
 	.name		= "au1000-eth",
 	.id		= 0,
-	.num_resources	= ARRAY_SIZE(au1xxx_eth0_resources),
-	.resource	= au1xxx_eth0_resources,
+	.num_resources	= MAC_RES_COUNT,
 	.dev.platform_data = &au1xxx_eth0_platform_data,
 };
 
-#ifndef CONFIG_SOC_AU1100
-static struct resource au1xxx_eth1_resources[] = {
-#if defined(CONFIG_SOC_AU1000)
-	MAC_RES(AU1000_ETH1_BASE, AU1000_MAC1_ENABLE, AU1000_MAC1_DMA_INT),
-#elif defined(CONFIG_SOC_AU1550)
-	MAC_RES(AU1550_ETH1_BASE, AU1550_MAC1_ENABLE, AU1550_MAC1_DMA_INT),
-#elif defined(CONFIG_SOC_AU1500)
-	MAC_RES(AU1500_ETH1_BASE, AU1500_MAC1_ENABLE, AU1500_MAC1_DMA_INT),
-#endif
+static struct resource au1xxx_eth1_resources[][MAC_RES_COUNT] __initdata = {
+	[ALCHEMY_CPU_AU1000] = {
+		MAC_RES(AU1000_MAC1_PHYS_ADDR,
+			AU1000_MACEN_PHYS_ADDR + 4,
+			AU1000_MAC1_DMA_INT,
+			AU1000_MACDMA1_PHYS_ADDR)
+	},
+	[ALCHEMY_CPU_AU1500] = {
+		MAC_RES(AU1500_MAC1_PHYS_ADDR,
+			AU1500_MACEN_PHYS_ADDR + 4,
+			AU1500_MAC1_DMA_INT,
+			AU1000_MACDMA1_PHYS_ADDR)
+	},
+	[ALCHEMY_CPU_AU1550] = {
+		MAC_RES(AU1000_MAC1_PHYS_ADDR,
+			AU1000_MACEN_PHYS_ADDR + 4,
+			AU1550_MAC1_DMA_INT,
+			AU1000_MACDMA1_PHYS_ADDR)
+	},
 };
 
 static struct au1000_eth_platform_data au1xxx_eth1_platform_data = {
@@ -389,11 +306,9 @@ static struct au1000_eth_platform_data au1xxx_eth1_platform_data = {
 static struct platform_device au1xxx_eth1_device = {
 	.name		= "au1000-eth",
 	.id		= 1,
-	.num_resources	= ARRAY_SIZE(au1xxx_eth1_resources),
-	.resource	= au1xxx_eth1_resources,
+	.num_resources	= MAC_RES_COUNT,
 	.dev.platform_data = &au1xxx_eth1_platform_data,
 };
-#endif
 
 void __init au1xxx_override_eth_cfg(unsigned int port,
 			struct au1000_eth_platform_data *eth_data)
@@ -404,63 +319,73 @@ void __init au1xxx_override_eth_cfg(unsigned int port,
 	if (port == 0)
 		memcpy(&au1xxx_eth0_platform_data, eth_data,
 			sizeof(struct au1000_eth_platform_data));
-#ifndef CONFIG_SOC_AU1100
 	else
 		memcpy(&au1xxx_eth1_platform_data, eth_data,
 			sizeof(struct au1000_eth_platform_data));
-#endif
 }
 
-static struct platform_device *au1xxx_platform_devices[] __initdata = {
-	&au1xx0_uart_device,
-	&au1xxx_usb_ohci_device,
-#ifdef CONFIG_FB_AU1100
-	&au1100_lcd_device,
-#endif
-#ifdef CONFIG_SOC_AU1200
-	&au1xxx_usb_ehci_device,
-	&au1xxx_usb_gdt_device,
-	&au1xxx_usb_otg_device,
-	&au1200_lcd_device,
-	&au1200_mmc0_device,
-#ifndef CONFIG_MIPS_DB1200
-	&au1200_mmc1_device,
-#endif
-#endif
-#ifdef SMBUS_PSC_BASE
-	&pbdb_smbus_device,
-#endif
-	&au1xxx_eth0_device,
-};
-
-static int __init au1xxx_platform_init(void)
+static void __init alchemy_setup_macs(int ctype)
 {
-	unsigned int uartclk = get_au1x00_uart_baud_base() * 16;
-	int err, i;
+	int ret, i;
 	unsigned char ethaddr[6];
+	struct resource *macres;
 
-	/* Fill up uartclk. */
-	for (i = 0; au1x00_uart_data[i].flags; i++)
-		au1x00_uart_data[i].uartclk = uartclk;
+	/* Handle 1st MAC */
+	if (alchemy_get_macs(ctype) < 1)
+		return;
 
-	/* use firmware-provided mac addr if available and necessary */
+	macres = kmalloc(sizeof(struct resource) * MAC_RES_COUNT, GFP_KERNEL);
+	if (!macres) {
+		printk(KERN_INFO "Alchemy: no memory for MAC0 resources\n");
+		return;
+	}
+	memcpy(macres, au1xxx_eth0_resources[ctype],
+	       sizeof(struct resource) * MAC_RES_COUNT);
+	au1xxx_eth0_device.resource = macres;
+
 	i = prom_get_ethernet_addr(ethaddr);
 	if (!i && !is_valid_ether_addr(au1xxx_eth0_platform_data.mac))
 		memcpy(au1xxx_eth0_platform_data.mac, ethaddr, 6);
 
-	err = platform_add_devices(au1xxx_platform_devices,
-				   ARRAY_SIZE(au1xxx_platform_devices));
-#ifndef CONFIG_SOC_AU1100
+	ret = platform_device_register(&au1xxx_eth0_device);
+	if (ret)
+		printk(KERN_INFO "Alchemy: failed to register MAC0\n");
+
+
+	/* Handle 2nd MAC */
+	if (alchemy_get_macs(ctype) < 2)
+		return;
+
+	macres = kmalloc(sizeof(struct resource) * MAC_RES_COUNT, GFP_KERNEL);
+	if (!macres) {
+		printk(KERN_INFO "Alchemy: no memory for MAC1 resources\n");
+		return;
+	}
+	memcpy(macres, au1xxx_eth1_resources[ctype],
+	       sizeof(struct resource) * MAC_RES_COUNT);
+	au1xxx_eth1_device.resource = macres;
+
 	ethaddr[5] += 1;	/* next addr for 2nd MAC */
 	if (!i && !is_valid_ether_addr(au1xxx_eth1_platform_data.mac))
 		memcpy(au1xxx_eth1_platform_data.mac, ethaddr, 6);
 
 	/* Register second MAC if enabled in pinfunc */
-	if (!err && !(au_readl(SYS_PINFUNC) & (u32)SYS_PF_NI2))
-		err = platform_device_register(&au1xxx_eth1_device);
-#endif
+	if (!(au_readl(SYS_PINFUNC) & (u32)SYS_PF_NI2)) {
+		ret = platform_device_register(&au1xxx_eth1_device);
+		if (ret)
+			printk(KERN_INFO "Alchemy: failed to register MAC1\n");
+	}
+}
 
-	return err;
+static int __init au1xxx_platform_init(void)
+{
+	int ctype = alchemy_get_cputype();
+
+	alchemy_setup_uarts(ctype);
+	alchemy_setup_macs(ctype);
+	alchemy_setup_usb(ctype);
+
+	return 0;
 }
 
 arch_initcall(au1xxx_platform_init);

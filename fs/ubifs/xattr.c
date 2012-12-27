@@ -56,6 +56,7 @@
  */
 
 #include "ubifs.h"
+#include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/xattr.h>
 #include <linux/posix_acl_xattr.h>
@@ -79,9 +80,8 @@ enum {
 	SECURITY_XATTR,
 };
 
-static const struct inode_operations none_inode_operations;
-static const struct address_space_operations none_address_operations;
-static const struct file_operations none_file_operations;
+static const struct inode_operations empty_iops;
+static const struct file_operations empty_fops;
 
 /**
  * create_xattr - create an extended attribute.
@@ -130,20 +130,19 @@ static int create_xattr(struct ubifs_info *c, struct inode *host,
 	}
 
 	/* Re-define all operations to be "nothing" */
-	inode->i_mapping->a_ops = &none_address_operations;
-	inode->i_op = &none_inode_operations;
-	inode->i_fop = &none_file_operations;
+	inode->i_mapping->a_ops = &empty_aops;
+	inode->i_op = &empty_iops;
+	inode->i_fop = &empty_fops;
 
 	inode->i_flags |= S_SYNC | S_NOATIME | S_NOCMTIME | S_NOQUOTA;
 	ui = ubifs_inode(inode);
 	ui->xattr = 1;
 	ui->flags |= UBIFS_XATTR_FL;
-	ui->data = kmalloc(size, GFP_NOFS);
+	ui->data = kmemdup(value, size, GFP_NOFS);
 	if (!ui->data) {
 		err = -ENOMEM;
 		goto out_free;
 	}
-	memcpy(ui->data, value, size);
 	inode->i_size = ui->ui_size = size;
 	ui->data_len = size;
 
@@ -204,12 +203,11 @@ static int change_xattr(struct ubifs_info *c, struct inode *host,
 		return err;
 
 	kfree(ui->data);
-	ui->data = kmalloc(size, GFP_NOFS);
+	ui->data = kmemdup(value, size, GFP_NOFS);
 	if (!ui->data) {
 		err = -ENOMEM;
 		goto out_free;
 	}
-	memcpy(ui->data, value, size);
 	inode->i_size = ui->ui_size = size;
 	ui->data_len = size;
 
@@ -558,10 +556,10 @@ int ubifs_removexattr(struct dentry *dentry, const char *name)
 	}
 
 	ubifs_assert(inode->i_nlink == 1);
-	inode->i_nlink = 0;
+	clear_nlink(inode);
 	err = remove_xattr(c, host, inode, &nm);
 	if (err)
-		inode->i_nlink = 1;
+		set_nlink(inode, 1);
 
 	/* If @i_nlink is 0, 'iput()' will delete the inode */
 	iput(inode);

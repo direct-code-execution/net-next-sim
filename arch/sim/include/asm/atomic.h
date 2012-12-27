@@ -11,17 +11,25 @@ typedef struct {
 
 #define ATOMIC64_INIT(i) { (i) }
 
-long atomic64_read(const atomic64_t *v);
+#define atomic64_read(v)	(*(volatile long *)&(v)->counter)
 void atomic64_set(atomic64_t *v, long i);
 void atomic64_add(long i, atomic64_t *v);
-void atomic64_sub(long i, atomic64_t *v);
+static inline void atomic64_sub(long i, atomic64_t *v)
+{
+	v->counter -= i;
+}
 int atomic64_sub_and_test(long i, atomic64_t *v);
 void atomic64_inc(atomic64_t *v);
 void atomic64_dec(atomic64_t *v);
 int atomic64_dec_and_test(atomic64_t *v);
 int atomic64_inc_and_test(atomic64_t *v);
 int atomic64_add_negative(long i, atomic64_t *v);
-long atomic64_add_return(long i, atomic64_t *v);
+//long atomic64_add_return(long i, atomic64_t *v);
+static inline long atomic64_add_return(long i, atomic64_t *v)
+ {
+	v->counter += i;
+    return    v->counter;
+ }
 long atomic64_sub_return(long i, atomic64_t *v);
 long atomic64_inc_return(atomic64_t *v);
 long atomic64_dec_return(atomic64_t *v);

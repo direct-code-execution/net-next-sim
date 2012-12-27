@@ -26,7 +26,6 @@
 #include <linux/highuid.h>
 #include <linux/pagemap.h>
 #include <linux/quotaops.h>
-#include <linux/module.h>
 #include <linux/writeback.h>
 #include <linux/buffer_head.h>
 #include <linux/mpage.h>
@@ -35,10 +34,6 @@
 #include "ext2.h"
 #include "acl.h"
 #include "xip.h"
-
-MODULE_AUTHOR("Remy Card and others");
-MODULE_DESCRIPTION("Second Extended Filesystem");
-MODULE_LICENSE("GPL");
 
 static int __ext2_write_inode(struct inode *inode, int do_sync);
 
@@ -305,7 +300,7 @@ static ext2_fsblk_t ext2_find_near(struct inode *inode, Indirect *ind)
 		return ind->bh->b_blocknr;
 
 	/*
-	 * It is going to be refered from inode itself? OK, just put it into
+	 * It is going to be referred from inode itself? OK, just put it into
 	 * the same cylinder group then.
 	 */
 	bg_start = ext2_group_first_block_no(inode->i_sb, ei->i_block_group);
@@ -458,7 +453,7 @@ failed_out:
  *	the same format as ext2_get_branch() would do. We are calling it after
  *	we had read the existing part of chain and partial points to the last
  *	triple of that (one with zero ->key). Upon the exit we have the same
- *	picture as after the successful ext2_get_block(), excpet that in one
+ *	picture as after the successful ext2_get_block(), except that in one
  *	place chain is disconnected - *branch->p is still zero (we did not
  *	set the last link), but branch->key contains the number that should
  *	be placed into *branch->p to fill that gap.
@@ -662,7 +657,7 @@ static int ext2_get_blocks(struct inode *inode,
 	mutex_lock(&ei->truncate_mutex);
 	/*
 	 * If the indirect block is missing while we are reading
-	 * the chain(ext3_get_branch() returns -EAGAIN err), or
+	 * the chain(ext2_get_branch() returns -EAGAIN err), or
 	 * if the chain has been changed after we grab the semaphore,
 	 * (either because another process truncated this branch, or
 	 * another get_block allocated this branch) re-grab the chain to see if
@@ -843,8 +838,8 @@ ext2_direct_IO(int rw, struct kiocb *iocb, const struct iovec *iov,
 	struct inode *inode = mapping->host;
 	ssize_t ret;
 
-	ret = blockdev_direct_IO(rw, iocb, inode, inode->i_sb->s_bdev,
-				iov, offset, nr_segs, ext2_get_block, NULL);
+	ret = blockdev_direct_IO(rw, iocb, inode, iov, offset, nr_segs,
+				 ext2_get_block);
 	if (ret < 0 && (rw & WRITE))
 		ext2_write_failed(mapping, offset + iov_length(iov, nr_segs));
 	return ret;
@@ -860,7 +855,6 @@ const struct address_space_operations ext2_aops = {
 	.readpage		= ext2_readpage,
 	.readpages		= ext2_readpages,
 	.writepage		= ext2_writepage,
-	.sync_page		= block_sync_page,
 	.write_begin		= ext2_write_begin,
 	.write_end		= ext2_write_end,
 	.bmap			= ext2_bmap,
@@ -880,7 +874,6 @@ const struct address_space_operations ext2_nobh_aops = {
 	.readpage		= ext2_readpage,
 	.readpages		= ext2_readpages,
 	.writepage		= ext2_nobh_writepage,
-	.sync_page		= block_sync_page,
 	.write_begin		= ext2_nobh_write_begin,
 	.write_end		= nobh_write_end,
 	.bmap			= ext2_bmap,
@@ -915,7 +908,7 @@ static inline int all_zeroes(__le32 *p, __le32 *q)
  *
  *	When we do truncate() we may have to clean the ends of several indirect
  *	blocks but leave the blocks themselves alive. Block is partially
- *	truncated if some data below the new i_size is refered from it (and
+ *	truncated if some data below the new i_size is referred from it (and
  *	it is on the path to the first completely truncated data block, indeed).
  *	We have to free the top of that path along with everything to the right
  *	of the path. Since no allocation past the truncation point is possible
@@ -992,7 +985,7 @@ no_top:
  *	@p:	array of block numbers
  *	@q:	points immediately past the end of array
  *
- *	We are freeing all blocks refered from that array (numbers are
+ *	We are freeing all blocks referred from that array (numbers are
  *	stored as little-endian 32-bit) and updating @inode->i_blocks
  *	appropriately.
  */
@@ -1032,7 +1025,7 @@ static inline void ext2_free_data(struct inode *inode, __le32 *p, __le32 *q)
  *	@q:	pointer immediately past the end of array
  *	@depth:	depth of the branches to free
  *
- *	We are freeing all blocks refered from these branches (numbers are
+ *	We are freeing all blocks referred from these branches (numbers are
  *	stored as little-endian 32-bit) and updating @inode->i_blocks
  *	appropriately.
  */
@@ -1186,6 +1179,8 @@ static int ext2_setsize(struct inode *inode, loff_t newsize)
 	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
 		return -EPERM;
 
+	inode_dio_wait(inode);
+
 	if (mapping_is_xip(inode->i_mapping))
 		error = xip_truncate_page(inode->i_mapping, newsize);
 	else if (test_opt(inode->i_sb, NOBH))
@@ -1203,7 +1198,7 @@ static int ext2_setsize(struct inode *inode, loff_t newsize)
 	inode->i_mtime = inode->i_ctime = CURRENT_TIME_SEC;
 	if (inode_needs_sync(inode)) {
 		sync_mapping_buffers(inode->i_mapping);
-		ext2_sync_inode (inode);
+		sync_inode_metadata(inode, 1);
 	} else {
 		mark_inode_dirty(inode);
 	}
@@ -1321,7 +1316,7 @@ struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 		inode->i_uid |= le16_to_cpu(raw_inode->i_uid_high) << 16;
 		inode->i_gid |= le16_to_cpu(raw_inode->i_gid_high) << 16;
 	}
-	inode->i_nlink = le16_to_cpu(raw_inode->i_links_count);
+	set_nlink(inode, le16_to_cpu(raw_inode->i_links_count));
 	inode->i_size = le32_to_cpu(raw_inode->i_size);
 	inode->i_atime.tv_sec = (signed)le32_to_cpu(raw_inode->i_atime);
 	inode->i_ctime.tv_sec = (signed)le32_to_cpu(raw_inode->i_ctime);
@@ -1521,15 +1516,6 @@ static int __ext2_write_inode(struct inode *inode, int do_sync)
 int ext2_write_inode(struct inode *inode, struct writeback_control *wbc)
 {
 	return __ext2_write_inode(inode, wbc->sync_mode == WB_SYNC_ALL);
-}
-
-int ext2_sync_inode(struct inode *inode)
-{
-	struct writeback_control wbc = {
-		.sync_mode = WB_SYNC_ALL,
-		.nr_to_write = 0,	/* sys_fsync did this */
-	};
-	return sync_inode(inode, &wbc);
 }
 
 int ext2_setattr(struct dentry *dentry, struct iattr *iattr)

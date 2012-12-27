@@ -24,6 +24,7 @@ typedef __kernel_fd_set		fd_set;
 typedef __kernel_dev_t		dev_t;
 typedef __kernel_ino_t		ino_t;
 typedef __kernel_mode_t		mode_t;
+typedef unsigned short		umode_t;
 typedef __kernel_nlink_t	nlink_t;
 typedef __kernel_off_t		off_t;
 typedef __kernel_pid_t		pid_t;
@@ -121,15 +122,7 @@ typedef		__u64		u_int64_t;
 typedef		__s64		int64_t;
 #endif
 
-/*
- * aligned_u64 should be used in defining kernel<->userspace ABIs to avoid
- * common 32/64-bit compat problems.
- * 64-bit values align to 4-byte boundaries on x86_32 (and possibly other
- * architectures) and to 8-byte boundaries on 64-bit architetures.  The new
- * aligned_64 type enforces 8-byte alignment so that structs containing
- * aligned_64 values have the same alignment on 32-bit and 64-bit architectures.
- * No conversions are necessary between 32-bit user-space and a 64-bit kernel.
- */
+/* this is a special 64bit data type that is 8-byte aligned */
 #define aligned_u64 __u64 __attribute__((aligned(8)))
 #define aligned_be64 __be64 __attribute__((aligned(8)))
 #define aligned_le64 __le64 __attribute__((aligned(8)))
@@ -157,6 +150,12 @@ typedef unsigned long blkcnt_t;
 #ifndef pgoff_t
 #define pgoff_t unsigned long
 #endif
+
+#ifdef CONFIG_ARCH_DMA_ADDR_T_64BIT
+typedef u64 dma_addr_t;
+#else
+typedef u32 dma_addr_t;
+#endif /* dma_addr_t */
 
 #endif /* __KERNEL__ */
 
@@ -186,7 +185,15 @@ typedef __u64 __bitwise __be64;
 typedef __u16 __bitwise __sum16;
 typedef __u32 __bitwise __wsum;
 
-/* this is a special 64bit data type that is 8-byte aligned */
+/*
+ * aligned_u64 should be used in defining kernel<->userspace ABIs to avoid
+ * common 32/64-bit compat problems.
+ * 64-bit values align to 4-byte boundaries on x86_32 (and possibly other
+ * architectures) and to 8-byte boundaries on 64-bit architectures.  The new
+ * aligned_64 type enforces 8-byte alignment so that structs containing
+ * aligned_64 values have the same alignment on 32-bit and 64-bit architectures.
+ * No conversions are necessary between 32-bit user-space and a 64-bit kernel.
+ */
 #define __aligned_u64 __u64 __attribute__((aligned(8)))
 #define __aligned_be64 __be64 __attribute__((aligned(8)))
 #define __aligned_le64 __le64 __attribute__((aligned(8)))
@@ -202,6 +209,12 @@ typedef u32 phys_addr_t;
 #endif
 
 typedef phys_addr_t resource_size_t;
+
+/*
+ * This type is the placeholder for a hardware interrupt number. It has to be
+ * big enough to enclose whatever representation is used by a given platform.
+ */
+typedef unsigned long irq_hw_number_t;
 
 typedef struct {
 	int counter;
@@ -230,6 +243,16 @@ struct ustat {
 	__kernel_ino_t		f_tinode;
 	char			f_fname[6];
 	char			f_fpack[6];
+};
+
+/**
+ * struct rcu_head - callback structure for use with RCU
+ * @next: next update requests in a list
+ * @func: actual update function to call after the grace period.
+ */
+struct rcu_head {
+	struct rcu_head *next;
+	void (*func)(struct rcu_head *head);
 };
 
 #endif	/* __KERNEL__ */

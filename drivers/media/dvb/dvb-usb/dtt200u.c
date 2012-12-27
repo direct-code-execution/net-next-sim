@@ -57,7 +57,7 @@ static int dtt200u_pid_filter(struct dvb_usb_adapter *adap, int index, u16 pid, 
 
 /* remote control */
 /* key list for the tiny remote control (Yakumo, don't know about the others) */
-static struct ir_scancode ir_codes_dtt200u_table[] = {
+static struct rc_map_table rc_map_dtt200u_table[] = {
 	{ 0x8001, KEY_MUTE },
 	{ 0x8002, KEY_CHANNELDOWN },
 	{ 0x8003, KEY_VOLUMEDOWN },
@@ -90,7 +90,7 @@ static int dtt200u_rc_query(struct dvb_usb_device *d, u32 *event, int *state)
 
 static int dtt200u_frontend_attach(struct dvb_usb_adapter *adap)
 {
-	adap->fe = dtt200u_fe_attach(adap->dev);
+	adap->fe_adap[0].fe = dtt200u_fe_attach(adap->dev);
 	return 0;
 }
 
@@ -140,6 +140,8 @@ static struct dvb_usb_device_properties dtt200u_properties = {
 	.num_adapters = 1,
 	.adapter = {
 		{
+		.num_frontends = 1,
+		.fe = {{
 			.caps = DVB_USB_ADAP_HAS_PID_FILTER | DVB_USB_ADAP_NEED_PID_FILTERING,
 			.pid_filter_count = 15,
 
@@ -157,14 +159,15 @@ static struct dvb_usb_device_properties dtt200u_properties = {
 			}
 		}
 	},
+		}},
 		}
 	},
 	.power_ctrl      = dtt200u_power_ctrl,
 
 	.rc.legacy = {
 		.rc_interval     = 300,
-		.rc_key_map      = ir_codes_dtt200u_table,
-		.rc_key_map_size = ARRAY_SIZE(ir_codes_dtt200u_table),
+		.rc_map_table    = rc_map_dtt200u_table,
+		.rc_map_size     = ARRAY_SIZE(rc_map_dtt200u_table),
 		.rc_query        = dtt200u_rc_query,
 	},
 
@@ -187,6 +190,8 @@ static struct dvb_usb_device_properties wt220u_properties = {
 	.num_adapters = 1,
 	.adapter = {
 		{
+		.num_frontends = 1,
+		.fe = {{
 			.caps = DVB_USB_ADAP_HAS_PID_FILTER | DVB_USB_ADAP_NEED_PID_FILTERING,
 			.pid_filter_count = 15,
 
@@ -204,14 +209,15 @@ static struct dvb_usb_device_properties wt220u_properties = {
 			}
 		}
 	},
+		}},
 		}
 	},
 	.power_ctrl      = dtt200u_power_ctrl,
 
 	.rc.legacy = {
 		.rc_interval     = 300,
-		.rc_key_map      = ir_codes_dtt200u_table,
-		.rc_key_map_size = ARRAY_SIZE(ir_codes_dtt200u_table),
+		.rc_map_table      = rc_map_dtt200u_table,
+		.rc_map_size = ARRAY_SIZE(rc_map_dtt200u_table),
 		.rc_query        = dtt200u_rc_query,
 	},
 
@@ -234,6 +240,8 @@ static struct dvb_usb_device_properties wt220u_fc_properties = {
 	.num_adapters = 1,
 	.adapter = {
 		{
+		.num_frontends = 1,
+		.fe = {{
 			.caps = DVB_USB_ADAP_HAS_PID_FILTER | DVB_USB_ADAP_NEED_PID_FILTERING,
 			.pid_filter_count = 15,
 
@@ -251,14 +259,15 @@ static struct dvb_usb_device_properties wt220u_fc_properties = {
 			}
 		}
 	},
+		}},
 		}
 	},
 	.power_ctrl      = dtt200u_power_ctrl,
 
 	.rc.legacy = {
 		.rc_interval     = 300,
-		.rc_key_map      = ir_codes_dtt200u_table,
-		.rc_key_map_size = ARRAY_SIZE(ir_codes_dtt200u_table),
+		.rc_map_table    = rc_map_dtt200u_table,
+		.rc_map_size     = ARRAY_SIZE(rc_map_dtt200u_table),
 		.rc_query        = dtt200u_rc_query,
 	},
 
@@ -281,6 +290,8 @@ static struct dvb_usb_device_properties wt220u_zl0353_properties = {
 	.num_adapters = 1,
 	.adapter = {
 		{
+		.num_frontends = 1,
+		.fe = {{
 			.caps = DVB_USB_ADAP_HAS_PID_FILTER | DVB_USB_ADAP_NEED_PID_FILTERING,
 			.pid_filter_count = 15,
 
@@ -298,14 +309,15 @@ static struct dvb_usb_device_properties wt220u_zl0353_properties = {
 					}
 				}
 			},
+		}},
 		}
 	},
 	.power_ctrl      = dtt200u_power_ctrl,
 
 	.rc.legacy = {
 		.rc_interval     = 300,
-		.rc_key_map      = ir_codes_dtt200u_table,
-		.rc_key_map_size = ARRAY_SIZE(ir_codes_dtt200u_table),
+		.rc_map_table    = rc_map_dtt200u_table,
+		.rc_map_size     = ARRAY_SIZE(rc_map_dtt200u_table),
 		.rc_query        = dtt200u_rc_query,
 	},
 
@@ -348,26 +360,7 @@ static struct usb_driver dtt200u_usb_driver = {
 	.id_table	= dtt200u_usb_table,
 };
 
-/* module stuff */
-static int __init dtt200u_usb_module_init(void)
-{
-	int result;
-	if ((result = usb_register(&dtt200u_usb_driver))) {
-		err("usb_register failed. (%d)",result);
-		return result;
-	}
-
-	return 0;
-}
-
-static void __exit dtt200u_usb_module_exit(void)
-{
-	/* deregister this driver from the USB subsystem */
-	usb_deregister(&dtt200u_usb_driver);
-}
-
-module_init(dtt200u_usb_module_init);
-module_exit(dtt200u_usb_module_exit);
+module_usb_driver(dtt200u_usb_driver);
 
 MODULE_AUTHOR("Patrick Boettcher <patrick.boettcher@desy.de>");
 MODULE_DESCRIPTION("Driver for the WideView/Yakumo/Hama/Typhoon/Club3D/Miglia DVB-T USB2.0 devices");

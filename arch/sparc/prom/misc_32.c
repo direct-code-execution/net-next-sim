@@ -13,7 +13,6 @@
 #include <asm/openprom.h>
 #include <asm/oplib.h>
 #include <asm/auxio.h>
-#include <asm/system.h>
 
 extern void restore_current(void);
 
@@ -54,15 +53,11 @@ EXPORT_SYMBOL(prom_feval);
 void
 prom_cmdline(void)
 {
-	extern void install_obp_ticker(void);
-	extern void install_linux_ticker(void);
 	unsigned long flags;
 
 	spin_lock_irqsave(&prom_lock, flags);
-	install_obp_ticker();
 	(*(romvec->pv_abort))();
 	restore_current();
-	install_linux_ticker();
 	spin_unlock_irqrestore(&prom_lock, flags);
 	set_auxio(AUXIO_LED, 0);
 }
@@ -70,7 +65,7 @@ prom_cmdline(void)
 /* Drop into the prom, but completely terminate the program.
  * No chance of continuing.
  */
-void
+void __noreturn
 prom_halt(void)
 {
 	unsigned long flags;

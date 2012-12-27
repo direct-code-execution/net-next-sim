@@ -152,9 +152,7 @@ struct xfs_btree_ops {
 
 	/* update btree root pointer */
 	void	(*set_root)(struct xfs_btree_cur *cur,
-				union xfs_btree_ptr *nptr, int level_change);
-	int	(*kill_root)(struct xfs_btree_cur *cur, struct xfs_buf *bp,
-				int level, union xfs_btree_ptr *newroot);
+			    union xfs_btree_ptr *nptr, int level_change);
 
 	/* block allocation / freeing */
 	int	(*alloc_block)(struct xfs_btree_cur *cur,
@@ -200,25 +198,6 @@ struct xfs_btree_ops {
 	int	(*recs_inorder)(struct xfs_btree_cur *cur,
 				union xfs_btree_rec *r1,
 				union xfs_btree_rec *r2);
-#endif
-
-	/* btree tracing */
-#ifdef XFS_BTREE_TRACE
-	void		(*trace_enter)(struct xfs_btree_cur *, const char *,
-				       char *, int, int, __psunsigned_t,
-				       __psunsigned_t, __psunsigned_t,
-				       __psunsigned_t, __psunsigned_t,
-				       __psunsigned_t, __psunsigned_t,
-				       __psunsigned_t, __psunsigned_t,
-				       __psunsigned_t, __psunsigned_t);
-	void		(*trace_cursor)(struct xfs_btree_cur *, __uint32_t *,
-					__uint64_t *, __uint64_t *);
-	void		(*trace_key)(struct xfs_btree_cur *,
-				     union xfs_btree_key *, __uint64_t *,
-				     __uint64_t *);
-	void		(*trace_record)(struct xfs_btree_cur *,
-					union xfs_btree_rec *, __uint64_t *,
-					__uint64_t *, __uint64_t *);
 #endif
 };
 
@@ -283,7 +262,7 @@ typedef struct xfs_btree_cur
 /*
  * Convert from buffer to btree block header.
  */
-#define	XFS_BUF_TO_BLOCK(bp)	((struct xfs_btree_block *)XFS_BUF_PTR(bp))
+#define	XFS_BUF_TO_BLOCK(bp)	((struct xfs_btree_block *)((bp)->b_addr))
 
 
 /*
@@ -399,16 +378,6 @@ xfs_btree_reada_bufs(
 	xfs_agblock_t		agbno,	/* allocation group block number */
 	xfs_extlen_t		count);	/* count of filesystem blocks */
 
-/*
- * Set the buffer for level "lev" in the cursor to bp, releasing
- * any previous buffer.
- */
-void
-xfs_btree_setbuf(
-	xfs_btree_cur_t		*cur,	/* btree cursor */
-	int			lev,	/* level in btree */
-	struct xfs_buf		*bp);	/* new buffer to set */
-
 
 /*
  * Common btree core entry points.
@@ -463,5 +432,24 @@ static inline int xfs_btree_get_level(struct xfs_btree_block *block)
 #define	XFS_FSB_SANITY_CHECK(mp,fsb)	\
 	(XFS_FSB_TO_AGNO(mp, fsb) < mp->m_sb.sb_agcount && \
 		XFS_FSB_TO_AGBNO(mp, fsb) < mp->m_sb.sb_agblocks)
+
+/*
+ * Trace hooks.  Currently not implemented as they need to be ported
+ * over to the generic tracing functionality, which is some effort.
+ *
+ * i,j = integer (32 bit)
+ * b = btree block buffer (xfs_buf_t)
+ * p = btree ptr
+ * r = btree record
+ * k = btree key
+ */
+#define	XFS_BTREE_TRACE_ARGBI(c, b, i)
+#define	XFS_BTREE_TRACE_ARGBII(c, b, i, j)
+#define	XFS_BTREE_TRACE_ARGI(c, i)
+#define	XFS_BTREE_TRACE_ARGIPK(c, i, p, s)
+#define	XFS_BTREE_TRACE_ARGIPR(c, i, p, r)
+#define	XFS_BTREE_TRACE_ARGIK(c, i, k)
+#define XFS_BTREE_TRACE_ARGR(c, r)
+#define	XFS_BTREE_TRACE_CURSOR(c, t)
 
 #endif	/* __XFS_BTREE_H__ */

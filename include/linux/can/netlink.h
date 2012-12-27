@@ -5,8 +5,6 @@
  *
  * Copyright (c) 2009 Wolfgang Grandegger <wg@grandegger.com>
  *
- * Send feedback to <socketcan-users@lists.berlios.de>
- *
  */
 
 #ifndef CAN_NETLINK_H
@@ -17,7 +15,7 @@
 /*
  * CAN bit-timing parameters
  *
- * For futher information, please read chapter "8 BIT TIMING
+ * For further information, please read chapter "8 BIT TIMING
  * REQUIREMENTS" of the "Bosch CAN Specification version 2.0"
  * at http://www.semiconductors.bosch.de/pdf/can2spec.pdf.
  */

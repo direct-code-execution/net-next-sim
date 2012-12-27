@@ -126,7 +126,7 @@
 #include <linux/device.h>
 #include <linux/wait.h>
 #include <linux/jiffies.h>
-#include <linux/smp_lock.h>
+#include <linux/mutex.h>
 #include <linux/compat.h>
 
 #include <linux/parport.h>
@@ -135,11 +135,11 @@
 
 #include <asm/irq.h>
 #include <asm/uaccess.h>
-#include <asm/system.h>
 
 /* if you have more than 8 printers, remember to increase LP_NO */
 #define LP_NO 8
 
+static DEFINE_MUTEX(lp_mutex);
 static struct lp_struct lp_table[LP_NO];
 
 static unsigned int lp_count = 0;
@@ -493,7 +493,7 @@ static int lp_open(struct inode * inode, struct file * file)
 	unsigned int minor = iminor(inode);
 	int ret = 0;
 
-	lock_kernel();
+	mutex_lock(&lp_mutex);
 	if (minor >= LP_NO) {
 		ret = -ENXIO;
 		goto out;
@@ -554,7 +554,7 @@ static int lp_open(struct inode * inode, struct file * file)
 	lp_release_parport (&lp_table[minor]);
 	lp_table[minor].current_mode = IEEE1284_MODE_COMPAT;
 out:
-	unlock_kernel();
+	mutex_unlock(&lp_mutex);
 	return ret;
 }
 
@@ -680,7 +680,7 @@ static long lp_ioctl(struct file *file, unsigned int cmd,
 	int ret;
 
 	minor = iminor(file->f_path.dentry->d_inode);
-	lock_kernel();
+	mutex_lock(&lp_mutex);
 	switch (cmd) {
 	case LPSETTIMEOUT:
 		if (copy_from_user(&par_timeout, (void __user *)arg,
@@ -694,7 +694,7 @@ static long lp_ioctl(struct file *file, unsigned int cmd,
 		ret = lp_do_ioctl(minor, cmd, arg, (void __user *)arg);
 		break;
 	}
-	unlock_kernel();
+	mutex_unlock(&lp_mutex);
 
 	return ret;
 }
@@ -705,16 +705,13 @@ static long lp_compat_ioctl(struct file *file, unsigned int cmd,
 {
 	unsigned int minor;
 	struct timeval par_timeout;
-	struct compat_timeval __user *tc;
 	int ret;
 
 	minor = iminor(file->f_path.dentry->d_inode);
-	lock_kernel();
+	mutex_lock(&lp_mutex);
 	switch (cmd) {
 	case LPSETTIMEOUT:
-		tc = compat_ptr(arg);
-		if (get_user(par_timeout.tv_sec, &tc->tv_sec) ||
-		    get_user(par_timeout.tv_usec, &tc->tv_usec)) {
+		if (compat_get_timeval(&par_timeout, compat_ptr(arg))) {
 			ret = -EFAULT;
 			break;
 		}
@@ -730,7 +727,7 @@ static long lp_compat_ioctl(struct file *file, unsigned int cmd,
 		ret = lp_do_ioctl(minor, cmd, arg, compat_ptr(arg));
 		break;
 	}
-	unlock_kernel();
+	mutex_unlock(&lp_mutex);
 
 	return ret;
 }
@@ -748,6 +745,7 @@ static const struct file_operations lp_fops = {
 #ifdef CONFIG_PARPORT_1284
 	.read		= lp_read,
 #endif
+	.llseek		= noop_llseek,
 };
 
 /* --- support for console on the line printer ----------------- */
@@ -827,7 +825,7 @@ static struct console lpcons = {
 
 static int parport_nr[LP_NO] = { [0 ... LP_NO-1] = LP_PARPORT_UNSPEC };
 static char *parport[LP_NO];
-static int reset;
+static bool reset;
 
 module_param_array(parport, charp, NULL, 0);
 module_param(reset, bool, 0);

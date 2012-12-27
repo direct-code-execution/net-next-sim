@@ -89,7 +89,7 @@ extern int proc_auto_start(struct cfg_devnode *dev_node_obj,
  *  Returns:
  *      0     :       SUCCESS
  *      -EFAULT :       Invalid processor handle.
- *      -ETIME:       A Timeout Occured before the Control information
+ *      -ETIME:       A Timeout Occurred before the Control information
  *			  could be sent.
  *      -EPERM   :       General Failure.
  *  Requires:
@@ -169,7 +169,7 @@ extern int proc_enum_nodes(void *hprocessor,
  *      0     :       Success.
  *      -EFAULT :       Invalid processor handle.
  *      -EBADR:    The processor is not in the PROC_RUNNING state.
- *      -ETIME:       A timeout occured before the DSP responded to the
+ *      -ETIME:       A timeout occurred before the DSP responded to the
  *			  querry.
  *      -EPERM   :       Unable to get Resource Information
  *  Requires:
@@ -187,20 +187,6 @@ extern int proc_get_resource_info(void *hprocessor,
 					 struct dsp_resourceinfo
 					 *resource_info,
 					 u32 resource_info_size);
-
-/*
- *  ======== proc_exit ========
- *  Purpose:
- *      Decrement reference count, and free resources when reference count is
- *      0.
- *  Parameters:
- *  Returns:
- *  Requires:
- *      PROC is initialized.
- *  Ensures:
- *      When reference count == 0, PROC's private resources are freed.
- */
-extern void proc_exit(void);
 
 /*
  * ======== proc_get_dev_object =========
@@ -221,20 +207,6 @@ extern void proc_exit(void);
  */
 extern int proc_get_dev_object(void *hprocessor,
 				      struct dev_object **device_obj);
-
-/*
- *  ======== proc_init ========
- *  Purpose:
- *      Initialize PROC's private state, keeping a reference count on each
- *      call.
- *  Parameters:
- *  Returns:
- *      TRUE if initialized; FALSE if error occured.
- *  Requires:
- *  Ensures:
- *      TRUE: A requirement for the other public PROC functions.
- */
-extern bool proc_init(void);
 
 /*
  *  ======== proc_get_state ========

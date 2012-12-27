@@ -34,7 +34,7 @@
 #include <linux/tty.h>
 #include <linux/tty_driver.h>
 #include <linux/list.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 
 #define GIG_VERSION {0, 5, 0, 0}
 #define GIG_COMPAT  {0, 4, 0, 0}
@@ -70,7 +70,6 @@ enum debuglevel {
 	DEBUG_STREAM_DUMP = 0x00080, /* application data stream content */
 	DEBUG_LLDATA	  = 0x00100, /* sent/received LL data */
 	DEBUG_EVENT	  = 0x00200, /* event processing */
-	DEBUG_DRIVER	  = 0x00400, /* driver structure */
 	DEBUG_HDLC	  = 0x00800, /* M10x HDLC processing */
 	DEBUG_CHANNEL	  = 0x01000, /* channel allocation/deallocation */
 	DEBUG_TRANSCMD	  = 0x02000, /* AT-COMMANDS+RESPONSES */
@@ -92,11 +91,11 @@ enum debuglevel {
 
 #ifdef CONFIG_GIGASET_DEBUG
 
-#define gig_dbg(level, format, arg...) \
-	do { \
+#define gig_dbg(level, format, arg...)					\
+	do {								\
 		if (unlikely(((enum debuglevel)gigaset_debuglevel) & (level))) \
 			printk(KERN_DEBUG KBUILD_MODNAME ": " format "\n", \
-			       ## arg); \
+			       ## arg);					\
 	} while (0)
 #define DEBUG_DEFAULT (DEBUG_TRANSCMD | DEBUG_CMD | DEBUG_USBREQ)
 
@@ -165,7 +164,7 @@ void gigaset_dbg_buffer(enum debuglevel level, const unsigned char *msg,
 #define BAS_CORRFRAMES	4	/* flow control multiplicator */
 
 #define BAS_INBUFSIZE	(BAS_MAXFRAME * BAS_NUMFRAMES)
-					/* size of isoc in buf per URB */
+/* size of isoc in buf per URB */
 #define BAS_OUTBUFSIZE	4096		/* size of common isoc out buffer */
 #define BAS_OUTBUFPAD	BAS_MAXFRAME	/* size of pad area for isoc out buf */
 
@@ -434,8 +433,7 @@ struct cardstate {
 	spinlock_t cmdlock;
 	unsigned curlen, cmdbytes;
 
-	unsigned open_count;
-	struct tty_struct *tty;
+	struct tty_port port;
 	struct tasklet_struct if_wake_tasklet;
 	unsigned control_state;
 
@@ -474,17 +472,17 @@ struct cardstate {
 	int commands_pending;		/* flag(s) in xxx.commands_pending have
 					   been set */
 	struct tasklet_struct event_tasklet;
-					/* tasklet for serializing AT commands.
-					 * Scheduled
-					 *   -> for modem reponses (and
-					 *      incoming data for M10x)
-					 *   -> on timeout
-					 *   -> after setting bits in
-					 *      xxx.at_state.pending_command
-					 *      (e.g. command from LL) */
+	/* tasklet for serializing AT commands.
+	 * Scheduled
+	 *   -> for modem reponses (and
+	 *      incoming data for M10x)
+	 *   -> on timeout
+	 *   -> after setting bits in
+	 *      xxx.at_state.pending_command
+	 *      (e.g. command from LL) */
 	struct tasklet_struct write_tasklet;
-					/* tasklet for serial output
-					 * (not used in base driver) */
+	/* tasklet for serial output
+	 * (not used in base driver) */
 
 	/* event queue */
 	struct event_t events[MAX_EVENTS];
@@ -492,7 +490,7 @@ struct cardstate {
 	spinlock_t ev_lock;
 
 	/* current modem response */
-	unsigned char respdata[MAX_RESP_SIZE+1];
+	unsigned char respdata[MAX_RESP_SIZE + 1];
 	unsigned cbytes;
 
 	/* private data of hardware drivers */
@@ -727,7 +725,7 @@ struct gigaset_driver *gigaset_initdriver(unsigned minor, unsigned minors,
 
 /* Deallocate driver structure. */
 void gigaset_freedriver(struct gigaset_driver *drv);
-void gigaset_debugdrivers(void);
+
 struct cardstate *gigaset_get_cs_by_tty(struct tty_struct *tty);
 struct cardstate *gigaset_get_cs_by_id(int id);
 void gigaset_blockdriver(struct gigaset_driver *drv);

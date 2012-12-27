@@ -406,6 +406,7 @@ static int kaweth_download_firmware(struct kaweth_device *kaweth,
 
 	if (fw->size > KAWETH_FIRMWARE_BUF_SIZE) {
 		err("Firmware too big: %zu", fw->size);
+		release_firmware(fw);
 		return -ENOSPC;
 	}
 	data_len = fw->size;
@@ -759,14 +760,6 @@ static int kaweth_close(struct net_device *net)
 	return 0;
 }
 
-static void kaweth_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
-{
-	struct kaweth_device *kaweth = netdev_priv(dev);
-
-	strlcpy(info->driver, driver_name, sizeof(info->driver));
-	usb_make_path(kaweth->dev, info->bus_info, sizeof (info->bus_info));
-}
-
 static u32 kaweth_get_link(struct net_device *dev)
 {
 	struct kaweth_device *kaweth = netdev_priv(dev);
@@ -775,7 +768,6 @@ static u32 kaweth_get_link(struct net_device *dev)
 }
 
 static const struct ethtool_ops ops = {
-	.get_drvinfo	= kaweth_get_drvinfo,
 	.get_link	= kaweth_get_link
 };
 
@@ -993,7 +985,7 @@ static const struct net_device_ops kaweth_netdev_ops = {
 	.ndo_stop =			kaweth_close,
 	.ndo_start_xmit =		kaweth_start_xmit,
 	.ndo_tx_timeout =		kaweth_tx_timeout,
-	.ndo_set_multicast_list =	kaweth_set_rx_mode,
+	.ndo_set_rx_mode =		kaweth_set_rx_mode,
 	.ndo_get_stats =		kaweth_netdev_stats,
 	.ndo_change_mtu =		eth_change_mtu,
 	.ndo_set_mac_address =		eth_mac_addr,
@@ -1106,13 +1098,7 @@ err_fw:
 	dev_info(&intf->dev, "Statistics collection: %x\n", kaweth->configuration.statistics_mask);
 	dev_info(&intf->dev, "Multicast filter limit: %x\n", kaweth->configuration.max_multicast_filters & ((1 << 15) - 1));
 	dev_info(&intf->dev, "MTU: %d\n", le16_to_cpu(kaweth->configuration.segment_size));
-	dev_info(&intf->dev, "Read MAC address %2.2x:%2.2x:%2.2x:%2.2x:%2.2x:%2.2x\n",
-		 (int)kaweth->configuration.hw_addr[0],
-		 (int)kaweth->configuration.hw_addr[1],
-		 (int)kaweth->configuration.hw_addr[2],
-		 (int)kaweth->configuration.hw_addr[3],
-		 (int)kaweth->configuration.hw_addr[4],
-		 (int)kaweth->configuration.hw_addr[5]);
+	dev_info(&intf->dev, "Read MAC address %pM\n", kaweth->configuration.hw_addr);
 
 	if(!memcmp(&kaweth->configuration.hw_addr,
                    &bcast_addr,
@@ -1229,7 +1215,7 @@ static void kaweth_disconnect(struct usb_interface *intf)
 
 	usb_set_intfdata(intf, NULL);
 	if (!kaweth) {
-		dev_warn(&intf->dev, "unregistering non-existant device\n");
+		dev_warn(&intf->dev, "unregistering non-existent device\n");
 		return;
 	}
 	netdev = kaweth->net;
@@ -1332,32 +1318,4 @@ static int kaweth_internal_control_msg(struct usb_device *usb_dev,
 	}
 }
 
-
-/****************************************************************
- *     kaweth_init
- ****************************************************************/
-static int __init kaweth_init(void)
-{
-	dbg("Driver loading");
-	return usb_register(&kaweth_driver);
-}
-
-/****************************************************************
- *     kaweth_exit
- ****************************************************************/
-static void __exit kaweth_exit(void)
-{
-	usb_deregister(&kaweth_driver);
-}
-
-module_init(kaweth_init);
-module_exit(kaweth_exit);
-
-
-
-
-
-
-
-
-
+module_usb_driver(kaweth_driver);

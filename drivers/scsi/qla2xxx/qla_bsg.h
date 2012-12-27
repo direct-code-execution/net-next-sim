@@ -1,6 +1,6 @@
 /*
  * QLogic Fibre Channel HBA Driver
- * Copyright (c)  2003-2010 QLogic Corporation
+ * Copyright (c)  2003-2011 QLogic Corporation
  *
  * See LICENSE.qla2xxx for copyright and licensing details.
  */
@@ -14,6 +14,18 @@
 #define QL_VND_A84_MGMT_CMD	0x04
 #define QL_VND_IIDMA		0x05
 #define QL_VND_FCP_PRIO_CFG_CMD	0x06
+#define QL_VND_READ_FLASH	0x07
+#define QL_VND_UPDATE_FLASH	0x08
+#define QL_VND_SET_FRU_VERSION	0x0B
+#define QL_VND_READ_FRU_STATUS	0x0C
+#define QL_VND_WRITE_FRU_STATUS	0x0D
+
+/* BSG Vendor specific subcode returns */
+#define EXT_STATUS_OK			0
+#define EXT_STATUS_ERR			1
+#define EXT_STATUS_INVALID_PARAM	6
+#define EXT_STATUS_MAILBOX		11
+#define EXT_STATUS_NO_MEMORY		17
 
 /* BSG definations for interpreting CommandSent field */
 #define INT_DEF_LB_LOOPBACK_CMD         0
@@ -139,4 +151,36 @@ struct qla_port_param {
 	uint16_t mode;
 	uint16_t speed;
 } __attribute__ ((packed));
+
+
+/* FRU VPD */
+
+#define MAX_FRU_SIZE	36
+
+struct qla_field_address {
+	uint16_t offset;
+	uint16_t device;
+	uint16_t option;
+} __packed;
+
+struct qla_field_info {
+	uint8_t version[MAX_FRU_SIZE];
+} __packed;
+
+struct qla_image_version {
+	struct qla_field_address field_address;
+	struct qla_field_info field_info;
+} __packed;
+
+struct qla_image_version_list {
+	uint32_t count;
+	struct qla_image_version version[0];
+} __packed;
+
+struct qla_status_reg {
+	struct qla_field_address field_address;
+	uint8_t status_reg;
+	uint8_t reserved[7];
+} __packed;
+
 #endif

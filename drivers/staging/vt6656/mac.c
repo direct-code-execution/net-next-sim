@@ -133,10 +133,9 @@ void MACvWriteMultiAddr(PSDevice pDevice, unsigned int uByteIdx, BYTE byData)
  *  Out:
  *      none
  *
- * Return Value: TRUE if success; otherwise FALSE
  *
  */
-BOOL MACbShutdown (PSDevice pDevice)
+void MACbShutdown(PSDevice pDevice)
 {
     CONTROLnsRequestOutAsyn(pDevice,
                         MESSAGE_TYPE_MACSHUTDOWN,
@@ -145,7 +144,6 @@ BOOL MACbShutdown (PSDevice pDevice)
                         0,
                         NULL
                         );
-    return TRUE;
 }
 
 void MACvSetBBType(PSDevice pDevice,BYTE byType)
@@ -471,10 +469,10 @@ BYTE            pbyData[2];
     pbyData[1] = (BYTE) (wInterval >> 8);
 
     CONTROLnsRequestOut(pDevice,
-                        MESSAGE_TYPE_WRITE,
-                        MAC_REG_BI,
-                        MESSAGE_REQUEST_MACREG,
-                        2,
-                        pbyData
-                        );
+			MESSAGE_TYPE_WRITE,
+			MAC_REG_BI,
+			MESSAGE_REQUEST_MACREG,
+			2,
+			pbyData
+			);
 }

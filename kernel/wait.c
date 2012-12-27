@@ -4,16 +4,16 @@
  * (C) 2004 William Irwin, Oracle
  */
 #include <linux/init.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/wait.h>
 #include <linux/hash.h>
 
-void __init_waitqueue_head(wait_queue_head_t *q, struct lock_class_key *key)
+void __init_waitqueue_head(wait_queue_head_t *q, const char *name, struct lock_class_key *key)
 {
 	spin_lock_init(&q->lock);
-	lockdep_set_class(&q->lock, key);
+	lockdep_set_class_and_name(&q->lock, key, name);
 	INIT_LIST_HEAD(&q->task_list);
 }
 
@@ -92,7 +92,7 @@ prepare_to_wait_exclusive(wait_queue_head_t *q, wait_queue_t *wait, int state)
 }
 EXPORT_SYMBOL(prepare_to_wait_exclusive);
 
-/*
+/**
  * finish_wait - clean up after waiting in a queue
  * @q: waitqueue waited on
  * @wait: wait descriptor
@@ -127,11 +127,11 @@ void finish_wait(wait_queue_head_t *q, wait_queue_t *wait)
 }
 EXPORT_SYMBOL(finish_wait);
 
-/*
+/**
  * abort_exclusive_wait - abort exclusive waiting in a queue
  * @q: waitqueue waited on
  * @wait: wait descriptor
- * @state: runstate of the waiter to be woken
+ * @mode: runstate of the waiter to be woken
  * @key: key to identify a wait bit queue or %NULL
  *
  * Sets current thread back to running state and removes
@@ -142,7 +142,7 @@ EXPORT_SYMBOL(finish_wait);
  * woken up through the queue.
  *
  * This prevents waiter starvation where an exclusive waiter
- * aborts and is woken up concurrently and noone wakes up
+ * aborts and is woken up concurrently and no one wakes up
  * the next waiter.
  */
 void abort_exclusive_wait(wait_queue_head_t *q, wait_queue_t *wait,

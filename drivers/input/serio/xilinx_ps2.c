@@ -23,7 +23,7 @@
 #include <linux/init.h>
 #include <linux/list.h>
 #include <linux/io.h>
-
+#include <linux/of_address.h>
 #include <linux/of_device.h>
 #include <linux/of_platform.h>
 
@@ -225,15 +225,14 @@ static void sxps2_close(struct serio *pserio)
 /**
  * xps2_of_probe - probe method for the PS/2 device.
  * @of_dev:	pointer to OF device structure
- * @match:	pointer to the stucture used for matching a device
+ * @match:	pointer to the structure used for matching a device
  *
  * This function probes the PS/2 device in the device tree.
  * It initializes the driver data structure and the hardware.
  * It returns 0, if the driver is bound to the PS/2 device, or a negative
  * value if there is an error.
  */
-static int __devinit xps2_of_probe(struct platform_device *ofdev,
-				   const struct of_device_id *match)
+static int __devinit xps2_of_probe(struct platform_device *ofdev)
 {
 	struct resource r_irq; /* Interrupt resources */
 	struct resource r_mem; /* IO mem resources */
@@ -254,7 +253,7 @@ static int __devinit xps2_of_probe(struct platform_device *ofdev,
 	}
 
 	/* Get IRQ for the device */
-	if (of_irq_to_resource(ofdev->dev.of_node, 0, &r_irq) == NO_IRQ) {
+	if (!of_irq_to_resource(ofdev->dev.of_node, 0, &r_irq)) {
 		dev_err(dev, "no IRQ found\n");
 		return -ENODEV;
 	}
@@ -361,7 +360,7 @@ static const struct of_device_id xps2_of_match[] __devinitconst = {
 };
 MODULE_DEVICE_TABLE(of, xps2_of_match);
 
-static struct of_platform_driver xps2_of_driver = {
+static struct platform_driver xps2_of_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
 		.owner = THIS_MODULE,
@@ -370,19 +369,7 @@ static struct of_platform_driver xps2_of_driver = {
 	.probe		= xps2_of_probe,
 	.remove		= __devexit_p(xps2_of_remove),
 };
-
-static int __init xps2_init(void)
-{
-	return of_register_platform_driver(&xps2_of_driver);
-}
-
-static void __exit xps2_cleanup(void)
-{
-	of_unregister_platform_driver(&xps2_of_driver);
-}
-
-module_init(xps2_init);
-module_exit(xps2_cleanup);
+module_platform_driver(xps2_of_driver);
 
 MODULE_AUTHOR("Xilinx, Inc.");
 MODULE_DESCRIPTION("Xilinx XPS PS/2 driver");

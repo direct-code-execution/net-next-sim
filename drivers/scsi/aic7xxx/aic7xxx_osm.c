@@ -294,7 +294,7 @@ static uint32_t aic7xxx_extended;
  * dubious at best.  To my knowledge, this option has never actually
  * solved a PCI parity problem, but on certain machines with broken PCI
  * chipset configurations where stray PCI transactions with bad parity are
- * the norm rather than the exception, the error messages can be overwelming.
+ * the norm rather than the exception, the error messages can be overwhelming.
  * It's included in the driver for completeness.
  *   0	   = Shut off PCI parity check
  *   non-0 = reverse polarity pci parity checking
@@ -360,10 +360,10 @@ MODULE_PARM_DESC(aic7xxx,
 "	seltime:<int>		Selection Timeout\n"
 "				(0/256ms,1/128ms,2/64ms,3/32ms)\n"
 "\n"
-"	Sample /etc/modprobe.conf line:\n"
-"		Toggle EISA/VLB probing\n"
-"		Set tag depth on Controller 1/Target 1 to 10 tags\n"
-"		Shorten the selection timeout to 128ms\n"
+"	Sample modprobe configuration file:\n"
+"	#	Toggle EISA/VLB probing\n"
+"	#	Set tag depth on Controller 1/Target 1 to 10 tags\n"
+"	#	Shorten the selection timeout to 128ms\n"
 "\n"
 "	options aic7xxx 'aic7xxx=probe_eisa_vl.tag_info:{{}.{.10}}.seltime:1'\n"
 );
@@ -528,7 +528,7 @@ ahc_linux_info(struct Scsi_Host *host)
  * Queue an SCB to the controller.
  */
 static int
-ahc_linux_queue(struct scsi_cmnd * cmd, void (*scsi_done) (struct scsi_cmnd *))
+ahc_linux_queue_lck(struct scsi_cmnd * cmd, void (*scsi_done) (struct scsi_cmnd *))
 {
 	struct	 ahc_softc *ahc;
 	struct	 ahc_linux_device *dev = scsi_transport_device_data(cmd->device);
@@ -547,6 +547,8 @@ ahc_linux_queue(struct scsi_cmnd * cmd, void (*scsi_done) (struct scsi_cmnd *))
 
 	return rtn;
 }
+
+static DEF_SCSI_QCMD(ahc_linux_queue)
 
 static inline struct scsi_target **
 ahc_linux_target_in_softc(struct scsi_target *starget)
@@ -1316,7 +1318,7 @@ ahc_platform_set_tags(struct ahc_softc *ahc, struct scsi_device *sdev,
 		usertags = ahc_linux_user_tagdepth(ahc, devinfo);
 		if (!was_queuing) {
 			/*
-			 * Start out agressively and allow our
+			 * Start out aggressively and allow our
 			 * dynamic queue depth algorithm to take
 			 * care of the rest.
 			 */

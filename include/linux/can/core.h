@@ -8,8 +8,6 @@
  * Copyright (c) 2002-2007 Volkswagen Group Electronic Research
  * All rights reserved.
  *
- * Send feedback to <socketcan-users@lists.berlios.de>
- *
  */
 
 #ifndef CAN_CORE_H
@@ -36,16 +34,16 @@
  * @prot:       pointer to struct proto structure.
  */
 struct can_proto {
-	int              type;
-	int              protocol;
-	struct proto_ops *ops;
-	struct proto     *prot;
+	int type;
+	int protocol;
+	const struct proto_ops *ops;
+	struct proto *prot;
 };
 
 /* function prototypes for the CAN networklayer core (af_can.c) */
 
-extern int  can_proto_register(struct can_proto *cp);
-extern void can_proto_unregister(struct can_proto *cp);
+extern int  can_proto_register(const struct can_proto *cp);
+extern void can_proto_unregister(const struct can_proto *cp);
 
 extern int  can_rx_register(struct net_device *dev, canid_t can_id,
 			    canid_t mask,
@@ -58,5 +56,6 @@ extern void can_rx_unregister(struct net_device *dev, canid_t can_id,
 			      void *data);
 
 extern int can_send(struct sk_buff *skb, int loop);
+extern int can_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);
 
 #endif /* CAN_CORE_H */

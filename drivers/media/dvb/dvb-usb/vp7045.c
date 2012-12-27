@@ -28,9 +28,9 @@ DVB_DEFINE_MOD_OPT_ADAPTER_NR(adapter_nr);
 int vp7045_usb_op(struct dvb_usb_device *d, u8 cmd, u8 *out, int outlen, u8 *in, int inlen, int msec)
 {
 	int ret = 0;
-	u8 inbuf[12] = { 0 }, outbuf[20] = { 0 };
+	u8 *buf = d->priv;
 
-	outbuf[0] = cmd;
+	buf[0] = cmd;
 
 	if (outlen > 19)
 		outlen = 19;
@@ -38,19 +38,21 @@ int vp7045_usb_op(struct dvb_usb_device *d, u8 cmd, u8 *out, int outlen, u8 *in,
 	if (inlen > 11)
 		inlen = 11;
 
+	ret = mutex_lock_interruptible(&d->usb_mutex);
+	if (ret)
+		return ret;
+
 	if (out != NULL && outlen > 0)
-		memcpy(&outbuf[1], out, outlen);
+		memcpy(&buf[1], out, outlen);
 
 	deb_xfer("out buffer: ");
-	debug_dump(outbuf,outlen+1,deb_xfer);
+	debug_dump(buf, outlen+1, deb_xfer);
 
-	if ((ret = mutex_lock_interruptible(&d->usb_mutex)))
-		return ret;
 
 	if (usb_control_msg(d->udev,
 			usb_sndctrlpipe(d->udev,0),
 			TH_COMMAND_OUT, USB_TYPE_VENDOR | USB_DIR_OUT, 0, 0,
-			outbuf, 20, 2000) != 20) {
+			buf, 20, 2000) != 20) {
 		err("USB control message 'out' went wrong.");
 		ret = -EIO;
 		goto unlock;
@@ -61,17 +63,17 @@ int vp7045_usb_op(struct dvb_usb_device *d, u8 cmd, u8 *out, int outlen, u8 *in,
 	if (usb_control_msg(d->udev,
 			usb_rcvctrlpipe(d->udev,0),
 			TH_COMMAND_IN, USB_TYPE_VENDOR | USB_DIR_IN, 0, 0,
-			inbuf, 12, 2000) != 12) {
+			buf, 12, 2000) != 12) {
 		err("USB control message 'in' went wrong.");
 		ret = -EIO;
 		goto unlock;
 	}
 
 	deb_xfer("in buffer: ");
-	debug_dump(inbuf,12,deb_xfer);
+	debug_dump(buf, 12, deb_xfer);
 
 	if (in != NULL && inlen > 0)
-		memcpy(in,&inbuf[1],inlen);
+		memcpy(in, &buf[1], inlen);
 
 unlock:
 	mutex_unlock(&d->usb_mutex);
@@ -99,7 +101,7 @@ static int vp7045_power_ctrl(struct dvb_usb_device *d, int onoff)
 
 /* The keymapping struct. Somehow this should be loaded to the driver, but
  * currently it is hardcoded. */
-static struct ir_scancode ir_codes_vp7045_table[] = {
+static struct rc_map_table rc_map_vp7045_table[] = {
 	{ 0x0016, KEY_POWER },
 	{ 0x0010, KEY_MUTE },
 	{ 0x0003, KEY_1 },
@@ -165,10 +167,10 @@ static int vp7045_rc_query(struct dvb_usb_device *d, u32 *event, int *state)
 		return 0;
 	}
 
-	for (i = 0; i < ARRAY_SIZE(ir_codes_vp7045_table); i++)
-		if (rc5_data(&ir_codes_vp7045_table[i]) == key) {
+	for (i = 0; i < ARRAY_SIZE(rc_map_vp7045_table); i++)
+		if (rc5_data(&rc_map_vp7045_table[i]) == key) {
 			*state = REMOTE_KEY_PRESSED;
-			*event = ir_codes_vp7045_table[i].keycode;
+			*event = rc_map_vp7045_table[i].keycode;
 			break;
 		}
 	return 0;
@@ -212,7 +214,7 @@ static int vp7045_frontend_attach(struct dvb_usb_adapter *adap)
 /*	Dump the EEPROM */
 /*	vp7045_read_eeprom(d,buf, 255, FX2_ID_ADDR); */
 
-	adap->fe = vp7045_fe_attach(adap->dev);
+	adap->fe_adap[0].fe = vp7045_fe_attach(adap->dev);
 
 	return 0;
 }
@@ -238,10 +240,13 @@ MODULE_DEVICE_TABLE(usb, vp7045_usb_table);
 static struct dvb_usb_device_properties vp7045_properties = {
 	.usb_ctrl = CYPRESS_FX2,
 	.firmware = "dvb-usb-vp7045-01.fw",
+	.size_of_priv = 20,
 
 	.num_adapters = 1,
 	.adapter = {
 		{
+		.num_frontends = 1,
+		.fe = {{
 			.frontend_attach  = vp7045_frontend_attach,
 			/* parameter for the MPEG2-data transfer */
 			.stream = {
@@ -254,6 +259,7 @@ static struct dvb_usb_device_properties vp7045_properties = {
 					}
 				}
 			},
+		}},
 		}
 	},
 	.power_ctrl       = vp7045_power_ctrl,
@@ -261,8 +267,8 @@ static struct dvb_usb_device_properties vp7045_properties = {
 
 	.rc.legacy = {
 		.rc_interval      = 400,
-		.rc_key_map       = ir_codes_vp7045_table,
-		.rc_key_map_size  = ARRAY_SIZE(ir_codes_vp7045_table),
+		.rc_map_table       = rc_map_vp7045_table,
+		.rc_map_size  = ARRAY_SIZE(rc_map_vp7045_table),
 		.rc_query         = vp7045_rc_query,
 	},
 
@@ -284,30 +290,11 @@ static struct dvb_usb_device_properties vp7045_properties = {
 static struct usb_driver vp7045_usb_driver = {
 	.name		= "dvb_usb_vp7045",
 	.probe		= vp7045_usb_probe,
-	.disconnect = dvb_usb_device_exit,
+	.disconnect	= dvb_usb_device_exit,
 	.id_table	= vp7045_usb_table,
 };
 
-/* module stuff */
-static int __init vp7045_usb_module_init(void)
-{
-	int result;
-	if ((result = usb_register(&vp7045_usb_driver))) {
-		err("usb_register failed. (%d)",result);
-		return result;
-	}
-
-	return 0;
-}
-
-static void __exit vp7045_usb_module_exit(void)
-{
-	/* deregister this driver from the USB subsystem */
-	usb_deregister(&vp7045_usb_driver);
-}
-
-module_init(vp7045_usb_module_init);
-module_exit(vp7045_usb_module_exit);
+module_usb_driver(vp7045_usb_driver);
 
 MODULE_AUTHOR("Patrick Boettcher <patrick.boettcher@desy.de>");
 MODULE_DESCRIPTION("Driver for Twinhan MagicBox/Alpha and DNTV tinyUSB2 DVB-T USB2.0");

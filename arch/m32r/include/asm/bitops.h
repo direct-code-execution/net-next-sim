@@ -16,9 +16,10 @@
 #endif
 
 #include <linux/compiler.h>
+#include <linux/irqflags.h>
 #include <asm/assembler.h>
-#include <asm/system.h>
 #include <asm/byteorder.h>
+#include <asm/dcache_clear.h>
 #include <asm/types.h>
 
 /*
@@ -266,9 +267,8 @@ static __inline__ int test_and_change_bit(int nr, volatile void * addr)
 
 #ifdef __KERNEL__
 
-#include <asm-generic/bitops/ext2-non-atomic.h>
+#include <asm-generic/bitops/le.h>
 #include <asm-generic/bitops/ext2-atomic.h>
-#include <asm-generic/bitops/minix.h>
 
 #endif /* __KERNEL__ */
 

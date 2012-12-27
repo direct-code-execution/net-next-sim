@@ -18,36 +18,24 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
-#include <linux/cnt32_to_63.h>
+#include <linux/kernel.h>
 #include <linux/io.h>
-#include <asm/div64.h>
 
-#include <mach/hardware.h>
-#include <mach/platform.h>
+#include <asm/sched_clock.h>
+#include <plat/sched_clock.h>
 
-#ifdef VERSATILE_SYS_BASE
-#define REFCOUNTER	(__io_address(VERSATILE_SYS_BASE) + VERSATILE_SYS_24MHz_OFFSET)
-#endif
+static void __iomem *ctr;
 
-#ifdef REALVIEW_SYS_BASE
-#define REFCOUNTER	(__io_address(REALVIEW_SYS_BASE) + REALVIEW_SYS_24MHz_OFFSET)
-#endif
-
-/*
- * This is the Realview and Versatile sched_clock implementation.  This
- * has a resolution of 41.7ns, and a maximum value of about 35583 days.
- *
- * The return value is guaranteed to be monotonic in that range as
- * long as there is always less than 89 seconds between successive
- * calls to this function.
- */
-unsigned long long sched_clock(void)
+static u32 notrace versatile_read_sched_clock(void)
 {
-	unsigned long long v = cnt32_to_63(readl(REFCOUNTER));
+	if (ctr)
+		return readl(ctr);
 
-	/* the <<1 gets rid of the cnt_32_to_63 top bit saving on a bic insn */
-	v *= 125<<1;
-	do_div(v, 3<<1);
+	return 0;
+}
 
-	return v;
+void __init versatile_sched_clock_init(void __iomem *reg, unsigned long rate)
+{
+	ctr = reg;
+	setup_sched_clock(versatile_read_sched_clock, 32, rate);
 }

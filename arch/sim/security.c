@@ -3,7 +3,7 @@
 struct sock;
 struct sk_buff;
 
-int capable(int cap)
+bool capable(int cap)
 {
   switch (cap)
   {

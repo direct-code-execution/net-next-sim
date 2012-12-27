@@ -42,27 +42,17 @@ void ptrace_disable(struct task_struct *child)
 extern int peek_user(struct task_struct * child, long addr, long data);
 extern int poke_user(struct task_struct * child, long addr, long data);
 
-long arch_ptrace(struct task_struct *child, long request, long addr, long data)
+long arch_ptrace(struct task_struct *child, long request,
+		 unsigned long addr, unsigned long data)
 {
 	int i, ret;
-	unsigned long __user *p = (void __user *)(unsigned long)data;
+	unsigned long __user *p = (void __user *)data;
+	void __user *vp = p;
 
 	switch (request) {
-	/* read word at location addr. */
-	case PTRACE_PEEKTEXT:
-	case PTRACE_PEEKDATA:
-		ret = generic_ptrace_peekdata(child, addr, data);
-		break;
-
 	/* read the word at location addr in the USER area. */
 	case PTRACE_PEEKUSR:
 		ret = peek_user(child, addr, data);
-		break;
-
-	/* write the word at location addr. */
-	case PTRACE_POKETEXT:
-	case PTRACE_POKEDATA:
-		ret = generic_ptrace_pokedata(child, addr, data);
 		break;
 
 	/* write the word at location addr in the USER area */
@@ -105,26 +95,12 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		break;
 	}
 #endif
-#ifdef PTRACE_GETFPREGS
-	case PTRACE_GETFPREGS: /* Get the child FPU state. */
-		ret = get_fpregs((struct user_i387_struct __user *) data,
-				 child);
-		break;
-#endif
-#ifdef PTRACE_SETFPREGS
-	case PTRACE_SETFPREGS: /* Set the child FPU state. */
-	        ret = set_fpregs((struct user_i387_struct __user *) data,
-				 child);
-		break;
-#endif
 	case PTRACE_GET_THREAD_AREA:
-		ret = ptrace_get_thread_area(child, addr,
-					     (struct user_desc __user *) data);
+		ret = ptrace_get_thread_area(child, addr, vp);
 		break;
 
 	case PTRACE_SET_THREAD_AREA:
-		ret = ptrace_set_thread_area(child, addr,
-					     (struct user_desc __user *) data);
+		ret = ptrace_set_thread_area(child, addr, vp);
 		break;
 
 	case PTRACE_FAULTINFO: {
@@ -134,7 +110,8 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		 * On i386, ptrace_faultinfo is smaller!
 		 */
 		ret = copy_to_user(p, &child->thread.arch.faultinfo,
-				   sizeof(struct ptrace_faultinfo));
+				   sizeof(struct ptrace_faultinfo)) ?
+			-EIO : 0;
 		break;
 	}
 
@@ -154,12 +131,6 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		ret = -EIO;
 		break;
 	}
-#endif
-#ifdef PTRACE_ARCH_PRCTL
-	case PTRACE_ARCH_PRCTL:
-		/* XXX Calls ptrace on the host - needs some SMP thinking */
-		ret = arch_prctl(child, data, (void *) addr);
-		break;
 #endif
 	default:
 		ret = ptrace_request(child, request, addr, data);
@@ -196,17 +167,15 @@ void syscall_trace(struct uml_pt_regs *regs, int entryexit)
 	int is_singlestep = (current->ptrace & PT_DTRACE) && entryexit;
 	int tracesysgood;
 
-	if (unlikely(current->audit_context)) {
-		if (!entryexit)
-			audit_syscall_entry(HOST_AUDIT_ARCH,
-					    UPT_SYSCALL_NR(regs),
-					    UPT_SYSCALL_ARG1(regs),
-					    UPT_SYSCALL_ARG2(regs),
-					    UPT_SYSCALL_ARG3(regs),
-					    UPT_SYSCALL_ARG4(regs));
-		else audit_syscall_exit(AUDITSC_RESULT(UPT_SYSCALL_RET(regs)),
-					UPT_SYSCALL_RET(regs));
-	}
+	if (!entryexit)
+		audit_syscall_entry(HOST_AUDIT_ARCH,
+				    UPT_SYSCALL_NR(regs),
+				    UPT_SYSCALL_ARG1(regs),
+				    UPT_SYSCALL_ARG2(regs),
+				    UPT_SYSCALL_ARG3(regs),
+				    UPT_SYSCALL_ARG4(regs));
+	else
+		audit_syscall_exit(regs);
 
 	/* Fake a debug trap */
 	if (is_singlestep)

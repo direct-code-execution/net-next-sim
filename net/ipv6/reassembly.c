@@ -42,6 +42,7 @@
 #include <linux/jhash.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
+#include <linux/export.h>
 
 #include <net/sock.h>
 #include <net/snmp.h>
@@ -104,26 +105,22 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *prev,
 unsigned int inet6_hash_frag(__be32 id, const struct in6_addr *saddr,
 			     const struct in6_addr *daddr, u32 rnd)
 {
-	u32 a, b, c;
+	u32 c;
 
-	a = (__force u32)saddr->s6_addr32[0];
-	b = (__force u32)saddr->s6_addr32[1];
-	c = (__force u32)saddr->s6_addr32[2];
+	c = jhash_3words((__force u32)saddr->s6_addr32[0],
+			 (__force u32)saddr->s6_addr32[1],
+			 (__force u32)saddr->s6_addr32[2],
+			 rnd);
 
-	a += JHASH_GOLDEN_RATIO;
-	b += JHASH_GOLDEN_RATIO;
-	c += rnd;
-	__jhash_mix(a, b, c);
+	c = jhash_3words((__force u32)saddr->s6_addr32[3],
+			 (__force u32)daddr->s6_addr32[0],
+			 (__force u32)daddr->s6_addr32[1],
+			 c);
 
-	a += (__force u32)saddr->s6_addr32[3];
-	b += (__force u32)daddr->s6_addr32[0];
-	c += (__force u32)daddr->s6_addr32[1];
-	__jhash_mix(a, b, c);
-
-	a += (__force u32)daddr->s6_addr32[2];
-	b += (__force u32)daddr->s6_addr32[3];
-	c += (__force u32)id;
-	__jhash_mix(a, b, c);
+	c =  jhash_3words((__force u32)daddr->s6_addr32[2],
+			  (__force u32)daddr->s6_addr32[3],
+			  (__force u32)id,
+			  c);
 
 	return c & (INETFRAGS_HASHSZ - 1);
 }
@@ -156,8 +153,8 @@ void ip6_frag_init(struct inet_frag_queue *q, void *a)
 
 	fq->id = arg->id;
 	fq->user = arg->user;
-	ipv6_addr_copy(&fq->saddr, arg->src);
-	ipv6_addr_copy(&fq->daddr, arg->dst);
+	fq->saddr = *arg->src;
+	fq->daddr = *arg->dst;
 }
 EXPORT_SYMBOL(ip6_frag_init);
 
@@ -228,7 +225,7 @@ out:
 }
 
 static __inline__ struct frag_queue *
-fq_find(struct net *net, __be32 id, struct in6_addr *src, struct in6_addr *dst)
+fq_find(struct net *net, __be32 id, const struct in6_addr *src, const struct in6_addr *dst)
 {
 	struct inet_frag_queue *q;
 	struct ip6_create_arg arg;
@@ -339,17 +336,16 @@ static int ip6_frag_queue(struct frag_queue *fq, struct sk_buff *skb,
 	}
 
 found:
-	/* RFC5722, Section 4:
-	 *                                  When reassembling an IPv6 datagram, if
+	/* RFC5722, Section 4, amended by Errata ID : 3089
+	 *                          When reassembling an IPv6 datagram, if
 	 *   one or more its constituent fragments is determined to be an
 	 *   overlapping fragment, the entire datagram (and any constituent
-	 *   fragments, including those not yet received) MUST be silently
-	 *   discarded.
+	 *   fragments) MUST be silently discarded.
 	 */
 
 	/* Check for overlap with preceding fragment. */
 	if (prev &&
-	    (FRAG6_CB(prev)->offset + prev->len) - offset > 0)
+	    (FRAG6_CB(prev)->offset + prev->len) > offset)
 		goto discard_fq;
 
 	/* Look for overlap with succeeding segment. */
@@ -458,7 +454,7 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *prev,
 	/* If the first fragment is fragmented itself, we split
 	 * it to two chunks: the first with data and paged part
 	 * and the second, holding only fragments. */
-	if (skb_has_frags(head)) {
+	if (skb_has_frag_list(head)) {
 		struct sk_buff *clone;
 		int i, plen = 0;
 
@@ -468,8 +464,8 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *prev,
 		head->next = clone;
 		skb_shinfo(clone)->frag_list = skb_shinfo(head)->frag_list;
 		skb_frag_list_init(head);
-		for (i=0; i<skb_shinfo(head)->nr_frags; i++)
-			plen += skb_shinfo(head)->frags[i].size;
+		for (i = 0; i < skb_shinfo(head)->nr_frags; i++)
+			plen += skb_frag_size(&skb_shinfo(head)->frags[i]);
 		clone->len = clone->data_len = head->data_len - plen;
 		head->data_len -= clone->len;
 		head->len -= clone->len;
@@ -539,7 +535,7 @@ static int ipv6_frag_rcv(struct sk_buff *skb)
 {
 	struct frag_hdr *fhdr;
 	struct frag_queue *fq;
-	struct ipv6hdr *hdr = ipv6_hdr(skb);
+	const struct ipv6hdr *hdr = ipv6_hdr(skb);
 	struct net *net = dev_net(skb_dst(skb)->dev);
 
 	IP6_INC_STATS_BH(net, ip6_dst_idev(skb_dst(skb)), IPSTATS_MIB_REASMREQDS);

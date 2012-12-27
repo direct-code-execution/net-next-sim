@@ -12,6 +12,7 @@
 /* setup data types */
 #define SETUP_NONE			0
 #define SETUP_E820_EXT			1
+#define SETUP_DTB			2
 
 /* extensible setup data list node */
 struct setup_data {
@@ -63,6 +64,8 @@ struct setup_header {
 	__u32	payload_offset;
 	__u32	payload_length;
 	__u64	setup_data;
+	__u64	pref_address;
+	__u32	init_size;
 } __attribute__((packed));
 
 struct sys_desc_table {
@@ -124,6 +127,7 @@ enum {
 	X86_SUBARCH_LGUEST,
 	X86_SUBARCH_XEN,
 	X86_SUBARCH_MRST,
+	X86_SUBARCH_CE4100,
 	X86_NR_SUBARCHS,
 };
 

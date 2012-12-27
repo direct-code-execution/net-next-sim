@@ -5,6 +5,8 @@
 
 #define EXT_GPIO(x)		(128 + (x))
 
+#define ZYLONITE_NR_IRQS	(IRQ_BOARD_START + 32)
+
 /* the following variables are processor specific and initialized
  * by the corresponding zylonite_pxa3xx_init()
  */
@@ -17,7 +19,7 @@ extern int wm9713_irq;
 extern int lcd_id;
 extern int lcd_orientation;
 
-#ifdef CONFIG_CPU_PXA300
+#ifdef CONFIG_MACH_ZYLONITE300
 extern void zylonite_pxa300_init(void);
 #else
 static inline void zylonite_pxa300_init(void)
@@ -27,7 +29,7 @@ static inline void zylonite_pxa300_init(void)
 }
 #endif
 
-#ifdef CONFIG_CPU_PXA320
+#ifdef CONFIG_MACH_ZYLONITE320
 extern void zylonite_pxa320_init(void);
 #else
 static inline void zylonite_pxa320_init(void)

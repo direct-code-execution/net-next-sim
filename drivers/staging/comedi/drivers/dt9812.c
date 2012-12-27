@@ -262,7 +262,7 @@ struct dt9812_usb_cmd {
 
 #define DT9812_NUM_SLOTS	16
 
-static DECLARE_MUTEX(dt9812_mutex);
+static DEFINE_SEMAPHORE(dt9812_mutex);
 
 static const struct usb_device_id dt9812_table[] = {
 	{USB_DEVICE(0x0867, 0x9812)},
@@ -527,7 +527,7 @@ static void dt9812_configure_gain(struct usb_dt9812 *dev,
 		 * 11x -> Gain =  0.5
 		 */
 	case DT9812_GAIN_0PT5:
-		rmw->or_value = F020_MASK_ADC0CF_AMP0GN2 ||
+		rmw->or_value = F020_MASK_ADC0CF_AMP0GN2 |
 		    F020_MASK_ADC0CF_AMP0GN1;
 		break;
 	case DT9812_GAIN_1:
@@ -540,7 +540,7 @@ static void dt9812_configure_gain(struct usb_dt9812 *dev,
 		rmw->or_value = F020_MASK_ADC0CF_AMP0GN1;
 		break;
 	case DT9812_GAIN_8:
-		rmw->or_value = F020_MASK_ADC0CF_AMP0GN1 ||
+		rmw->or_value = F020_MASK_ADC0CF_AMP0GN1 |
 		    F020_MASK_ADC0CF_AMP0GN0;
 		break;
 	case DT9812_GAIN_16:
@@ -773,7 +773,7 @@ static int dt9812_probe(struct usb_interface *interface,
 			retval = dt9812_read_info(dev, 1, &fw, sizeof(fw));
 			if (retval == 0) {
 				dev_info(&interface->dev,
-					 "usb_reset_configuration succeded "
+					 "usb_reset_configuration succeeded "
 					 "after %d iterations\n", i);
 				break;
 			}
@@ -1128,7 +1128,7 @@ static int __init usb_dt9812_init(void)
 
 	/* Initialize all driver slots */
 	for (i = 0; i < DT9812_NUM_SLOTS; i++) {
-		init_MUTEX(&dt9812[i].mutex);
+		sema_init(&dt9812[i].mutex, 1);
 		dt9812[i].serial = 0;
 		dt9812[i].usb = NULL;
 		dt9812[i].comedi = NULL;

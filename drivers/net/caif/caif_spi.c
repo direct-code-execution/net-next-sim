@@ -5,7 +5,6 @@
  * License terms: GNU General Public License (GPL) version 2.
  */
 
-#include <linux/version.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/device.h>
@@ -33,7 +32,10 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Daniel Martensson<daniel.martensson@stericsson.com>");
 MODULE_DESCRIPTION("CAIF SPI driver");
 
-static int spi_loop;
+/* Returns the number of padding bytes for alignment. */
+#define PAD_POW2(x, pow) ((((x)&((pow)-1))==0) ? 0 : (((pow)-((x)&((pow)-1)))))
+
+static bool spi_loop;
 module_param(spi_loop, bool, S_IRUGO);
 MODULE_PARM_DESC(spi_loop, "SPI running in loopback mode.");
 
@@ -41,7 +43,10 @@ MODULE_PARM_DESC(spi_loop, "SPI running in loopback mode.");
 module_param(spi_frm_align, int, S_IRUGO);
 MODULE_PARM_DESC(spi_frm_align, "SPI frame alignment.");
 
-/* SPI padding options. */
+/*
+ * SPI padding options.
+ * Warning: must be a base of 2 (& operation used) and can not be zero !
+ */
 module_param(spi_up_head_align, int, S_IRUGO);
 MODULE_PARM_DESC(spi_up_head_align, "SPI uplink head alignment.");
 
@@ -120,12 +125,6 @@ static inline void dev_debugfs_rem(struct cfspi *cfspi)
 	debugfs_remove(cfspi->dbgfs_frame);
 	debugfs_remove(cfspi->dbgfs_state);
 	debugfs_remove(cfspi->dbgfs_dir);
-}
-
-static int dbgfs_open(struct inode *inode, struct file *file)
-{
-	file->private_data = inode->i_private;
-	return 0;
 }
 
 static ssize_t dbgfs_state(struct file *file, char __user *user_buf,
@@ -221,7 +220,7 @@ static ssize_t dbgfs_frame(struct file *file, char __user *user_buf,
 			"Tx data (Len: %d):\n", cfspi->tx_cpck_len);
 
 	len += print_frame((buf + len), (DEBUGFS_BUF_SIZE - len),
-			   cfspi->xfer.va_tx,
+			   cfspi->xfer.va_tx[0],
 			   (cfspi->tx_cpck_len + SPI_CMD_SZ), 100);
 
 	len += snprintf((buf + len), (DEBUGFS_BUF_SIZE - len),
@@ -238,13 +237,13 @@ static ssize_t dbgfs_frame(struct file *file, char __user *user_buf,
 }
 
 static const struct file_operations dbgfs_state_fops = {
-	.open = dbgfs_open,
+	.open = simple_open,
 	.read = dbgfs_state,
 	.owner = THIS_MODULE
 };
 
 static const struct file_operations dbgfs_frame_fops = {
-	.open = dbgfs_open,
+	.open = simple_open,
 	.read = dbgfs_frame,
 	.owner = THIS_MODULE
 };
@@ -335,6 +334,9 @@ int cfspi_xmitfrm(struct cfspi *cfspi, u8 *buf, size_t len)
 	u8 *dst = buf;
 	caif_assert(buf);
 
+	if (cfspi->slave && !cfspi->slave_talked)
+		cfspi->slave_talked = true;
+
 	do {
 		struct sk_buff *skb;
 		struct caif_payload_info *info;
@@ -355,8 +357,8 @@ int cfspi_xmitfrm(struct cfspi *cfspi, u8 *buf, size_t len)
 		 * Compute head offset i.e. number of bytes to add to
 		 * get the start of the payload aligned.
 		 */
-		if (spi_up_head_align) {
-			spad = 1 + ((info->hdr_len + 1) & spi_up_head_align);
+		if (spi_up_head_align > 1) {
+			spad = 1 + PAD_POW2((info->hdr_len + 1), spi_up_head_align);
 			*dst = (u8)(spad - 1);
 			dst += spad;
 		}
@@ -371,7 +373,7 @@ int cfspi_xmitfrm(struct cfspi *cfspi, u8 *buf, size_t len)
 		 * Compute tail offset i.e. number of bytes to add to
 		 * get the complete CAIF frame aligned.
 		 */
-		epad = (skb->len + spad) & spi_up_tail_align;
+		epad = PAD_POW2((skb->len + spad), spi_up_tail_align);
 		dst += epad;
 
 		dev_kfree_skb(skb);
@@ -388,7 +390,7 @@ int cfspi_xmitlen(struct cfspi *cfspi)
 	int pkts = 0;
 
 	/*
-	 * Decommit previously commited frames.
+	 * Decommit previously committed frames.
 	 * skb_queue_splice_tail(&cfspi->chead,&cfspi->qhead)
 	 */
 	while (skb_peek(&cfspi->chead)) {
@@ -415,14 +417,14 @@ int cfspi_xmitlen(struct cfspi *cfspi)
 		 * Compute head offset i.e. number of bytes to add to
 		 * get the start of the payload aligned.
 		 */
-		if (spi_up_head_align)
-			spad = 1 + ((info->hdr_len + 1) & spi_up_head_align);
+		if (spi_up_head_align > 1)
+			spad = 1 + PAD_POW2((info->hdr_len + 1), spi_up_head_align);
 
 		/*
 		 * Compute tail offset i.e. number of bytes to add to
 		 * get the complete CAIF frame aligned.
 		 */
-		epad = (skb->len + spad) & spi_up_tail_align;
+		epad = PAD_POW2((skb->len + spad), spi_up_tail_align);
 
 		if ((skb->len + spad + epad + frm_len) <= CAIF_MAX_SPI_FRAME) {
 			skb_queue_tail(&cfspi->chead, skb);
@@ -431,6 +433,7 @@ int cfspi_xmitlen(struct cfspi *cfspi)
 		} else {
 			/* Put back packet. */
 			skb_queue_head(&cfspi->qhead, skb);
+			break;
 		}
 	} while (pkts <= CAIF_MAX_SPI_PKTS);
 
@@ -451,6 +454,15 @@ static void cfspi_ss_cb(bool assert, struct cfspi_ifc *ifc)
 {
 	struct cfspi *cfspi = (struct cfspi *)ifc->priv;
 
+	/*
+	 * The slave device is the master on the link. Interrupts before the
+	 * slave has transmitted are considered spurious.
+	 */
+	if (cfspi->slave && !cfspi->slave_talked) {
+		printk(KERN_WARNING "CFSPI: Spurious SS interrupt.\n");
+		return;
+	}
+
 	if (!in_interrupt())
 		spin_lock(&cfspi->lock);
 	if (assert) {
@@ -463,7 +475,8 @@ static void cfspi_ss_cb(bool assert, struct cfspi_ifc *ifc)
 		spin_unlock(&cfspi->lock);
 
 	/* Wake up the xfer thread. */
-	wake_up_interruptible(&cfspi->wait);
+	if (assert)
+		wake_up_interruptible(&cfspi->wait);
 }
 
 static void cfspi_xfer_done_cb(struct cfspi_ifc *ifc)
@@ -521,7 +534,7 @@ int cfspi_rxfrm(struct cfspi *cfspi, u8 *buf, size_t len)
 		 * Compute head offset i.e. number of bytes added to
 		 * get the start of the payload aligned.
 		 */
-		if (spi_down_head_align) {
+		if (spi_down_head_align > 1) {
 			spad = 1 + *src;
 			src += spad;
 		}
@@ -562,7 +575,7 @@ int cfspi_rxfrm(struct cfspi *cfspi, u8 *buf, size_t len)
 		 * Compute tail offset i.e. number of bytes added to
 		 * get the complete CAIF frame aligned.
 		 */
-		epad = (pkt_len + spad) & spi_down_tail_align;
+		epad = PAD_POW2((pkt_len + spad), spi_down_tail_align);
 		src += epad;
 	} while ((src - buf) < len);
 
@@ -580,73 +593,36 @@ static int cfspi_close(struct net_device *dev)
 	netif_stop_queue(dev);
 	return 0;
 }
-static const struct net_device_ops cfspi_ops = {
-	.ndo_open = cfspi_open,
-	.ndo_stop = cfspi_close,
-	.ndo_start_xmit = cfspi_xmit
-};
 
-static void cfspi_setup(struct net_device *dev)
+static int cfspi_init(struct net_device *dev)
 {
+	int res = 0;
 	struct cfspi *cfspi = netdev_priv(dev);
-	dev->features = 0;
-	dev->netdev_ops = &cfspi_ops;
-	dev->type = ARPHRD_CAIF;
-	dev->flags = IFF_NOARP | IFF_POINTOPOINT;
-	dev->tx_queue_len = 0;
-	dev->mtu = SPI_MAX_PAYLOAD_SIZE;
-	dev->destructor = free_netdev;
-	skb_queue_head_init(&cfspi->qhead);
-	skb_queue_head_init(&cfspi->chead);
-	cfspi->cfdev.link_select = CAIF_LINK_HIGH_BANDW;
-	cfspi->cfdev.use_frag = false;
-	cfspi->cfdev.use_stx = false;
-	cfspi->cfdev.use_fcs = false;
-	cfspi->ndev = dev;
-}
 
-int cfspi_spi_probe(struct platform_device *pdev)
-{
-	struct cfspi *cfspi = NULL;
-	struct net_device *ndev;
-	struct cfspi_dev *dev;
-	int res;
-	dev = (struct cfspi_dev *)pdev->dev.platform_data;
-
-	ndev = alloc_netdev(sizeof(struct cfspi),
-			"cfspi%d", cfspi_setup);
-	if (!dev)
-		return -ENODEV;
-
-	cfspi = netdev_priv(ndev);
-	netif_stop_queue(ndev);
-	cfspi->ndev = ndev;
-	cfspi->pdev = pdev;
-
-	/* Set flow info */
+	/* Set flow info. */
 	cfspi->flow_off_sent = 0;
 	cfspi->qd_low_mark = LOW_WATER_MARK;
 	cfspi->qd_high_mark = HIGH_WATER_MARK;
 
-	/* Assign the SPI device. */
-	cfspi->dev = dev;
-	/* Assign the device ifc to this SPI interface. */
-	dev->ifc = &cfspi->ifc;
+	/* Set slave info. */
+	if (!strncmp(cfspi_spi_driver.driver.name, "cfspi_sspi", 10)) {
+		cfspi->slave = true;
+		cfspi->slave_talked = false;
+	} else {
+		cfspi->slave = false;
+		cfspi->slave_talked = false;
+	}
 
 	/* Allocate DMA buffers. */
-	cfspi->xfer.va_tx = dma_alloc(&cfspi->xfer.pa_tx);
-	if (!cfspi->xfer.va_tx) {
-		printk(KERN_WARNING
-		       "CFSPI: failed to allocate dma TX buffer.\n");
+	cfspi->xfer.va_tx[0] = dma_alloc(&cfspi->xfer.pa_tx[0]);
+	if (!cfspi->xfer.va_tx[0]) {
 		res = -ENODEV;
-		goto err_dma_alloc_tx;
+		goto err_dma_alloc_tx_0;
 	}
 
 	cfspi->xfer.va_rx = dma_alloc(&cfspi->xfer.pa_rx);
 
 	if (!cfspi->xfer.va_rx) {
-		printk(KERN_WARNING
-		       "CFSPI: failed to allocate dma TX buffer.\n");
 		res = -ENODEV;
 		goto err_dma_alloc_rx;
 	}
@@ -690,6 +666,87 @@ int cfspi_spi_probe(struct platform_device *pdev)
 	/* Schedule the work queue. */
 	queue_work(cfspi->wq, &cfspi->work);
 
+	return 0;
+
+ err_create_wq:
+	dma_free(cfspi->xfer.va_rx, cfspi->xfer.pa_rx);
+ err_dma_alloc_rx:
+	dma_free(cfspi->xfer.va_tx[0], cfspi->xfer.pa_tx[0]);
+ err_dma_alloc_tx_0:
+	return res;
+}
+
+static void cfspi_uninit(struct net_device *dev)
+{
+	struct cfspi *cfspi = netdev_priv(dev);
+
+	/* Remove from list. */
+	spin_lock(&cfspi_list_lock);
+	list_del(&cfspi->list);
+	spin_unlock(&cfspi_list_lock);
+
+	cfspi->ndev = NULL;
+	/* Free DMA buffers. */
+	dma_free(cfspi->xfer.va_rx, cfspi->xfer.pa_rx);
+	dma_free(cfspi->xfer.va_tx[0], cfspi->xfer.pa_tx[0]);
+	set_bit(SPI_TERMINATE, &cfspi->state);
+	wake_up_interruptible(&cfspi->wait);
+	destroy_workqueue(cfspi->wq);
+	/* Destroy debugfs directory and files. */
+	dev_debugfs_rem(cfspi);
+	return;
+}
+
+static const struct net_device_ops cfspi_ops = {
+	.ndo_open = cfspi_open,
+	.ndo_stop = cfspi_close,
+	.ndo_init = cfspi_init,
+	.ndo_uninit = cfspi_uninit,
+	.ndo_start_xmit = cfspi_xmit
+};
+
+static void cfspi_setup(struct net_device *dev)
+{
+	struct cfspi *cfspi = netdev_priv(dev);
+	dev->features = 0;
+	dev->netdev_ops = &cfspi_ops;
+	dev->type = ARPHRD_CAIF;
+	dev->flags = IFF_NOARP | IFF_POINTOPOINT;
+	dev->tx_queue_len = 0;
+	dev->mtu = SPI_MAX_PAYLOAD_SIZE;
+	dev->destructor = free_netdev;
+	skb_queue_head_init(&cfspi->qhead);
+	skb_queue_head_init(&cfspi->chead);
+	cfspi->cfdev.link_select = CAIF_LINK_HIGH_BANDW;
+	cfspi->cfdev.use_frag = false;
+	cfspi->cfdev.use_stx = false;
+	cfspi->cfdev.use_fcs = false;
+	cfspi->ndev = dev;
+}
+
+int cfspi_spi_probe(struct platform_device *pdev)
+{
+	struct cfspi *cfspi = NULL;
+	struct net_device *ndev;
+	struct cfspi_dev *dev;
+	int res;
+	dev = (struct cfspi_dev *)pdev->dev.platform_data;
+
+	ndev = alloc_netdev(sizeof(struct cfspi),
+			"cfspi%d", cfspi_setup);
+	if (!dev)
+		return -ENODEV;
+
+	cfspi = netdev_priv(ndev);
+	netif_stop_queue(ndev);
+	cfspi->ndev = ndev;
+	cfspi->pdev = pdev;
+
+	/* Assign the SPI device. */
+	cfspi->dev = dev;
+	/* Assign the device ifc to this SPI interface. */
+	dev->ifc = &cfspi->ifc;
+
 	/* Register network device. */
 	res = register_netdev(ndev);
 	if (res) {
@@ -699,15 +756,6 @@ int cfspi_spi_probe(struct platform_device *pdev)
 	return res;
 
  err_net_reg:
-	dev_debugfs_rem(cfspi);
-	set_bit(SPI_TERMINATE, &cfspi->state);
-	wake_up_interruptible(&cfspi->wait);
-	destroy_workqueue(cfspi->wq);
- err_create_wq:
-	dma_free(cfspi->xfer.va_rx, cfspi->xfer.pa_rx);
- err_dma_alloc_rx:
-	dma_free(cfspi->xfer.va_tx, cfspi->xfer.pa_tx);
- err_dma_alloc_tx:
 	free_netdev(ndev);
 
 	return res;
@@ -715,34 +763,8 @@ int cfspi_spi_probe(struct platform_device *pdev)
 
 int cfspi_spi_remove(struct platform_device *pdev)
 {
-	struct list_head *list_node;
-	struct list_head *n;
-	struct cfspi *cfspi = NULL;
-	struct cfspi_dev *dev;
-
-	dev = (struct cfspi_dev *)pdev->dev.platform_data;
-	spin_lock(&cfspi_list_lock);
-	list_for_each_safe(list_node, n, &cfspi_list) {
-		cfspi = list_entry(list_node, struct cfspi, list);
-		/* Find the corresponding device. */
-		if (cfspi->dev == dev) {
-			/* Remove from list. */
-			list_del(list_node);
-			/* Free DMA buffers. */
-			dma_free(cfspi->xfer.va_rx, cfspi->xfer.pa_rx);
-			dma_free(cfspi->xfer.va_tx, cfspi->xfer.pa_tx);
-			set_bit(SPI_TERMINATE, &cfspi->state);
-			wake_up_interruptible(&cfspi->wait);
-			destroy_workqueue(cfspi->wq);
-			/* Destroy debugfs directory and files. */
-			dev_debugfs_rem(cfspi);
-			unregister_netdev(cfspi->ndev);
-			spin_unlock(&cfspi_list_lock);
-			return 0;
-		}
-	}
-	spin_unlock(&cfspi_list_lock);
-	return -ENODEV;
+	/* Everything is done in cfspi_uninit(). */
+	return 0;
 }
 
 static void __exit cfspi_exit_module(void)
@@ -753,7 +775,7 @@ static void __exit cfspi_exit_module(void)
 
 	list_for_each_safe(list_node, n, &cfspi_list) {
 		cfspi = list_entry(list_node, struct cfspi, list);
-		platform_device_unregister(cfspi->pdev);
+		unregister_netdev(cfspi->ndev);
 	}
 
 	/* Destroy sysfs files. */

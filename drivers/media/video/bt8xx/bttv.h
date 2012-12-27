@@ -17,8 +17,6 @@
 #include <linux/videodev2.h>
 #include <linux/i2c.h>
 #include <media/v4l2-device.h>
-#include <media/ir-common.h>
-#include <media/ir-kbd-i2c.h>
 #include <media/i2c-addr.h>
 #include <media/tuner.h>
 
@@ -98,7 +96,7 @@
 #define BTTV_BOARD_PV_BT878P_PLUS          0x46
 #define BTTV_BOARD_FLYVIDEO98EZ            0x47
 #define BTTV_BOARD_PV_BT878P_9B            0x48
-#define BTTV_BOARD_SENSORAY311             0x49
+#define BTTV_BOARD_SENSORAY311_611         0x49
 #define BTTV_BOARD_RV605                   0x4a
 #define BTTV_BOARD_POWERCLR_MTV878         0x4b
 #define BTTV_BOARD_WINDVR                  0x4c
@@ -185,6 +183,7 @@
 #define BTTV_BOARD_GEOVISION_GV800S	   0x9d
 #define BTTV_BOARD_GEOVISION_GV800S_SL	   0x9e
 #define BTTV_BOARD_PV183                   0x9f
+#define BTTV_BOARD_TVT_TD3116		   0xa0
 
 
 /* more card-specific defines */
@@ -236,7 +235,6 @@ struct tvcard {
 
 	/* i2c audio flags */
 	unsigned int no_msp34xx:1;
-	unsigned int no_tda9875:1;
 	unsigned int no_tda7432:1;
 	unsigned int needs_tvaudio:1;
 	unsigned int msp34xx_alt:1;

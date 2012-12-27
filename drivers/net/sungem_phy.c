@@ -33,7 +33,7 @@
 #include <asm/prom.h>
 #endif
 
-#include "sungem_phy.h"
+#include <linux/sungem_phy.h>
 
 /* Link modes of the BCM5400 PHY */
 static const int phy_BCM5400_link_table[8][3] = {
@@ -88,7 +88,7 @@ static int reset_one_mii_phy(struct mii_phy* phy, int phy_id)
 	if ((val & BMCR_ISOLATE) && limit > 0)
 		__phy_write(phy, phy_id, MII_BMCR, val & ~BMCR_ISOLATE);
 
-	return (limit <= 0);
+	return limit <= 0;
 }
 
 static int bcm5201_init(struct mii_phy* phy)
@@ -1156,7 +1156,7 @@ static struct mii_phy_def* mii_phy_table[] = {
 	NULL
 };
 
-int mii_phy_probe(struct mii_phy *phy, int mii_id)
+int sungem_phy_probe(struct mii_phy *phy, int mii_id)
 {
 	int rc;
 	u32 id;
@@ -1175,7 +1175,8 @@ int mii_phy_probe(struct mii_phy *phy, int mii_id)
 
 	/* Read ID and find matching entry */
 	id = (phy_read(phy, MII_PHYSID1) << 16 | phy_read(phy, MII_PHYSID2));
-	printk(KERN_DEBUG "PHY ID: %x, addr: %x\n", id, mii_id);
+	printk(KERN_DEBUG KBUILD_MODNAME ": " "PHY ID: %x, addr: %x\n",
+	       id, mii_id);
 	for (i=0; (def = mii_phy_table[i]) != NULL; i++)
 		if ((id & def->phy_id_mask) == def->phy_id)
 			break;
@@ -1194,6 +1195,5 @@ fail:
 	return -ENODEV;
 }
 
-EXPORT_SYMBOL(mii_phy_probe);
+EXPORT_SYMBOL(sungem_phy_probe);
 MODULE_LICENSE("GPL");
-

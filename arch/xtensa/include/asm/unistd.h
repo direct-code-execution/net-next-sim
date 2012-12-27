@@ -455,7 +455,7 @@ __SYSCALL(203, sys_reboot, 3)
 #define __NR_quotactl 				204
 __SYSCALL(204, sys_quotactl, 4)
 #define __NR_nfsservctl 			205
-__SYSCALL(205, sys_nfsservctl, 3)
+__SYSCALL(205, sys_ni_syscall, 0)
 #define __NR__sysctl 				206
 __SYSCALL(206, sys_sysctl, 1)
 #define __NR_bdflush 				207
@@ -683,8 +683,10 @@ __SYSCALL(305, sys_ni_syscall, 0)
 __SYSCALL(306, sys_eventfd, 1)
 #define __NR_recvmmsg				307
 __SYSCALL(307, sys_recvmmsg, 5)
+#define __NR_setns				308
+__SYSCALL(308, sys_setns, 2)
 
-#define __NR_syscall_count			308
+#define __NR_syscall_count			309
 
 /*
  * sysxtensa syscall handler

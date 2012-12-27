@@ -1,5 +1,5 @@
 /*
- * spi.c - SPI init/core code
+ * SPI init/core code
  *
  * Copyright (C) 2005 David Brownell
  *
@@ -28,12 +28,12 @@
 #include <linux/mod_devicetable.h>
 #include <linux/spi/spi.h>
 #include <linux/of_spi.h>
+#include <linux/pm_runtime.h>
+#include <linux/export.h>
+#include <linux/sched.h>
+#include <linux/delay.h>
+#include <linux/kthread.h>
 
-
-/* SPI bustype and spi_master class are registered after board init code
- * provides the SPI device tables, ensuring that both are present by the
- * time controller driver registration causes spi_devices to "enumerate".
- */
 static void spidev_release(struct device *dev)
 {
 	struct spi_device	*spi = to_spi_device(dev);
@@ -105,9 +105,8 @@ static int spi_uevent(struct device *dev, struct kobj_uevent_env *env)
 	return 0;
 }
 
-#ifdef	CONFIG_PM
-
-static int spi_suspend(struct device *dev, pm_message_t message)
+#ifdef CONFIG_PM_SLEEP
+static int spi_legacy_suspend(struct device *dev, pm_message_t message)
 {
 	int			value = 0;
 	struct spi_driver	*drv = to_spi_driver(dev->driver);
@@ -122,7 +121,7 @@ static int spi_suspend(struct device *dev, pm_message_t message)
 	return value;
 }
 
-static int spi_resume(struct device *dev)
+static int spi_legacy_resume(struct device *dev)
 {
 	int			value = 0;
 	struct spi_driver	*drv = to_spi_driver(dev->driver);
@@ -137,18 +136,94 @@ static int spi_resume(struct device *dev)
 	return value;
 }
 
+static int spi_pm_suspend(struct device *dev)
+{
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
+
+	if (pm)
+		return pm_generic_suspend(dev);
+	else
+		return spi_legacy_suspend(dev, PMSG_SUSPEND);
+}
+
+static int spi_pm_resume(struct device *dev)
+{
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
+
+	if (pm)
+		return pm_generic_resume(dev);
+	else
+		return spi_legacy_resume(dev);
+}
+
+static int spi_pm_freeze(struct device *dev)
+{
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
+
+	if (pm)
+		return pm_generic_freeze(dev);
+	else
+		return spi_legacy_suspend(dev, PMSG_FREEZE);
+}
+
+static int spi_pm_thaw(struct device *dev)
+{
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
+
+	if (pm)
+		return pm_generic_thaw(dev);
+	else
+		return spi_legacy_resume(dev);
+}
+
+static int spi_pm_poweroff(struct device *dev)
+{
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
+
+	if (pm)
+		return pm_generic_poweroff(dev);
+	else
+		return spi_legacy_suspend(dev, PMSG_HIBERNATE);
+}
+
+static int spi_pm_restore(struct device *dev)
+{
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
+
+	if (pm)
+		return pm_generic_restore(dev);
+	else
+		return spi_legacy_resume(dev);
+}
 #else
-#define spi_suspend	NULL
-#define spi_resume	NULL
+#define spi_pm_suspend	NULL
+#define spi_pm_resume	NULL
+#define spi_pm_freeze	NULL
+#define spi_pm_thaw	NULL
+#define spi_pm_poweroff	NULL
+#define spi_pm_restore	NULL
 #endif
+
+static const struct dev_pm_ops spi_pm = {
+	.suspend = spi_pm_suspend,
+	.resume = spi_pm_resume,
+	.freeze = spi_pm_freeze,
+	.thaw = spi_pm_thaw,
+	.poweroff = spi_pm_poweroff,
+	.restore = spi_pm_restore,
+	SET_RUNTIME_PM_OPS(
+		pm_generic_runtime_suspend,
+		pm_generic_runtime_resume,
+		pm_generic_runtime_idle
+	)
+};
 
 struct bus_type spi_bus_type = {
 	.name		= "spi",
 	.dev_attrs	= spi_dev_attrs,
 	.match		= spi_match_device,
 	.uevent		= spi_uevent,
-	.suspend	= spi_suspend,
-	.resume		= spi_resume,
+	.pm		= &spi_pm,
 };
 EXPORT_SYMBOL_GPL(spi_bus_type);
 
@@ -202,11 +277,16 @@ EXPORT_SYMBOL_GPL(spi_register_driver);
 
 struct boardinfo {
 	struct list_head	list;
-	unsigned		n_board_info;
-	struct spi_board_info	board_info[0];
+	struct spi_board_info	board_info;
 };
 
 static LIST_HEAD(board_list);
+static LIST_HEAD(spi_master_list);
+
+/*
+ * Used to protect add/del opertion for board_info list and
+ * spi_master list, and their matching process
+ */
 static DEFINE_MUTEX(board_lock);
 
 /**
@@ -242,7 +322,7 @@ struct spi_device *spi_alloc_device(struct spi_master *master)
 	}
 
 	spi->master = master;
-	spi->dev.parent = dev;
+	spi->dev.parent = &master->dev;
 	spi->dev.bus = &spi_bus_type;
 	spi->dev.release = spidev_release;
 	device_initialize(&spi->dev);
@@ -300,16 +380,16 @@ int spi_add_device(struct spi_device *spi)
 	 */
 	status = spi_setup(spi);
 	if (status < 0) {
-		dev_err(dev, "can't %s %s, status %d\n",
-				"setup", dev_name(&spi->dev), status);
+		dev_err(dev, "can't setup %s, status %d\n",
+				dev_name(&spi->dev), status);
 		goto done;
 	}
 
 	/* Device may be bound to an active driver when this returns */
 	status = device_add(&spi->dev);
 	if (status < 0)
-		dev_err(dev, "can't %s %s, status %d\n",
-				"add", dev_name(&spi->dev), status);
+		dev_err(dev, "can't add %s, status %d\n",
+				dev_name(&spi->dev), status);
 	else
 		dev_dbg(dev, "registered child %s\n", dev_name(&spi->dev));
 
@@ -371,6 +451,20 @@ struct spi_device *spi_new_device(struct spi_master *master,
 }
 EXPORT_SYMBOL_GPL(spi_new_device);
 
+static void spi_match_master_to_boardinfo(struct spi_master *master,
+				struct spi_board_info *bi)
+{
+	struct spi_device *dev;
+
+	if (master->bus_num != bi->bus_num)
+		return;
+
+	dev = spi_new_device(master, bi);
+	if (!dev)
+		dev_err(master->dev.parent, "can't create new device for %s\n",
+			bi->modalias);
+}
+
 /**
  * spi_register_board_info - register SPI devices for a given board
  * @info: array of chip descriptors
@@ -390,46 +484,316 @@ EXPORT_SYMBOL_GPL(spi_new_device);
  * The board info passed can safely be __initdata ... but be careful of
  * any embedded pointers (platform_data, etc), they're copied as-is.
  */
-int __init
+int __devinit
 spi_register_board_info(struct spi_board_info const *info, unsigned n)
 {
-	struct boardinfo	*bi;
+	struct boardinfo *bi;
+	int i;
 
-	bi = kmalloc(sizeof(*bi) + n * sizeof *info, GFP_KERNEL);
+	bi = kzalloc(n * sizeof(*bi), GFP_KERNEL);
 	if (!bi)
 		return -ENOMEM;
-	bi->n_board_info = n;
-	memcpy(bi->board_info, info, n * sizeof *info);
 
-	mutex_lock(&board_lock);
-	list_add_tail(&bi->list, &board_list);
-	mutex_unlock(&board_lock);
+	for (i = 0; i < n; i++, bi++, info++) {
+		struct spi_master *master;
+
+		memcpy(&bi->board_info, info, sizeof(*info));
+		mutex_lock(&board_lock);
+		list_add_tail(&bi->list, &board_list);
+		list_for_each_entry(master, &spi_master_list, list)
+			spi_match_master_to_boardinfo(master, &bi->board_info);
+		mutex_unlock(&board_lock);
+	}
+
 	return 0;
 }
 
-/* FIXME someone should add support for a __setup("spi", ...) that
- * creates board info from kernel command lines
+/*-------------------------------------------------------------------------*/
+
+/**
+ * spi_pump_messages - kthread work function which processes spi message queue
+ * @work: pointer to kthread work struct contained in the master struct
+ *
+ * This function checks if there is any spi message in the queue that
+ * needs processing and if so call out to the driver to initialize hardware
+ * and transfer each message.
+ *
  */
-
-static void scan_boardinfo(struct spi_master *master)
+static void spi_pump_messages(struct kthread_work *work)
 {
-	struct boardinfo	*bi;
+	struct spi_master *master =
+		container_of(work, struct spi_master, pump_messages);
+	unsigned long flags;
+	bool was_busy = false;
+	int ret;
 
-	mutex_lock(&board_lock);
-	list_for_each_entry(bi, &board_list, list) {
-		struct spi_board_info	*chip = bi->board_info;
-		unsigned		n;
+	/* Lock queue and check for queue work */
+	spin_lock_irqsave(&master->queue_lock, flags);
+	if (list_empty(&master->queue) || !master->running) {
+		if (master->busy) {
+			ret = master->unprepare_transfer_hardware(master);
+			if (ret) {
+				spin_unlock_irqrestore(&master->queue_lock, flags);
+				dev_err(&master->dev,
+					"failed to unprepare transfer hardware\n");
+				return;
+			}
+		}
+		master->busy = false;
+		spin_unlock_irqrestore(&master->queue_lock, flags);
+		return;
+	}
 
-		for (n = bi->n_board_info; n > 0; n--, chip++) {
-			if (chip->bus_num != master->bus_num)
-				continue;
-			/* NOTE: this relies on spi_new_device to
-			 * issue diagnostics when given bogus inputs
-			 */
-			(void) spi_new_device(master, chip);
+	/* Make sure we are not already running a message */
+	if (master->cur_msg) {
+		spin_unlock_irqrestore(&master->queue_lock, flags);
+		return;
+	}
+	/* Extract head of queue */
+	master->cur_msg =
+	    list_entry(master->queue.next, struct spi_message, queue);
+
+	list_del_init(&master->cur_msg->queue);
+	if (master->busy)
+		was_busy = true;
+	else
+		master->busy = true;
+	spin_unlock_irqrestore(&master->queue_lock, flags);
+
+	if (!was_busy) {
+		ret = master->prepare_transfer_hardware(master);
+		if (ret) {
+			dev_err(&master->dev,
+				"failed to prepare transfer hardware\n");
+			return;
 		}
 	}
-	mutex_unlock(&board_lock);
+
+	ret = master->transfer_one_message(master, master->cur_msg);
+	if (ret) {
+		dev_err(&master->dev,
+			"failed to transfer one message from queue\n");
+		return;
+	}
+}
+
+static int spi_init_queue(struct spi_master *master)
+{
+	struct sched_param param = { .sched_priority = MAX_RT_PRIO - 1 };
+
+	INIT_LIST_HEAD(&master->queue);
+	spin_lock_init(&master->queue_lock);
+
+	master->running = false;
+	master->busy = false;
+
+	init_kthread_worker(&master->kworker);
+	master->kworker_task = kthread_run(kthread_worker_fn,
+					   &master->kworker,
+					   dev_name(&master->dev));
+	if (IS_ERR(master->kworker_task)) {
+		dev_err(&master->dev, "failed to create message pump task\n");
+		return -ENOMEM;
+	}
+	init_kthread_work(&master->pump_messages, spi_pump_messages);
+
+	/*
+	 * Master config will indicate if this controller should run the
+	 * message pump with high (realtime) priority to reduce the transfer
+	 * latency on the bus by minimising the delay between a transfer
+	 * request and the scheduling of the message pump thread. Without this
+	 * setting the message pump thread will remain at default priority.
+	 */
+	if (master->rt) {
+		dev_info(&master->dev,
+			"will run message pump with realtime priority\n");
+		sched_setscheduler(master->kworker_task, SCHED_FIFO, &param);
+	}
+
+	return 0;
+}
+
+/**
+ * spi_get_next_queued_message() - called by driver to check for queued
+ * messages
+ * @master: the master to check for queued messages
+ *
+ * If there are more messages in the queue, the next message is returned from
+ * this call.
+ */
+struct spi_message *spi_get_next_queued_message(struct spi_master *master)
+{
+	struct spi_message *next;
+	unsigned long flags;
+
+	/* get a pointer to the next message, if any */
+	spin_lock_irqsave(&master->queue_lock, flags);
+	if (list_empty(&master->queue))
+		next = NULL;
+	else
+		next = list_entry(master->queue.next,
+				  struct spi_message, queue);
+	spin_unlock_irqrestore(&master->queue_lock, flags);
+
+	return next;
+}
+EXPORT_SYMBOL_GPL(spi_get_next_queued_message);
+
+/**
+ * spi_finalize_current_message() - the current message is complete
+ * @master: the master to return the message to
+ *
+ * Called by the driver to notify the core that the message in the front of the
+ * queue is complete and can be removed from the queue.
+ */
+void spi_finalize_current_message(struct spi_master *master)
+{
+	struct spi_message *mesg;
+	unsigned long flags;
+
+	spin_lock_irqsave(&master->queue_lock, flags);
+	mesg = master->cur_msg;
+	master->cur_msg = NULL;
+
+	queue_kthread_work(&master->kworker, &master->pump_messages);
+	spin_unlock_irqrestore(&master->queue_lock, flags);
+
+	mesg->state = NULL;
+	if (mesg->complete)
+		mesg->complete(mesg->context);
+}
+EXPORT_SYMBOL_GPL(spi_finalize_current_message);
+
+static int spi_start_queue(struct spi_master *master)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&master->queue_lock, flags);
+
+	if (master->running || master->busy) {
+		spin_unlock_irqrestore(&master->queue_lock, flags);
+		return -EBUSY;
+	}
+
+	master->running = true;
+	master->cur_msg = NULL;
+	spin_unlock_irqrestore(&master->queue_lock, flags);
+
+	queue_kthread_work(&master->kworker, &master->pump_messages);
+
+	return 0;
+}
+
+static int spi_stop_queue(struct spi_master *master)
+{
+	unsigned long flags;
+	unsigned limit = 500;
+	int ret = 0;
+
+	spin_lock_irqsave(&master->queue_lock, flags);
+
+	/*
+	 * This is a bit lame, but is optimized for the common execution path.
+	 * A wait_queue on the master->busy could be used, but then the common
+	 * execution path (pump_messages) would be required to call wake_up or
+	 * friends on every SPI message. Do this instead.
+	 */
+	while ((!list_empty(&master->queue) || master->busy) && limit--) {
+		spin_unlock_irqrestore(&master->queue_lock, flags);
+		msleep(10);
+		spin_lock_irqsave(&master->queue_lock, flags);
+	}
+
+	if (!list_empty(&master->queue) || master->busy)
+		ret = -EBUSY;
+	else
+		master->running = false;
+
+	spin_unlock_irqrestore(&master->queue_lock, flags);
+
+	if (ret) {
+		dev_warn(&master->dev,
+			 "could not stop message queue\n");
+		return ret;
+	}
+	return ret;
+}
+
+static int spi_destroy_queue(struct spi_master *master)
+{
+	int ret;
+
+	ret = spi_stop_queue(master);
+
+	/*
+	 * flush_kthread_worker will block until all work is done.
+	 * If the reason that stop_queue timed out is that the work will never
+	 * finish, then it does no good to call flush/stop thread, so
+	 * return anyway.
+	 */
+	if (ret) {
+		dev_err(&master->dev, "problem destroying queue\n");
+		return ret;
+	}
+
+	flush_kthread_worker(&master->kworker);
+	kthread_stop(master->kworker_task);
+
+	return 0;
+}
+
+/**
+ * spi_queued_transfer - transfer function for queued transfers
+ * @spi: spi device which is requesting transfer
+ * @msg: spi message which is to handled is queued to driver queue
+ */
+static int spi_queued_transfer(struct spi_device *spi, struct spi_message *msg)
+{
+	struct spi_master *master = spi->master;
+	unsigned long flags;
+
+	spin_lock_irqsave(&master->queue_lock, flags);
+
+	if (!master->running) {
+		spin_unlock_irqrestore(&master->queue_lock, flags);
+		return -ESHUTDOWN;
+	}
+	msg->actual_length = 0;
+	msg->status = -EINPROGRESS;
+
+	list_add_tail(&msg->queue, &master->queue);
+	if (master->running && !master->busy)
+		queue_kthread_work(&master->kworker, &master->pump_messages);
+
+	spin_unlock_irqrestore(&master->queue_lock, flags);
+	return 0;
+}
+
+static int spi_master_initialize_queue(struct spi_master *master)
+{
+	int ret;
+
+	master->queued = true;
+	master->transfer = spi_queued_transfer;
+
+	/* Initialize and start queue */
+	ret = spi_init_queue(master);
+	if (ret) {
+		dev_err(&master->dev, "problem initializing queue\n");
+		goto err_init_queue;
+	}
+	ret = spi_start_queue(master);
+	if (ret) {
+		dev_err(&master->dev, "problem starting queue\n");
+		goto err_start_queue;
+	}
+
+	return 0;
+
+err_start_queue:
+err_init_queue:
+	spi_destroy_queue(master);
+	return ret;
 }
 
 /*-------------------------------------------------------------------------*/
@@ -449,6 +813,7 @@ static struct class spi_master_class = {
 };
 
 
+
 /**
  * spi_alloc_master - allocate SPI master controller
  * @dev: the controller, possibly using the platform_bus
@@ -466,7 +831,8 @@ static struct class spi_master_class = {
  *
  * The caller is responsible for assigning the bus number and initializing
  * the master's methods before calling spi_register_master(); and (after errors
- * adding the device) calling spi_master_put() to prevent a memory leak.
+ * adding the device) calling spi_master_put() and kfree() to prevent a memory
+ * leak.
  */
 struct spi_master *spi_alloc_master(struct device *dev, unsigned size)
 {
@@ -512,6 +878,7 @@ int spi_register_master(struct spi_master *master)
 {
 	static atomic_t		dyn_bus_id = ATOMIC_INIT((1<<15) - 1);
 	struct device		*dev = master->dev.parent;
+	struct boardinfo	*bi;
 	int			status = -ENODEV;
 	int			dynamic = 0;
 
@@ -547,9 +914,22 @@ int spi_register_master(struct spi_master *master)
 	dev_dbg(dev, "registered master %s%s\n", dev_name(&master->dev),
 			dynamic ? " (dynamic)" : "");
 
-	/* populate children from any spi device tables */
-	scan_boardinfo(master);
-	status = 0;
+	/* If we're using a queued driver, start the queue */
+	if (master->transfer)
+		dev_info(dev, "master is unqueued, this is deprecated\n");
+	else {
+		status = spi_master_initialize_queue(master);
+		if (status) {
+			device_unregister(&master->dev);
+			goto done;
+		}
+	}
+
+	mutex_lock(&board_lock);
+	list_add_tail(&master->list, &spi_master_list);
+	list_for_each_entry(bi, &board_list, list)
+		spi_match_master_to_boardinfo(master, &bi->board_info);
+	mutex_unlock(&board_lock);
 
 	/* Register devices from the device tree */
 	of_register_spi_devices(master);
@@ -557,7 +937,6 @@ done:
 	return status;
 }
 EXPORT_SYMBOL_GPL(spi_register_master);
-
 
 static int __unregister(struct device *dev, void *null)
 {
@@ -579,10 +958,50 @@ void spi_unregister_master(struct spi_master *master)
 {
 	int dummy;
 
+	if (master->queued) {
+		if (spi_destroy_queue(master))
+			dev_err(&master->dev, "queue remove failed\n");
+	}
+
+	mutex_lock(&board_lock);
+	list_del(&master->list);
+	mutex_unlock(&board_lock);
+
 	dummy = device_for_each_child(&master->dev, NULL, __unregister);
 	device_unregister(&master->dev);
 }
 EXPORT_SYMBOL_GPL(spi_unregister_master);
+
+int spi_master_suspend(struct spi_master *master)
+{
+	int ret;
+
+	/* Basically no-ops for non-queued masters */
+	if (!master->queued)
+		return 0;
+
+	ret = spi_stop_queue(master);
+	if (ret)
+		dev_err(&master->dev, "queue stop failed\n");
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(spi_master_suspend);
+
+int spi_master_resume(struct spi_master *master)
+{
+	int ret;
+
+	if (!master->queued)
+		return 0;
+
+	ret = spi_start_queue(master);
+	if (ret)
+		dev_err(&master->dev, "queue restart failed\n");
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(spi_master_resume);
 
 static int __spi_master_match(struct device *dev, void *data)
 {
@@ -652,7 +1071,7 @@ int spi_setup(struct spi_device *spi)
 	 */
 	bad_bits = spi->mode & ~spi->master->mode_bits;
 	if (bad_bits) {
-		dev_dbg(&spi->dev, "setup: unsupported mode bits %x\n",
+		dev_err(&spi->dev, "setup: unsupported mode bits %x\n",
 			bad_bits);
 		return -EINVAL;
 	}
@@ -876,7 +1295,7 @@ EXPORT_SYMBOL_GPL(spi_sync);
  * drivers may DMA directly into and out of the message buffers.
  *
  * This call should be used by drivers that require exclusive access to the
- * SPI bus. It has to be preceeded by a spi_bus_lock call. The SPI bus must
+ * SPI bus. It has to be preceded by a spi_bus_lock call. The SPI bus must
  * be released by a spi_bus_unlock call when the exclusive access is over.
  *
  * It returns zero on success, else a negative error code.
@@ -966,8 +1385,8 @@ static u8	*buf;
  * spi_{async,sync}() calls with dma-safe buffers.
  */
 int spi_write_then_read(struct spi_device *spi,
-		const u8 *txbuf, unsigned n_tx,
-		u8 *rxbuf, unsigned n_rx)
+		const void *txbuf, unsigned n_tx,
+		void *rxbuf, unsigned n_rx)
 {
 	static DEFINE_MUTEX(lock);
 

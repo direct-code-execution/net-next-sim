@@ -29,6 +29,7 @@
 #include "pvrusb2-v4l2.h"
 #include "pvrusb2-ioread.h"
 #include <linux/videodev2.h>
+#include <linux/module.h>
 #include <media/v4l2-dev.h>
 #include <media/v4l2-common.h>
 #include <media/v4l2-ioctl.h>
@@ -91,11 +92,10 @@ static struct v4l2_capability pvr_capability ={
 	.driver         = "pvrusb2",
 	.card           = "Hauppauge WinTV pvr-usb2",
 	.bus_info       = "usb",
-	.version        = KERNEL_VERSION(0, 9, 0),
+	.version        = LINUX_VERSION_CODE,
 	.capabilities   = (V4L2_CAP_VIDEO_CAPTURE |
 			   V4L2_CAP_TUNER | V4L2_CAP_AUDIO | V4L2_CAP_RADIO |
 			   V4L2_CAP_READWRITE),
-	.reserved       = {0,0,0,0}
 };
 
 static struct v4l2_fmtdesc pvr_fmtdesc [] = {
@@ -224,6 +224,14 @@ static long pvr2_v4l2_do_ioctl(struct file *file, unsigned int cmd, void *arg)
 		struct v4l2_standard *vs = (struct v4l2_standard *)arg;
 		int idx = vs->index;
 		ret = pvr2_hdw_get_stdenum_value(hdw,vs,idx+1);
+		break;
+	}
+
+	case VIDIOC_QUERYSTD:
+	{
+		v4l2_std_id *std = arg;
+		*std = V4L2_STD_ALL;
+		ret = pvr2_hdw_get_detected_std(hdw, std);
 		break;
 	}
 
@@ -369,11 +377,6 @@ static long pvr2_v4l2_do_ioctl(struct file *file, unsigned int cmd, void *arg)
 		break;
 	}
 
-	case VIDIOC_S_AUDIO:
-	{
-		ret = -EINVAL;
-		break;
-	}
 	case VIDIOC_G_TUNER:
 	{
 		struct v4l2_tuner *vt = (struct v4l2_tuner *)arg;
@@ -795,12 +798,10 @@ static long pvr2_v4l2_do_ioctl(struct file *file, unsigned int cmd, void *arg)
 	case VIDIOC_S_CROP:
 	{
 		struct v4l2_crop *crop = (struct v4l2_crop *)arg;
-		struct v4l2_cropcap cap;
 		if (crop->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) {
 			ret = -EINVAL;
 			break;
 		}
-		cap.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		ret = pvr2_ctrl_set_value(
 			pvr2_hdw_get_ctrl_by_id(hdw, PVR2_CID_CROPL),
 			crop->c.left);
@@ -852,8 +853,8 @@ static long pvr2_v4l2_do_ioctl(struct file *file, unsigned int cmd, void *arg)
 #endif
 
 	default :
-		ret = v4l_compat_translate_ioctl(file, cmd,
-						 arg, pvr2_v4l2_do_ioctl);
+		ret = -ENOTTY;
+		break;
 	}
 
 	pvr2_hdw_commit_ctl(hdw);

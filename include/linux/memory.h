@@ -15,14 +15,18 @@
 #ifndef _LINUX_MEMORY_H_
 #define _LINUX_MEMORY_H_
 
-#include <linux/sysdev.h>
 #include <linux/node.h>
 #include <linux/compiler.h>
 #include <linux/mutex.h>
 
+#define MIN_MEMORY_BLOCK_SIZE     (1 << SECTION_SIZE_BITS)
+
 struct memory_block {
-	unsigned long phys_index;
+	unsigned long start_section_nr;
+	unsigned long end_section_nr;
 	unsigned long state;
+	int section_count;
+
 	/*
 	 * This serializes all state change requests.  It isn't
 	 * held during creation because the control files are
@@ -33,7 +37,7 @@ struct memory_block {
 	int phys_device;		/* to which fru does this belong? */
 	void *hw;			/* optional pointer to fw/hw data */
 	int (*phys_callback)(struct memory_block *);
-	struct sys_device sysdev;
+	struct device dev;
 };
 
 int arch_get_memory_phys_device(unsigned long start_pfn);
@@ -113,6 +117,8 @@ extern int memory_dev_init(void);
 extern int remove_memory_block(unsigned long, struct mem_section *, int);
 extern int memory_notify(unsigned long val, void *v);
 extern int memory_isolate_notify(unsigned long val, void *v);
+extern struct memory_block *find_memory_block_hinted(struct mem_section *,
+							struct memory_block *);
 extern struct memory_block *find_memory_block(struct mem_section *);
 #define CONFIG_MEM_BLOCK_SIZE	(PAGES_PER_SECTION<<PAGE_SHIFT)
 enum mem_add_context { BOOT, HOTPLUG };

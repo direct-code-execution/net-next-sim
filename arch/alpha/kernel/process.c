@@ -31,7 +31,6 @@
 
 #include <asm/reg.h>
 #include <asm/uaccess.h>
-#include <asm/system.h>
 #include <asm/io.h>
 #include <asm/pgtable.h>
 #include <asm/hwrpb.h>
@@ -121,7 +120,7 @@ common_shutdown_1(void *generic_ptr)
 	/* Wait for the secondaries to halt. */
 	set_cpu_present(boot_cpuid, false);
 	set_cpu_possible(boot_cpuid, false);
-	while (cpus_weight(cpu_present_map))
+	while (cpumask_weight(cpu_present_mask))
 		barrier();
 #endif
 
@@ -200,7 +199,6 @@ show_regs(struct pt_regs *regs)
 void
 start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
 {
-	set_fs(USER_DS);
 	regs->pc = pc;
 	regs->ps = 8;
 	wrusp(sp);

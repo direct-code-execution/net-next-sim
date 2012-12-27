@@ -110,15 +110,6 @@ static const unsigned short bfin_nfc_pin_req[] =
 	 0};
 
 #ifdef CONFIG_MTD_NAND_BF5XX_BOOTROM_ECC
-static uint8_t bbt_pattern[] = { 0xff };
-
-static struct nand_bbt_descr bootrom_bbt = {
-	.options = 0,
-	.offs = 63,
-	.len = 1,
-	.pattern = bbt_pattern,
-};
-
 static struct nand_ecclayout bootrom_ecclayout = {
 	.eccbytes = 24,
 	.eccpos = {
@@ -668,15 +659,10 @@ static int bf5xx_nand_hw_init(struct bf5xx_nand_info *info)
 static int __devinit bf5xx_nand_add_partition(struct bf5xx_nand_info *info)
 {
 	struct mtd_info *mtd = &info->mtd;
-
-#ifdef CONFIG_MTD_PARTITIONS
 	struct mtd_partition *parts = info->platform->partitions;
 	int nr = info->platform->nr_partitions;
 
-	return add_mtd_partitions(mtd, parts, nr);
-#else
-	return add_mtd_device(mtd);
-#endif
+	return mtd_device_register(mtd, parts, nr);
 }
 
 static int __devexit bf5xx_nand_remove(struct platform_device *pdev)
@@ -716,9 +702,11 @@ static int bf5xx_nand_scan(struct mtd_info *mtd)
 		if (likely(mtd->writesize >= 512)) {
 			chip->ecc.size = 512;
 			chip->ecc.bytes = 6;
+			chip->ecc.strength = 2;
 		} else {
 			chip->ecc.size = 256;
 			chip->ecc.bytes = 3;
+			chip->ecc.strength = 1;
 			bfin_write_NFC_CTL(bfin_read_NFC_CTL() & ~(1 << NFC_PG_SIZE_OFFSET));
 			SSYNC();
 		}
@@ -809,7 +797,6 @@ static int __devinit bf5xx_nand_probe(struct platform_device *pdev)
 	/* setup hardware ECC data struct */
 	if (hardware_ecc) {
 #ifdef CONFIG_MTD_NAND_BF5XX_BOOTROM_ECC
-		chip->badblock_pattern = &bootrom_bbt;
 		chip->ecc.layout = &bootrom_ecclayout;
 #endif
 		chip->read_buf      = bf5xx_nand_dma_read_buf;
@@ -829,6 +816,10 @@ static int __devinit bf5xx_nand_probe(struct platform_device *pdev)
 		err = -ENXIO;
 		goto out_err_nand_scan;
 	}
+
+#ifdef CONFIG_MTD_NAND_BF5XX_BOOTROM_ECC
+	chip->badblockpos = 63;
+#endif
 
 	/* add NAND partition */
 	bf5xx_nand_add_partition(info);

@@ -15,6 +15,7 @@
 #include <linux/bug.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/regulator/driver.h>
 #include <linux/mfd/wm8400-private.h>
 
@@ -55,7 +56,7 @@ static int wm8400_ldo_list_voltage(struct regulator_dev *dev,
 		return 1600000 + ((selector - 14) * 100000);
 }
 
-static int wm8400_ldo_get_voltage(struct regulator_dev *dev)
+static int wm8400_ldo_get_voltage_sel(struct regulator_dev *dev)
 {
 	struct wm8400 *wm8400 = rdev_get_drvdata(dev);
 	u16 val;
@@ -63,11 +64,11 @@ static int wm8400_ldo_get_voltage(struct regulator_dev *dev)
 	val = wm8400_reg_read(wm8400, WM8400_LDO1_CONTROL + rdev_get_id(dev));
 	val &= WM8400_LDO1_VSEL_MASK;
 
-	return wm8400_ldo_list_voltage(dev, val);
+	return val;
 }
 
 static int wm8400_ldo_set_voltage(struct regulator_dev *dev,
-				  int min_uV, int max_uV)
+				  int min_uV, int max_uV, unsigned *selector)
 {
 	struct wm8400 *wm8400 = rdev_get_drvdata(dev);
 	u16 val;
@@ -77,14 +78,14 @@ static int wm8400_ldo_set_voltage(struct regulator_dev *dev,
 
 	if (min_uV < 1700000) {
 		/* Steps of 50mV from 900mV;  */
-		val = (min_uV - 850001) / 50000;
+		val = DIV_ROUND_UP(min_uV - 900000, 50000);
 
 		if ((val * 50000) + 900000 > max_uV)
 			return -EINVAL;
 		BUG_ON((val * 50000) + 900000 < min_uV);
 	} else {
 		/* Steps of 100mV from 1700mV */
-		val = ((min_uV - 1600001) / 100000);
+		val = DIV_ROUND_UP(min_uV - 1700000, 100000);
 
 		if ((val * 100000) + 1700000 > max_uV)
 			return -EINVAL;
@@ -92,6 +93,8 @@ static int wm8400_ldo_set_voltage(struct regulator_dev *dev,
 
 		val += 0xf;
 	}
+
+	*selector = val;
 
 	return wm8400_set_bits(wm8400, WM8400_LDO1_CONTROL + rdev_get_id(dev),
 			       WM8400_LDO1_VSEL_MASK, val);
@@ -102,7 +105,7 @@ static struct regulator_ops wm8400_ldo_ops = {
 	.enable = wm8400_ldo_enable,
 	.disable = wm8400_ldo_disable,
 	.list_voltage = wm8400_ldo_list_voltage,
-	.get_voltage = wm8400_ldo_get_voltage,
+	.get_voltage_sel = wm8400_ldo_get_voltage_sel,
 	.set_voltage = wm8400_ldo_set_voltage,
 };
 
@@ -143,7 +146,7 @@ static int wm8400_dcdc_list_voltage(struct regulator_dev *dev,
 	return 850000 + (selector * 25000);
 }
 
-static int wm8400_dcdc_get_voltage(struct regulator_dev *dev)
+static int wm8400_dcdc_get_voltage_sel(struct regulator_dev *dev)
 {
 	struct wm8400 *wm8400 = rdev_get_drvdata(dev);
 	u16 val;
@@ -152,11 +155,11 @@ static int wm8400_dcdc_get_voltage(struct regulator_dev *dev)
 	val = wm8400_reg_read(wm8400, WM8400_DCDC1_CONTROL_1 + offset);
 	val &= WM8400_DC1_VSEL_MASK;
 
-	return 850000 + (25000 * val);
+	return val;
 }
 
 static int wm8400_dcdc_set_voltage(struct regulator_dev *dev,
-				  int min_uV, int max_uV)
+				   int min_uV, int max_uV, unsigned *selector)
 {
 	struct wm8400 *wm8400 = rdev_get_drvdata(dev);
 	u16 val;
@@ -165,11 +168,13 @@ static int wm8400_dcdc_set_voltage(struct regulator_dev *dev,
 	if (min_uV < 850000)
 		return -EINVAL;
 
-	val = (min_uV - 825001) / 25000;
+	val = DIV_ROUND_UP(min_uV - 850000, 25000);
 
 	if (850000 + (25000 * val) > max_uV)
 		return -EINVAL;
 	BUG_ON(850000 + (25000 * val) < min_uV);
+
+	*selector = val;
 
 	return wm8400_set_bits(wm8400, WM8400_DCDC1_CONTROL_1 + offset,
 			       WM8400_DC1_VSEL_MASK, val);
@@ -257,7 +262,7 @@ static struct regulator_ops wm8400_dcdc_ops = {
 	.enable = wm8400_dcdc_enable,
 	.disable = wm8400_dcdc_disable,
 	.list_voltage = wm8400_dcdc_list_voltage,
-	.get_voltage = wm8400_dcdc_get_voltage,
+	.get_voltage_sel = wm8400_dcdc_get_voltage_sel,
 	.set_voltage = wm8400_dcdc_set_voltage,
 	.get_mode = wm8400_dcdc_get_mode,
 	.set_mode = wm8400_dcdc_set_mode,
@@ -321,7 +326,7 @@ static int __devinit wm8400_regulator_probe(struct platform_device *pdev)
 	struct regulator_dev *rdev;
 
 	rdev = regulator_register(&regulators[pdev->id], &pdev->dev,
-				  pdev->dev.platform_data, wm8400);
+				  pdev->dev.platform_data, wm8400, NULL);
 
 	if (IS_ERR(rdev))
 		return PTR_ERR(rdev);

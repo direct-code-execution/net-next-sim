@@ -47,11 +47,12 @@ struct iscsi_segment {
 	struct scatterlist	*sg;
 	void			*sg_mapped;
 	unsigned int		sg_offset;
+	bool			atomic_mapped;
 
 	iscsi_segment_done_fn_t	*done;
 };
 
-/* Socket connection recieve helper */
+/* Socket connection receive helper */
 struct iscsi_tcp_recv {
 	struct iscsi_hdr	*hdr;
 	struct iscsi_segment	segment;
@@ -127,7 +128,7 @@ extern void iscsi_tcp_conn_teardown(struct iscsi_cls_conn *cls_conn);
 /* misc helpers */
 extern int iscsi_tcp_r2tpool_alloc(struct iscsi_session *session);
 extern void iscsi_tcp_r2tpool_free(struct iscsi_session *session);
-
+extern int iscsi_tcp_set_max_r2t(struct iscsi_conn *conn, char *buf);
 extern void iscsi_tcp_conn_get_stats(struct iscsi_cls_conn *cls_conn,
 				     struct iscsi_stats *stats);
 #endif /* LIBISCSI_TCP_H */

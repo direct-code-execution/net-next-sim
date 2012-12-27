@@ -12,16 +12,17 @@
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <linux/fb.h>
 #include <linux/i2c.h>
 #include <linux/backlight.h>
 #include <linux/mfd/88pm860x.h>
-#include <linux/slab.h>
+#include <linux/module.h>
 
 #define MAX_BRIGHTNESS		(0xFF)
 #define MIN_BRIGHTNESS		(0)
 
-#define CURRENT_MASK		(0x1F << 1)
+#define CURRENT_BITMASK		(0x1F << 1)
 
 struct pm860x_backlight_data {
 	struct pm860x_chip *chip;
@@ -66,6 +67,28 @@ static inline int wled_idc(int port)
 	return ret;
 }
 
+static int backlight_power_set(struct pm860x_chip *chip, int port,
+		int on)
+{
+	int ret = -EINVAL;
+
+	switch (port) {
+	case PM8606_BACKLIGHT1:
+		ret = on ? pm8606_osc_enable(chip, WLED1_DUTY) :
+			pm8606_osc_disable(chip, WLED1_DUTY);
+		break;
+	case PM8606_BACKLIGHT2:
+		ret = on ? pm8606_osc_enable(chip, WLED2_DUTY) :
+			pm8606_osc_disable(chip, WLED2_DUTY);
+		break;
+	case PM8606_BACKLIGHT3:
+		ret = on ? pm8606_osc_enable(chip, WLED3_DUTY) :
+			pm8606_osc_disable(chip, WLED3_DUTY);
+		break;
+	}
+	return ret;
+}
+
 static int pm860x_backlight_set(struct backlight_device *bl, int brightness)
 {
 	struct pm860x_backlight_data *data = bl_get_data(bl);
@@ -78,6 +101,9 @@ static int pm860x_backlight_set(struct backlight_device *bl, int brightness)
 	else
 		value = brightness;
 
+	if (brightness)
+		backlight_power_set(chip, data->port, 1);
+
 	ret = pm860x_reg_write(data->i2c, wled_a(data->port), value);
 	if (ret < 0)
 		goto out;
@@ -85,7 +111,7 @@ static int pm860x_backlight_set(struct backlight_device *bl, int brightness)
 	if ((data->current_brightness == 0) && brightness) {
 		if (data->iset) {
 			ret = pm860x_set_bits(data->i2c, wled_idc(data->port),
-					      CURRENT_MASK, data->iset);
+					      CURRENT_BITMASK, data->iset);
 			if (ret < 0)
 				goto out;
 		}
@@ -113,6 +139,9 @@ static int pm860x_backlight_set(struct backlight_device *bl, int brightness)
 	}
 	if (ret < 0)
 		goto out;
+
+	if (brightness == 0)
+		backlight_power_set(chip, data->port, 0);
 
 	dev_dbg(chip->dev, "set brightness %d\n", value);
 	data->current_brightness = value;
@@ -155,41 +184,20 @@ out:
 	return -EINVAL;
 }
 
-static struct backlight_ops pm860x_backlight_ops = {
+static const struct backlight_ops pm860x_backlight_ops = {
 	.options	= BL_CORE_SUSPENDRESUME,
 	.update_status	= pm860x_backlight_update_status,
 	.get_brightness	= pm860x_backlight_get_brightness,
 };
 
-static int __check_device(struct pm860x_backlight_pdata *pdata, char *name)
-{
-	struct pm860x_backlight_pdata *p = pdata;
-	int ret = -EINVAL;
-
-	while (p && p->id) {
-		if ((p->id != PM8606_ID_BACKLIGHT) || (p->flags < 0))
-			break;
-
-		if (!strncmp(name, pm860x_backlight_name[p->flags],
-			MFD_NAME_SIZE)) {
-			ret = (int)p->flags;
-			break;
-		}
-		p++;
-	}
-	return ret;
-}
-
 static int pm860x_backlight_probe(struct platform_device *pdev)
 {
 	struct pm860x_chip *chip = dev_get_drvdata(pdev->dev.parent);
-	struct pm860x_platform_data *pm860x_pdata;
 	struct pm860x_backlight_pdata *pdata = NULL;
 	struct pm860x_backlight_data *data;
 	struct backlight_device *bl;
 	struct resource *res;
 	struct backlight_properties props;
-	unsigned char value;
 	char name[MFD_NAME_SIZE];
 	int ret;
 
@@ -199,17 +207,15 @@ static int pm860x_backlight_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	if (pdev->dev.parent->platform_data) {
-		pm860x_pdata = pdev->dev.parent->platform_data;
-		pdata = pm860x_pdata->backlight;
-	}
+	pdata = pdev->dev.platform_data;
 	if (pdata == NULL) {
 		dev_err(&pdev->dev, "platform data isn't assigned to "
 			"backlight\n");
 		return -EINVAL;
 	}
 
-	data = kzalloc(sizeof(struct pm860x_backlight_data), GFP_KERNEL);
+	data = devm_kzalloc(&pdev->dev, sizeof(struct pm860x_backlight_data),
+			    GFP_KERNEL);
 	if (data == NULL)
 		return -ENOMEM;
 	strncpy(name, res->name, MFD_NAME_SIZE);
@@ -219,46 +225,25 @@ static int pm860x_backlight_probe(struct platform_device *pdev)
 	data->current_brightness = MAX_BRIGHTNESS;
 	data->pwm = pdata->pwm;
 	data->iset = pdata->iset;
-	data->port = __check_device(pdata, name);
+	data->port = pdata->flags;
 	if (data->port < 0) {
 		dev_err(&pdev->dev, "wrong platform data is assigned");
-		kfree(data);
 		return -EINVAL;
 	}
 
 	memset(&props, 0, sizeof(struct backlight_properties));
+	props.type = BACKLIGHT_RAW;
 	props.max_brightness = MAX_BRIGHTNESS;
 	bl = backlight_device_register(name, &pdev->dev, data,
 					&pm860x_backlight_ops, &props);
 	if (IS_ERR(bl)) {
 		dev_err(&pdev->dev, "failed to register backlight\n");
-		kfree(data);
 		return PTR_ERR(bl);
 	}
 	bl->props.brightness = MAX_BRIGHTNESS;
 
 	platform_set_drvdata(pdev, bl);
 
-	/* Enable reference VSYS */
-	ret = pm860x_reg_read(data->i2c, PM8606_VSYS);
-	if (ret < 0)
-		goto out;
-	if ((ret & PM8606_VSYS_EN) == 0) {
-		value = ret | PM8606_VSYS_EN;
-		ret = pm860x_reg_write(data->i2c, PM8606_VSYS, value);
-		if (ret < 0)
-			goto out;
-	}
-	/* Enable reference OSC */
-	ret = pm860x_reg_read(data->i2c, PM8606_MISC);
-	if (ret < 0)
-		goto out;
-	if ((ret & PM8606_MISC_OSC_EN) == 0) {
-		value = ret | PM8606_MISC_OSC_EN;
-		ret = pm860x_reg_write(data->i2c, PM8606_MISC, value);
-		if (ret < 0)
-			goto out;
-	}
 	/* read current backlight */
 	ret = pm860x_backlight_get_brightness(bl);
 	if (ret < 0)
@@ -268,17 +253,14 @@ static int pm860x_backlight_probe(struct platform_device *pdev)
 	return 0;
 out:
 	backlight_device_unregister(bl);
-	kfree(data);
 	return ret;
 }
 
 static int pm860x_backlight_remove(struct platform_device *pdev)
 {
 	struct backlight_device *bl = platform_get_drvdata(pdev);
-	struct pm860x_backlight_data *data = bl_get_data(bl);
 
 	backlight_device_unregister(bl);
-	kfree(data);
 	return 0;
 }
 
@@ -291,17 +273,7 @@ static struct platform_driver pm860x_backlight_driver = {
 	.remove		= pm860x_backlight_remove,
 };
 
-static int __init pm860x_backlight_init(void)
-{
-	return platform_driver_register(&pm860x_backlight_driver);
-}
-module_init(pm860x_backlight_init);
-
-static void __exit pm860x_backlight_exit(void)
-{
-	platform_driver_unregister(&pm860x_backlight_driver);
-}
-module_exit(pm860x_backlight_exit);
+module_platform_driver(pm860x_backlight_driver);
 
 MODULE_DESCRIPTION("Backlight Driver for Marvell Semiconductor 88PM8606");
 MODULE_AUTHOR("Haojian Zhuang <haojian.zhuang@marvell.com>");

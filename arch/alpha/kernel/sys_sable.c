@@ -16,7 +16,6 @@
 #include <linux/init.h>
 
 #include <asm/ptrace.h>
-#include <asm/system.h>
 #include <asm/dma.h>
 #include <asm/irq.h>
 #include <asm/mmu_context.h>
@@ -194,7 +193,7 @@ sable_init_irq(void)
  */
 
 static int __init
-sable_map_irq(struct pci_dev *dev, u8 slot, u8 pin)
+sable_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 {
 	static char irq_tab[9][5] __initdata = {
 		/*INT    INTA   INTB   INTC   INTD */
@@ -376,7 +375,7 @@ lynx_init_irq(void)
  */
 
 static int __init
-lynx_map_irq(struct pci_dev *dev, u8 slot, u8 pin)
+lynx_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 {
 	static char irq_tab[19][5] __initdata = {
 		/*INT    INTA   INTB   INTC   INTD */
@@ -443,11 +442,11 @@ lynx_swizzle(struct pci_dev *dev, u8 *pinp)
 /* GENERIC irq routines */
 
 static inline void
-sable_lynx_enable_irq(unsigned int irq)
+sable_lynx_enable_irq(struct irq_data *d)
 {
 	unsigned long bit, mask;
 
-	bit = sable_lynx_irq_swizzle->irq_to_mask[irq];
+	bit = sable_lynx_irq_swizzle->irq_to_mask[d->irq];
 	spin_lock(&sable_lynx_irq_lock);
 	mask = sable_lynx_irq_swizzle->shadow_mask &= ~(1UL << bit);
 	sable_lynx_irq_swizzle->update_irq_hw(bit, mask);
@@ -459,11 +458,11 @@ sable_lynx_enable_irq(unsigned int irq)
 }
 
 static void
-sable_lynx_disable_irq(unsigned int irq)
+sable_lynx_disable_irq(struct irq_data *d)
 {
 	unsigned long bit, mask;
 
-	bit = sable_lynx_irq_swizzle->irq_to_mask[irq];
+	bit = sable_lynx_irq_swizzle->irq_to_mask[d->irq];
 	spin_lock(&sable_lynx_irq_lock);
 	mask = sable_lynx_irq_swizzle->shadow_mask |= 1UL << bit;
 	sable_lynx_irq_swizzle->update_irq_hw(bit, mask);
@@ -474,26 +473,12 @@ sable_lynx_disable_irq(unsigned int irq)
 #endif
 }
 
-static unsigned int
-sable_lynx_startup_irq(unsigned int irq)
-{
-	sable_lynx_enable_irq(irq);
-	return 0;
-}
-
 static void
-sable_lynx_end_irq(unsigned int irq)
-{
-	if (!(irq_desc[irq].status & (IRQ_DISABLED|IRQ_INPROGRESS)))
-		sable_lynx_enable_irq(irq);
-}
-
-static void
-sable_lynx_mask_and_ack_irq(unsigned int irq)
+sable_lynx_mask_and_ack_irq(struct irq_data *d)
 {
 	unsigned long bit, mask;
 
-	bit = sable_lynx_irq_swizzle->irq_to_mask[irq];
+	bit = sable_lynx_irq_swizzle->irq_to_mask[d->irq];
 	spin_lock(&sable_lynx_irq_lock);
 	mask = sable_lynx_irq_swizzle->shadow_mask |= 1UL << bit;
 	sable_lynx_irq_swizzle->update_irq_hw(bit, mask);
@@ -503,12 +488,9 @@ sable_lynx_mask_and_ack_irq(unsigned int irq)
 
 static struct irq_chip sable_lynx_irq_type = {
 	.name		= "SABLE/LYNX",
-	.startup	= sable_lynx_startup_irq,
-	.shutdown	= sable_lynx_disable_irq,
-	.enable		= sable_lynx_enable_irq,
-	.disable	= sable_lynx_disable_irq,
-	.ack		= sable_lynx_mask_and_ack_irq,
-	.end		= sable_lynx_end_irq,
+	.irq_unmask	= sable_lynx_enable_irq,
+	.irq_mask	= sable_lynx_disable_irq,
+	.irq_mask_ack	= sable_lynx_mask_and_ack_irq,
 };
 
 static void 
@@ -535,8 +517,9 @@ sable_lynx_init_irq(int nr_of_irqs)
 	long i;
 
 	for (i = 0; i < nr_of_irqs; ++i) {
-		irq_desc[i].status = IRQ_DISABLED | IRQ_LEVEL;
-		irq_desc[i].chip = &sable_lynx_irq_type;
+		irq_set_chip_and_handler(i, &sable_lynx_irq_type,
+					 handle_level_irq);
+		irq_set_status_flags(i, IRQ_LEVEL);
 	}
 
 	common_init_isa_dma();

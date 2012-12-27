@@ -10,9 +10,6 @@
  *
  * Au1xxx-PSC I2S glue.
  *
- * NOTE: all of these drivers can only work with a SINGLE instance
- *	 of a PSC. Multiple independent audio devices are impossible
- *	 with ASoC v1.
  * NOTE: so far only PSC slave mode (bit- and frameclock) is supported.
  */
 
@@ -45,22 +42,19 @@
 	(SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_LE)
 
 #define I2SSTAT_BUSY(stype)	\
-	((stype) == PCM_TX ? PSC_I2SSTAT_TB : PSC_I2SSTAT_RB)
+	((stype) == SNDRV_PCM_STREAM_PLAYBACK ? PSC_I2SSTAT_TB : PSC_I2SSTAT_RB)
 #define I2SPCR_START(stype)	\
-	((stype) == PCM_TX ? PSC_I2SPCR_TS : PSC_I2SPCR_RS)
+	((stype) == SNDRV_PCM_STREAM_PLAYBACK ? PSC_I2SPCR_TS : PSC_I2SPCR_RS)
 #define I2SPCR_STOP(stype)	\
-	((stype) == PCM_TX ? PSC_I2SPCR_TP : PSC_I2SPCR_RP)
+	((stype) == SNDRV_PCM_STREAM_PLAYBACK ? PSC_I2SPCR_TP : PSC_I2SPCR_RP)
 #define I2SPCR_CLRFIFO(stype)	\
-	((stype) == PCM_TX ? PSC_I2SPCR_TC : PSC_I2SPCR_RC)
+	((stype) == SNDRV_PCM_STREAM_PLAYBACK ? PSC_I2SPCR_TC : PSC_I2SPCR_RC)
 
-
-/* instance data. There can be only one, MacLeod!!!! */
-static struct au1xpsc_audio_data *au1xpsc_i2s_workdata;
 
 static int au1xpsc_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
 			       unsigned int fmt)
 {
-	struct au1xpsc_audio_data *pscdata = au1xpsc_i2s_workdata;
+	struct au1xpsc_audio_data *pscdata = snd_soc_dai_get_drvdata(cpu_dai);
 	unsigned long ct;
 	int ret;
 
@@ -120,7 +114,7 @@ static int au1xpsc_i2s_hw_params(struct snd_pcm_substream *substream,
 				 struct snd_pcm_hw_params *params,
 				 struct snd_soc_dai *dai)
 {
-	struct au1xpsc_audio_data *pscdata = au1xpsc_i2s_workdata;
+	struct au1xpsc_audio_data *pscdata = snd_soc_dai_get_drvdata(dai);
 
 	int cfgbits;
 	unsigned long stat;
@@ -245,8 +239,8 @@ static int au1xpsc_i2s_stop(struct au1xpsc_audio_data *pscdata, int stype)
 static int au1xpsc_i2s_trigger(struct snd_pcm_substream *substream, int cmd,
 			       struct snd_soc_dai *dai)
 {
-	struct au1xpsc_audio_data *pscdata = au1xpsc_i2s_workdata;
-	int ret, stype = SUBSTREAM_TYPE(substream);
+	struct au1xpsc_audio_data *pscdata = snd_soc_dai_get_drvdata(dai);
+	int ret, stype = substream->stream;
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
@@ -263,27 +257,22 @@ static int au1xpsc_i2s_trigger(struct snd_pcm_substream *substream, int cmd,
 	return ret;
 }
 
-static int au1xpsc_i2s_probe(struct platform_device *pdev,
-			     struct snd_soc_dai *dai)
-{
-	return 	au1xpsc_i2s_workdata ? 0 : -ENODEV;
-}
-
-static void au1xpsc_i2s_remove(struct platform_device *pdev,
+static int au1xpsc_i2s_startup(struct snd_pcm_substream *substream,
 			       struct snd_soc_dai *dai)
 {
+	struct au1xpsc_audio_data *pscdata = snd_soc_dai_get_drvdata(dai);
+	snd_soc_dai_set_dma_data(dai, substream, &pscdata->dmaids[0]);
+	return 0;
 }
 
-static struct snd_soc_dai_ops au1xpsc_i2s_dai_ops = {
+static const struct snd_soc_dai_ops au1xpsc_i2s_dai_ops = {
+	.startup	= au1xpsc_i2s_startup,
 	.trigger	= au1xpsc_i2s_trigger,
 	.hw_params	= au1xpsc_i2s_hw_params,
 	.set_fmt	= au1xpsc_i2s_set_fmt,
 };
 
-struct snd_soc_dai au1xpsc_i2s_dai = {
-	.name			= "au1xpsc_i2s",
-	.probe			= au1xpsc_i2s_probe,
-	.remove			= au1xpsc_i2s_remove,
+static const struct snd_soc_dai_driver au1xpsc_i2s_dai_template = {
 	.playback = {
 		.rates		= AU1XPSC_I2S_RATES,
 		.formats	= AU1XPSC_I2S_FMTS,
@@ -298,35 +287,43 @@ struct snd_soc_dai au1xpsc_i2s_dai = {
 	},
 	.ops = &au1xpsc_i2s_dai_ops,
 };
-EXPORT_SYMBOL(au1xpsc_i2s_dai);
 
 static int __devinit au1xpsc_i2s_drvprobe(struct platform_device *pdev)
 {
-	struct resource *r;
+	struct resource *iores, *dmares;
 	unsigned long sel;
 	int ret;
 	struct au1xpsc_audio_data *wd;
 
-	if (au1xpsc_i2s_workdata)
-		return -EBUSY;
-
-	wd = kzalloc(sizeof(struct au1xpsc_audio_data), GFP_KERNEL);
+	wd = devm_kzalloc(&pdev->dev, sizeof(struct au1xpsc_audio_data),
+			  GFP_KERNEL);
 	if (!wd)
 		return -ENOMEM;
 
-	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!r) {
-		ret = -ENODEV;
-		goto out0;
-	}
+	iores = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!iores)
+		return -ENODEV;
 
 	ret = -EBUSY;
-	if (!request_mem_region(r->start, resource_size(r), pdev->name))
-		goto out0;
+	if (!devm_request_mem_region(&pdev->dev, iores->start,
+				     resource_size(iores),
+				     pdev->name))
+		return -EBUSY;
 
-	wd->mmio = ioremap(r->start, resource_size(r));
+	wd->mmio = devm_ioremap(&pdev->dev, iores->start,
+				resource_size(iores));
 	if (!wd->mmio)
-		goto out1;
+		return -EBUSY;
+
+	dmares = platform_get_resource(pdev, IORESOURCE_DMA, 0);
+	if (!dmares)
+		return -EBUSY;
+	wd->dmaids[SNDRV_PCM_STREAM_PLAYBACK] = dmares->start;
+
+	dmares = platform_get_resource(pdev, IORESOURCE_DMA, 1);
+	if (!dmares)
+		return -EBUSY;
+	wd->dmaids[SNDRV_PCM_STREAM_CAPTURE] = dmares->start;
 
 	/* preserve PSC clock source set up by platform (dev.platform_data
 	 * is already occupied by soc layer)
@@ -346,46 +343,26 @@ static int __devinit au1xpsc_i2s_drvprobe(struct platform_device *pdev)
 	 * time out.
 	 */
 
-	ret = snd_soc_register_dai(&au1xpsc_i2s_dai);
-	if (ret)
-		goto out1;
+	/* name the DAI like this device instance ("au1xpsc-i2s.PSCINDEX") */
+	memcpy(&wd->dai_drv, &au1xpsc_i2s_dai_template,
+	       sizeof(struct snd_soc_dai_driver));
+	wd->dai_drv.name = dev_name(&pdev->dev);
 
-	/* finally add the DMA device for this PSC */
-	wd->dmapd = au1xpsc_pcm_add(pdev);
-	if (wd->dmapd) {
-		platform_set_drvdata(pdev, wd);
-		au1xpsc_i2s_workdata = wd;
-		return 0;
-	}
+	platform_set_drvdata(pdev, wd);
 
-	snd_soc_unregister_dai(&au1xpsc_i2s_dai);
-out1:
-	release_mem_region(r->start, resource_size(r));
-out0:
-	kfree(wd);
-	return ret;
+	return snd_soc_register_dai(&pdev->dev, &wd->dai_drv);
 }
 
 static int __devexit au1xpsc_i2s_drvremove(struct platform_device *pdev)
 {
 	struct au1xpsc_audio_data *wd = platform_get_drvdata(pdev);
-	struct resource *r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 
-	if (wd->dmapd)
-		au1xpsc_pcm_destroy(wd->dmapd);
-
-	snd_soc_unregister_dai(&au1xpsc_i2s_dai);
+	snd_soc_unregister_dai(&pdev->dev);
 
 	au_writel(0, I2S_CFG(wd));
 	au_sync();
 	au_writel(PSC_CTRL_DISABLE, PSC_CTRL(wd));
 	au_sync();
-
-	iounmap(wd->mmio);
-	release_mem_region(r->start, resource_size(r));
-	kfree(wd);
-
-	au1xpsc_i2s_workdata = NULL;	/* MDEV */
 
 	return 0;
 }
@@ -444,19 +421,7 @@ static struct platform_driver au1xpsc_i2s_driver = {
 	.remove		= __devexit_p(au1xpsc_i2s_drvremove),
 };
 
-static int __init au1xpsc_i2s_load(void)
-{
-	au1xpsc_i2s_workdata = NULL;
-	return platform_driver_register(&au1xpsc_i2s_driver);
-}
-
-static void __exit au1xpsc_i2s_unload(void)
-{
-	platform_driver_unregister(&au1xpsc_i2s_driver);
-}
-
-module_init(au1xpsc_i2s_load);
-module_exit(au1xpsc_i2s_unload);
+module_platform_driver(au1xpsc_i2s_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Au12x0/Au1550 PSC I2S ALSA ASoC audio driver");

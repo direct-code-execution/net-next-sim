@@ -28,12 +28,7 @@
  * #define ATTR_KILL_SUID	2048
  * #define ATTR_KILL_SGID	4096
  *
- * and this is because they were added in 2.5 development in this patch:
- *
- * http://linux.bkbits.net:8080/linux-2.5/
- * cset@3caf4a12k4XgDzK7wyK-TGpSZ9u2Ww?nav=index.html
- * |src/.|src/include|src/include/linux|related/include/linux/fs.h
- *
+ * and this is because they were added in 2.5 development.
  * Actually, they are not needed by most ->setattr() methods - they are set by
  * callers of notify_change() to notify that the setuid/setgid bits must be
  * dropped.
@@ -44,7 +39,7 @@
 
 struct hostfs_iattr {
 	unsigned int	ia_valid;
-	mode_t		ia_mode;
+	unsigned short	ia_mode;
 	uid_t		ia_uid;
 	gid_t		ia_gid;
 	loff_t		ia_size;
@@ -72,7 +67,8 @@ extern int access_file(char *path, int r, int w, int x);
 extern int open_file(char *path, int r, int w, int append);
 extern void *open_dir(char *path, int *err_out);
 extern char *read_dir(void *stream, unsigned long long *pos,
-		      unsigned long long *ino_out, int *len_out);
+		      unsigned long long *ino_out, int *len_out,
+		      unsigned int *type_out);
 extern void close_file(void *stream);
 extern int replace_file(int oldfd, int fd);
 extern void close_dir(void *stream);
@@ -96,7 +92,6 @@ extern int rename_file(char *from, char *to);
 extern int do_statfs(char *root, long *bsize_out, long long *blocks_out,
 		     long long *bfree_out, long long *bavail_out,
 		     long long *files_out, long long *ffree_out,
-		     void *fsid_out, int fsid_size, long *namelen_out,
-		     long *spare_out);
+		     void *fsid_out, int fsid_size, long *namelen_out);
 
 #endif

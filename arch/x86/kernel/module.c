@@ -24,8 +24,8 @@
 #include <linux/bug.h>
 #include <linux/mm.h>
 #include <linux/gfp.h>
+#include <linux/jump_label.h>
 
-#include <asm/system.h>
 #include <asm/page.h>
 #include <asm/pgtable.h>
 
@@ -37,35 +37,11 @@
 
 void *module_alloc(unsigned long size)
 {
-	struct vm_struct *area;
-
-	if (!size)
+	if (PAGE_ALIGN(size) > MODULES_LEN)
 		return NULL;
-	size = PAGE_ALIGN(size);
-	if (size > MODULES_LEN)
-		return NULL;
-
-	area = __get_vm_area(size, VM_ALLOC, MODULES_VADDR, MODULES_END);
-	if (!area)
-		return NULL;
-
-	return __vmalloc_area(area, GFP_KERNEL | __GFP_HIGHMEM,
-					PAGE_KERNEL_EXEC);
-}
-
-/* Free memory returned from module_alloc */
-void module_free(struct module *mod, void *module_region)
-{
-	vfree(module_region);
-}
-
-/* We don't need anything special. */
-int module_frob_arch_sections(Elf_Ehdr *hdr,
-			      Elf_Shdr *sechdrs,
-			      char *secstrings,
-			      struct module *mod)
-{
-	return 0;
+	return __vmalloc_node_range(size, 1, MODULES_VADDR, MODULES_END,
+				GFP_KERNEL | __GFP_HIGHMEM, PAGE_KERNEL_EXEC,
+				-1, __builtin_return_address(0));
 }
 
 #ifdef CONFIG_X86_32
@@ -107,17 +83,6 @@ int apply_relocate(Elf32_Shdr *sechdrs,
 		}
 	}
 	return 0;
-}
-
-int apply_relocate_add(Elf32_Shdr *sechdrs,
-		       const char *strtab,
-		       unsigned int symindex,
-		       unsigned int relsec,
-		       struct module *me)
-{
-	printk(KERN_ERR "module %s: ADD RELOCATION unsupported\n",
-	       me->name);
-	return -ENOEXEC;
 }
 #else /*X86_64*/
 int apply_relocate_add(Elf64_Shdr *sechdrs,
@@ -189,17 +154,6 @@ overflow:
 	       me->name);
 	return -ENOEXEC;
 }
-
-int apply_relocate(Elf_Shdr *sechdrs,
-		   const char *strtab,
-		   unsigned int symindex,
-		   unsigned int relsec,
-		   struct module *me)
-{
-	printk(KERN_ERR "non add relocation not supported\n");
-	return -ENOSYS;
-}
-
 #endif
 
 int module_finalize(const Elf_Ehdr *hdr,
@@ -238,6 +192,9 @@ int module_finalize(const Elf_Ehdr *hdr,
 		void *pseg = (void *)para->sh_addr;
 		apply_paravirt(pseg, pseg + para->sh_size);
 	}
+
+	/* make jump label nops */
+	jump_label_apply_nops(me);
 
 	return 0;
 }

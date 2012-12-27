@@ -261,25 +261,27 @@ static int __devexit mcs5000_ts_remove(struct i2c_client *client)
 }
 
 #ifdef CONFIG_PM
-static int mcs5000_ts_suspend(struct i2c_client *client, pm_message_t mesg)
+static int mcs5000_ts_suspend(struct device *dev)
 {
+	struct i2c_client *client = to_i2c_client(dev);
+
 	/* Touch sleep mode */
 	i2c_smbus_write_byte_data(client, MCS5000_TS_OP_MODE, OP_MODE_SLEEP);
 
 	return 0;
 }
 
-static int mcs5000_ts_resume(struct i2c_client *client)
+static int mcs5000_ts_resume(struct device *dev)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct mcs5000_ts_data *data = i2c_get_clientdata(client);
 
 	mcs5000_ts_phys_init(data);
 
 	return 0;
 }
-#else
-#define mcs5000_ts_suspend	NULL
-#define mcs5000_ts_resume	NULL
+
+static SIMPLE_DEV_PM_OPS(mcs5000_ts_pm, mcs5000_ts_suspend, mcs5000_ts_resume);
 #endif
 
 static const struct i2c_device_id mcs5000_ts_id[] = {
@@ -291,26 +293,16 @@ MODULE_DEVICE_TABLE(i2c, mcs5000_ts_id);
 static struct i2c_driver mcs5000_ts_driver = {
 	.probe		= mcs5000_ts_probe,
 	.remove		= __devexit_p(mcs5000_ts_remove),
-	.suspend	= mcs5000_ts_suspend,
-	.resume		= mcs5000_ts_resume,
 	.driver = {
 		.name = "mcs5000_ts",
+#ifdef CONFIG_PM
+		.pm   = &mcs5000_ts_pm,
+#endif
 	},
 	.id_table	= mcs5000_ts_id,
 };
 
-static int __init mcs5000_ts_init(void)
-{
-	return i2c_add_driver(&mcs5000_ts_driver);
-}
-
-static void __exit mcs5000_ts_exit(void)
-{
-	i2c_del_driver(&mcs5000_ts_driver);
-}
-
-module_init(mcs5000_ts_init);
-module_exit(mcs5000_ts_exit);
+module_i2c_driver(mcs5000_ts_driver);
 
 /* Module information */
 MODULE_AUTHOR("Joonyoung Shim <jy0922.shim@samsung.com>");

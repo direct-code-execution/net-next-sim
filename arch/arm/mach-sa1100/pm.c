@@ -29,11 +29,10 @@
 
 #include <mach/hardware.h>
 #include <asm/memory.h>
-#include <asm/system.h>
+#include <asm/suspend.h>
 #include <asm/mach/time.h>
 
-extern void sa1100_cpu_suspend(void);
-extern void sa1100_cpu_resume(void);
+extern int sa1100_finish_suspend(unsigned long);
 
 #define SAVE(x)		sleep_save[SLEEP_SAVE_##x] = x
 #define RESTORE(x)	x = sleep_save[SLEEP_SAVE_##x]
@@ -73,12 +72,10 @@ static int sa11x0_pm_enter(suspend_state_t state)
 	RCSR = RCSR_HWR | RCSR_SWR | RCSR_WDR | RCSR_SMR;
 
 	/* set resume return address */
-	PSPR = virt_to_phys(sa1100_cpu_resume);
+	PSPR = virt_to_phys(cpu_resume);
 
 	/* go zzz */
-	sa1100_cpu_suspend();
-
-	cpu_init();
+	cpu_suspend(0, sa1100_finish_suspend);
 
 	/*
 	 * Ensure not to come back here if it wasn't intended
@@ -115,12 +112,7 @@ static int sa11x0_pm_enter(suspend_state_t state)
 	return 0;
 }
 
-unsigned long sleep_phys_sp(void *sp)
-{
-	return virt_to_phys(sp);
-}
-
-static struct platform_suspend_ops sa11x0_pm_ops = {
+static const struct platform_suspend_ops sa11x0_pm_ops = {
 	.enter		= sa11x0_pm_enter,
 	.valid		= suspend_valid_only_mem,
 };

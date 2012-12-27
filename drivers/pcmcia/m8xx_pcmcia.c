@@ -52,14 +52,12 @@
 #include <linux/of_platform.h>
 
 #include <asm/io.h>
-#include <asm/system.h>
 #include <asm/time.h>
 #include <asm/mpc8xx.h>
 #include <asm/8xx_immap.h>
 #include <asm/irq.h>
 #include <asm/fs_pd.h>
 
-#include <pcmcia/cs.h>
 #include <pcmcia/ss.h>
 
 #define pcmcia_info(args...) printk(KERN_INFO "m8xx_pcmcia: "args)
@@ -1149,8 +1147,7 @@ static struct pccard_operations m8xx_services = {
 	.set_mem_map = m8xx_set_mem_map,
 };
 
-static int __init m8xx_probe(struct platform_device *ofdev,
-			     const struct of_device_id *match)
+static int __init m8xx_probe(struct platform_device *ofdev)
 {
 	struct pcmcia_win *w;
 	unsigned int i, m, hwirq;
@@ -1199,7 +1196,7 @@ static int __init m8xx_probe(struct platform_device *ofdev,
 	out_be32(M8XX_PGCRX(1),
 		 M8XX_PGCRX_CXOE | (mk_int_int_mask(hwirq) << 16));
 
-	/* intialize the fixed memory windows */
+	/* initialize the fixed memory windows */
 
 	for (i = 0; i < PCMCIA_SOCKETS_NO; i++) {
 		for (m = 0; m < PCMCIA_MEM_WIN_NO; m++) {
@@ -1296,7 +1293,7 @@ static const struct of_device_id m8xx_pcmcia_match[] = {
 
 MODULE_DEVICE_TABLE(of, m8xx_pcmcia_match);
 
-static struct of_platform_driver m8xx_pcmcia_driver = {
+static struct platform_driver m8xx_pcmcia_driver = {
 	.driver = {
 		.name = driver_name,
 		.owner = THIS_MODULE,
@@ -1306,15 +1303,4 @@ static struct of_platform_driver m8xx_pcmcia_driver = {
 	.remove = m8xx_remove,
 };
 
-static int __init m8xx_init(void)
-{
-	return of_register_platform_driver(&m8xx_pcmcia_driver);
-}
-
-static void __exit m8xx_exit(void)
-{
-	of_unregister_platform_driver(&m8xx_pcmcia_driver);
-}
-
-module_init(m8xx_init);
-module_exit(m8xx_exit);
+module_platform_driver(m8xx_pcmcia_driver);

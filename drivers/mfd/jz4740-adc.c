@@ -16,6 +16,7 @@
  */
 
 #include <linux/err.h>
+#include <linux/io.h>
 #include <linux/irq.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
@@ -56,7 +57,7 @@ struct jz4740_adc {
 	void __iomem *base;
 
 	int irq;
-	int irq_base;
+	struct irq_chip_generic *gc;
 
 	struct clk *clk;
 	atomic_t clk_ref;
@@ -64,64 +65,17 @@ struct jz4740_adc {
 	spinlock_t lock;
 };
 
-static inline void jz4740_adc_irq_set_masked(struct jz4740_adc *adc, int irq,
-	bool masked)
-{
-	unsigned long flags;
-	uint8_t val;
-
-	irq -= adc->irq_base;
-
-	spin_lock_irqsave(&adc->lock, flags);
-
-	val = readb(adc->base + JZ_REG_ADC_CTRL);
-	if (masked)
-		val |= BIT(irq);
-	else
-		val &= ~BIT(irq);
-	writeb(val, adc->base + JZ_REG_ADC_CTRL);
-
-	spin_unlock_irqrestore(&adc->lock, flags);
-}
-
-static void jz4740_adc_irq_mask(unsigned int irq)
-{
-	struct jz4740_adc *adc = get_irq_chip_data(irq);
-	jz4740_adc_irq_set_masked(adc, irq, true);
-}
-
-static void jz4740_adc_irq_unmask(unsigned int irq)
-{
-	struct jz4740_adc *adc = get_irq_chip_data(irq);
-	jz4740_adc_irq_set_masked(adc, irq, false);
-}
-
-static void jz4740_adc_irq_ack(unsigned int irq)
-{
-	struct jz4740_adc *adc = get_irq_chip_data(irq);
-
-	irq -= adc->irq_base;
-	writeb(BIT(irq), adc->base + JZ_REG_ADC_STATUS);
-}
-
-static struct irq_chip jz4740_adc_irq_chip = {
-	.name = "jz4740-adc",
-	.mask = jz4740_adc_irq_mask,
-	.unmask = jz4740_adc_irq_unmask,
-	.ack = jz4740_adc_irq_ack,
-};
-
 static void jz4740_adc_irq_demux(unsigned int irq, struct irq_desc *desc)
 {
-	struct jz4740_adc *adc = get_irq_desc_data(desc);
+	struct irq_chip_generic *gc = irq_desc_get_handler_data(desc);
 	uint8_t status;
 	unsigned int i;
 
-	status = readb(adc->base + JZ_REG_ADC_STATUS);
+	status = readb(gc->reg_base + JZ_REG_ADC_STATUS);
 
 	for (i = 0; i < 5; ++i) {
 		if (status & BIT(i))
-			generic_handle_irq(adc->irq_base + i);
+			generic_handle_irq(gc->irq_base + i);
 	}
 }
 
@@ -153,7 +107,7 @@ static inline void jz4740_adc_set_enabled(struct jz4740_adc *adc, int engine,
 	if (enabled)
 		val |= BIT(engine);
 	else
-		val &= BIT(engine);
+		val &= ~BIT(engine);
 	writeb(val, adc->base + JZ_REG_ADC_ENABLE);
 
 	spin_unlock_irqrestore(&adc->lock, flags);
@@ -227,14 +181,12 @@ static struct resource jz4740_battery_resources[] = {
 	},
 };
 
-const struct mfd_cell jz4740_adc_cells[] = {
+static struct mfd_cell jz4740_adc_cells[] = {
 	{
 		.id = 0,
 		.name = "jz4740-hwmon",
 		.num_resources = ARRAY_SIZE(jz4740_hwmon_resources),
 		.resources = jz4740_hwmon_resources,
-		.platform_data = (void *)&jz4740_adc_cells[0],
-		.data_size = sizeof(struct mfd_cell),
 
 		.enable = jz4740_adc_cell_enable,
 		.disable = jz4740_adc_cell_disable,
@@ -244,8 +196,6 @@ const struct mfd_cell jz4740_adc_cells[] = {
 		.name = "jz4740-battery",
 		.num_resources = ARRAY_SIZE(jz4740_battery_resources),
 		.resources = jz4740_battery_resources,
-		.platform_data = (void *)&jz4740_adc_cells[1],
-		.data_size = sizeof(struct mfd_cell),
 
 		.enable = jz4740_adc_cell_enable,
 		.disable = jz4740_adc_cell_disable,
@@ -254,10 +204,12 @@ const struct mfd_cell jz4740_adc_cells[] = {
 
 static int __devinit jz4740_adc_probe(struct platform_device *pdev)
 {
-	int ret;
+	struct irq_chip_generic *gc;
+	struct irq_chip_type *ct;
 	struct jz4740_adc *adc;
 	struct resource *mem_base;
-	int irq;
+	int ret;
+	int irq_base;
 
 	adc = kmalloc(sizeof(*adc), GFP_KERNEL);
 	if (!adc) {
@@ -272,9 +224,9 @@ static int __devinit jz4740_adc_probe(struct platform_device *pdev)
 		goto err_free;
 	}
 
-	adc->irq_base = platform_get_irq(pdev, 1);
-	if (adc->irq_base < 0) {
-		ret = adc->irq_base;
+	irq_base = platform_get_irq(pdev, 1);
+	if (irq_base < 0) {
+		ret = irq_base;
 		dev_err(&pdev->dev, "Failed to get irq base: %d\n", ret);
 		goto err_free;
 	}
@@ -314,20 +266,28 @@ static int __devinit jz4740_adc_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, adc);
 
-	for (irq = adc->irq_base; irq < adc->irq_base + 5; ++irq) {
-		set_irq_chip_data(irq, adc);
-		set_irq_chip_and_handler(irq, &jz4740_adc_irq_chip,
-		    handle_level_irq);
-	}
+	gc = irq_alloc_generic_chip("INTC", 1, irq_base, adc->base,
+		handle_level_irq);
 
-	set_irq_data(adc->irq, adc);
-	set_irq_chained_handler(adc->irq, jz4740_adc_irq_demux);
+	ct = gc->chip_types;
+	ct->regs.mask = JZ_REG_ADC_CTRL;
+	ct->regs.ack = JZ_REG_ADC_STATUS;
+	ct->chip.irq_mask = irq_gc_mask_set_bit;
+	ct->chip.irq_unmask = irq_gc_mask_clr_bit;
+	ct->chip.irq_ack = irq_gc_ack_set_bit;
+
+	irq_setup_generic_chip(gc, IRQ_MSK(5), 0, 0, IRQ_NOPROBE | IRQ_LEVEL);
+
+	adc->gc = gc;
+
+	irq_set_handler_data(adc->irq, gc);
+	irq_set_chained_handler(adc->irq, jz4740_adc_irq_demux);
 
 	writeb(0x00, adc->base + JZ_REG_ADC_ENABLE);
 	writeb(0xff, adc->base + JZ_REG_ADC_CTRL);
 
 	ret = mfd_add_devices(&pdev->dev, 0, jz4740_adc_cells,
-		ARRAY_SIZE(jz4740_adc_cells), mem_base, adc->irq_base);
+		ARRAY_SIZE(jz4740_adc_cells), mem_base, irq_base);
 	if (ret < 0)
 		goto err_clk_put;
 
@@ -352,8 +312,10 @@ static int __devexit jz4740_adc_remove(struct platform_device *pdev)
 
 	mfd_remove_devices(&pdev->dev);
 
-	set_irq_data(adc->irq, NULL);
-	set_irq_chained_handler(adc->irq, NULL);
+	irq_remove_generic_chip(adc->gc, IRQ_MSK(5), IRQ_NOPROBE | IRQ_LEVEL, 0);
+	kfree(adc->gc);
+	irq_set_handler_data(adc->irq, NULL);
+	irq_set_chained_handler(adc->irq, NULL);
 
 	iounmap(adc->base);
 	release_mem_region(adc->mem->start, resource_size(adc->mem));
@@ -367,7 +329,7 @@ static int __devexit jz4740_adc_remove(struct platform_device *pdev)
 	return 0;
 }
 
-struct platform_driver jz4740_adc_driver = {
+static struct platform_driver jz4740_adc_driver = {
 	.probe	= jz4740_adc_probe,
 	.remove = __devexit_p(jz4740_adc_remove),
 	.driver = {
@@ -376,17 +338,7 @@ struct platform_driver jz4740_adc_driver = {
 	},
 };
 
-static int __init jz4740_adc_init(void)
-{
-	return platform_driver_register(&jz4740_adc_driver);
-}
-module_init(jz4740_adc_init);
-
-static void __exit jz4740_adc_exit(void)
-{
-	platform_driver_unregister(&jz4740_adc_driver);
-}
-module_exit(jz4740_adc_exit);
+module_platform_driver(jz4740_adc_driver);
 
 MODULE_DESCRIPTION("JZ4740 SoC ADC driver");
 MODULE_AUTHOR("Lars-Peter Clausen <lars@metafoo.de>");

@@ -6,20 +6,6 @@
 
 #include <trace/events/ext4.h>
 
-int __ext4_journal_get_undo_access(const char *where, unsigned int line,
-				   handle_t *handle, struct buffer_head *bh)
-{
-	int err = 0;
-
-	if (ext4_handle_valid(handle)) {
-		err = jbd2_journal_get_undo_access(handle, bh);
-		if (err)
-			ext4_journal_abort_handle(where, line, __func__, bh,
-						  handle, err);
-	}
-	return err;
-}
-
 int __ext4_journal_get_write_access(const char *where, unsigned int line,
 				    handle_t *handle, struct buffer_head *bh)
 {
@@ -123,9 +109,11 @@ int __ext4_handle_dirty_metadata(const char *where, unsigned int line,
 
 	if (ext4_handle_valid(handle)) {
 		err = jbd2_journal_dirty_metadata(handle, bh);
-		if (err)
-			ext4_journal_abort_handle(where, line, __func__,
-						  bh, handle, err);
+		if (err) {
+			/* Errors can only happen if there is a bug */
+			handle->h_err = err;
+			__ext4_journal_stop(where, line, handle);
+		}
 	} else {
 		if (inode)
 			mark_buffer_dirty_inode(bh, inode);

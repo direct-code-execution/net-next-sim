@@ -9,10 +9,10 @@
  *   - contains two reports, one for each port (HID_QUIRK_MULTI_INPUT)
  *
  *  0e8f:0003 "GreenAsia Inc.    USB Joystick     "
- *   - tested with König Gaming gamepad
+ *   - tested with KÃ¶nig Gaming gamepad
  *
  *  0e8f:0003 "GASIA USB Gamepad"
- *   - another version of the König gamepad
+ *   - another version of the KÃ¶nig gamepad
  *
  *  Copyright (c) 2007, 2009 Anssi Hannula <anssi.hannula@gmail.com>
  */
@@ -40,6 +40,7 @@
 
 #include <linux/input.h>
 #include <linux/slab.h>
+#include <linux/module.h>
 #include <linux/usb.h>
 #include <linux/hid.h>
 
@@ -103,7 +104,7 @@ static int plff_init(struct hid_device *hid)
 	*/
 
 	if (list_empty(report_list)) {
-		dev_err(&hid->dev, "no output reports found\n");
+		hid_err(hid, "no output reports found\n");
 		return -ENODEV;
 	}
 
@@ -112,14 +113,13 @@ static int plff_init(struct hid_device *hid)
 		report_ptr = report_ptr->next;
 
 		if (report_ptr == report_list) {
-			dev_err(&hid->dev, "required output report is "
-					"missing\n");
+			hid_err(hid, "required output report is missing\n");
 			return -ENODEV;
 		}
 
 		report = list_entry(report_ptr, struct hid_report, list);
 		if (report->maxfield < 1) {
-			dev_err(&hid->dev, "no fields in the report\n");
+			hid_err(hid, "no fields in the report\n");
 			return -ENODEV;
 		}
 
@@ -137,7 +137,7 @@ static int plff_init(struct hid_device *hid)
 			weak = &report->field[3]->value[0];
 			debug("detected 4-field device");
 		} else {
-			dev_err(&hid->dev, "not enough fields or values\n");
+			hid_err(hid, "not enough fields or values\n");
 			return -ENODEV;
 		}
 
@@ -164,8 +164,7 @@ static int plff_init(struct hid_device *hid)
 		usbhid_submit_report(hid, plff->report, USB_DIR_OUT);
 	}
 
-	dev_info(&hid->dev, "Force feedback for PantherLord/GreenAsia "
-	       "devices by Anssi Hannula <anssi.hannula@gmail.com>\n");
+	hid_info(hid, "Force feedback for PantherLord/GreenAsia devices by Anssi Hannula <anssi.hannula@gmail.com>\n");
 
 	return 0;
 }
@@ -185,13 +184,13 @@ static int pl_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	ret = hid_parse(hdev);
 	if (ret) {
-		dev_err(&hdev->dev, "parse failed\n");
+		hid_err(hdev, "parse failed\n");
 		goto err;
 	}
 
 	ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT & ~HID_CONNECT_FF);
 	if (ret) {
-		dev_err(&hdev->dev, "hw start failed\n");
+		hid_err(hdev, "hw start failed\n");
 		goto err;
 	}
 

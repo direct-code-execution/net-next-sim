@@ -43,6 +43,7 @@ struct nlm_host {
 	struct sockaddr_storage	h_addr;		/* peer address */
 	size_t			h_addrlen;
 	struct sockaddr_storage	h_srcaddr;	/* our address (optional) */
+	size_t			h_srcaddrlen;
 	struct rpc_clnt		*h_rpcclnt;	/* RPC client to talk to peer */
 	char			*h_name;		/* remote hostname */
 	u32			h_version;	/* interface version */
@@ -66,6 +67,7 @@ struct nlm_host {
 	struct list_head	h_reclaim;	/* Locks in RECLAIM state */
 	struct nsm_handle	*h_nsmhandle;	/* NSM status handle */
 	char			*h_addrbuf;	/* address eyecatcher */
+	struct net		*net;		/* host net */
 };
 
 /*
@@ -187,23 +189,23 @@ struct nlm_block {
 /*
  * Global variables
  */
-extern struct rpc_program	nlm_program;
+extern const struct rpc_program	nlm_program;
 extern struct svc_procedure	nlmsvc_procedures[];
 #ifdef CONFIG_LOCKD_V4
 extern struct svc_procedure	nlmsvc_procedures4[];
 #endif
 extern int			nlmsvc_grace_period;
 extern unsigned long		nlmsvc_timeout;
-extern int			nsm_use_hostnames;
+extern bool			nsm_use_hostnames;
 extern u32			nsm_local_state;
 
 /*
  * Lockd client functions
  */
 struct nlm_rqst * nlm_alloc_call(struct nlm_host *host);
-void		  nlm_release_call(struct nlm_rqst *);
 int		  nlm_async_call(struct nlm_rqst *, u32, const struct rpc_call_ops *);
 int		  nlm_async_reply(struct nlm_rqst *, u32, const struct rpc_call_ops *);
+void		  nlmclnt_release_call(struct nlm_rqst *);
 struct nlm_wait * nlmclnt_prepare_block(struct nlm_host *host, struct file_lock *fl);
 void		  nlmclnt_finish_block(struct nlm_wait *block);
 int		  nlmclnt_block(struct nlm_wait *block, struct nlm_rqst *req, long timeout);
@@ -221,15 +223,18 @@ struct nlm_host  *nlmclnt_lookup_host(const struct sockaddr *sap,
 					const unsigned short protocol,
 					const u32 version,
 					const char *hostname,
-					int noresvport);
+					int noresvport,
+					struct net *net);
+void		  nlmclnt_release_host(struct nlm_host *);
 struct nlm_host  *nlmsvc_lookup_host(const struct svc_rqst *rqstp,
 					const char *hostname,
 					const size_t hostname_len);
+void		  nlmsvc_release_host(struct nlm_host *);
 struct rpc_clnt * nlm_bind_host(struct nlm_host *);
 void		  nlm_rebind_host(struct nlm_host *);
 struct nlm_host * nlm_get_host(struct nlm_host *);
-void		  nlm_release_host(struct nlm_host *);
 void		  nlm_shutdown_hosts(void);
+void		  nlm_shutdown_hosts_net(struct net *net);
 void		  nlm_host_rebooted(const struct nlm_reboot *);
 
 /*
@@ -266,6 +271,7 @@ unsigned long	  nlmsvc_retry_blocked(void);
 void		  nlmsvc_traverse_blocks(struct nlm_host *, struct nlm_file *,
 					nlm_host_match_fn_t match);
 void		  nlmsvc_grant_reply(struct nlm_cookie *, __be32);
+void		  nlmsvc_release_call(struct nlm_rqst *);
 
 /*
  * File handling for the server personality
@@ -298,7 +304,7 @@ static inline int __nlm_privileged_request4(const struct sockaddr *sap)
 	return ipv4_is_loopback(sin->sin_addr.s_addr);
 }
 
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 static inline int __nlm_privileged_request6(const struct sockaddr *sap)
 {
 	const struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sap;
@@ -311,12 +317,12 @@ static inline int __nlm_privileged_request6(const struct sockaddr *sap)
 
 	return ipv6_addr_type(&sin6->sin6_addr) & IPV6_ADDR_LOOPBACK;
 }
-#else	/* defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE) */
+#else	/* IS_ENABLED(CONFIG_IPV6) */
 static inline int __nlm_privileged_request6(const struct sockaddr *sap)
 {
 	return 0;
 }
-#endif	/* defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE) */
+#endif	/* IS_ENABLED(CONFIG_IPV6) */
 
 /*
  * Ensure incoming requests are from local privileged callers.

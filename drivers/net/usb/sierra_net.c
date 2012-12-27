@@ -203,7 +203,7 @@ static inline void sierra_net_set_private(struct usbnet *dev,
 /* is packet IPv4 */
 static inline int is_ip(struct sk_buff *skb)
 {
-	return (skb->protocol == cpu_to_be16(ETH_P_IP));
+	return skb->protocol == cpu_to_be16(ETH_P_IP);
 }
 
 /*
@@ -354,7 +354,7 @@ static void sierra_net_set_ctx_index(struct sierra_net_data *priv, u8 ctx_ix)
 
 static inline int sierra_net_is_valid_addrlen(u8 len)
 {
-	return (len == sizeof(struct in_addr));
+	return len == sizeof(struct in_addr);
 }
 
 static int sierra_net_parse_lsi(struct usbnet *dev, char *data, int datalen)
@@ -618,7 +618,7 @@ static u32 sierra_net_get_link(struct net_device *net)
 	return sierra_net_get_private(dev)->link_up && netif_running(net);
 }
 
-static struct ethtool_ops sierra_net_ethtool_ops = {
+static const struct ethtool_ops sierra_net_ethtool_ops = {
 	.get_drvinfo = sierra_net_get_drvinfo,
 	.get_link = sierra_net_get_link,
 	.get_msglevel = usbnet_get_msglevel,
@@ -802,10 +802,9 @@ static void sierra_net_unbind(struct usbnet *dev, struct usb_interface *intf)
 
 	dev_dbg(&dev->udev->dev, "%s", __func__);
 
-	/* Kill the timer then flush the work queue */
+	/* kill the timer and work */
 	del_timer_sync(&priv->sync_timer);
-
-	flush_scheduled_work();
+	cancel_work_sync(&priv->sierra_net_kevent);
 
 	/* tell modem we are going away */
 	status = sierra_net_send_cmd(dev, priv->shdwn_msg,
@@ -901,6 +900,9 @@ struct sk_buff *sierra_net_tx_fixup(struct usbnet *dev, struct sk_buff *skb,
 	u16 len;
 	bool need_tail;
 
+	BUILD_BUG_ON(FIELD_SIZEOF(struct usbnet, data)
+				< sizeof(struct cdc_state));
+
 	dev_dbg(&dev->udev->dev, "%s", __func__);
 	if (priv->link_up && check_ethip_packet(skb, dev) && is_ip(skb)) {
 		/* enough head room as is? */
@@ -982,21 +984,7 @@ static struct usb_driver sierra_net_driver = {
 	.no_dynamic_id = 1,
 };
 
-static int __init sierra_net_init(void)
-{
-	BUILD_BUG_ON(FIELD_SIZEOF(struct usbnet, data)
-				< sizeof(struct cdc_state));
-
-	return usb_register(&sierra_net_driver);
-}
-
-static void __exit sierra_net_exit(void)
-{
-	usb_deregister(&sierra_net_driver);
-}
-
-module_exit(sierra_net_exit);
-module_init(sierra_net_init);
+module_usb_driver(sierra_net_driver);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

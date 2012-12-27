@@ -242,7 +242,7 @@ found:
 		inode->i_mode = S_IFDIR | S_IRUGO | S_IXUGO;
 		inode->i_op = &openprom_inode_operations;
 		inode->i_fop = &openprom_operations;
-		inode->i_nlink = 2;
+		set_nlink(inode, 2);
 		break;
 	case op_inode_prop:
 		if (!strcmp(dp->name, "options") && (len == 17) &&
@@ -251,7 +251,7 @@ found:
 		else
 			inode->i_mode = S_IFREG | S_IRUGO;
 		inode->i_fop = &openpromfs_prop_ops;
-		inode->i_nlink = 1;
+		set_nlink(inode, 1);
 		inode->i_size = ent_oi->u.prop->length;
 		break;
 	}
@@ -343,9 +343,15 @@ static struct inode *openprom_alloc_inode(struct super_block *sb)
 	return &oi->vfs_inode;
 }
 
+static void openprom_i_callback(struct rcu_head *head)
+{
+	struct inode *inode = container_of(head, struct inode, i_rcu);
+	kmem_cache_free(op_inode_cachep, OP_I(inode));
+}
+
 static void openprom_destroy_inode(struct inode *inode)
 {
-	kmem_cache_free(op_inode_cachep, OP_I(inode));
+	call_rcu(&inode->i_rcu, openprom_i_callback);
 }
 
 static struct inode *openprom_iget(struct super_block *sb, ino_t ino)
@@ -402,29 +408,28 @@ static int openprom_fill_super(struct super_block *s, void *data, int silent)
 	oi->type = op_inode_node;
 	oi->u.node = of_find_node_by_path("/");
 
-	s->s_root = d_alloc_root(root_inode);
+	s->s_root = d_make_root(root_inode);
 	if (!s->s_root)
 		goto out_no_root_dentry;
 	return 0;
 
 out_no_root_dentry:
-	iput(root_inode);
 	ret = -ENOMEM;
 out_no_root:
 	printk("openprom_fill_super: get root inode failed\n");
 	return ret;
 }
 
-static int openprom_get_sb(struct file_system_type *fs_type,
-	int flags, const char *dev_name, void *data, struct vfsmount *mnt)
+static struct dentry *openprom_mount(struct file_system_type *fs_type,
+	int flags, const char *dev_name, void *data)
 {
-	return get_sb_single(fs_type, flags, data, openprom_fill_super, mnt);
+	return mount_single(fs_type, flags, data, openprom_fill_super);
 }
 
 static struct file_system_type openprom_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "openpromfs",
-	.get_sb		= openprom_get_sb,
+	.mount		= openprom_mount,
 	.kill_sb	= kill_anon_super,
 };
 

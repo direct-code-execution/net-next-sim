@@ -33,8 +33,16 @@ static int au6610_usb_msg(struct dvb_usb_device *d, u8 operation, u8 addr,
 {
 	int ret;
 	u16 index;
-	u8 usb_buf[6]; /* enough for all known requests,
-			  read returns 5 and write 6 bytes */
+	u8 *usb_buf;
+
+	/*
+	 * allocate enough for all known requests,
+	 * read returns 5 and write 6 bytes
+	 */
+	usb_buf = kmalloc(6, GFP_KERNEL);
+	if (!usb_buf)
+		return -ENOMEM;
+
 	switch (wlen) {
 	case 1:
 		index = wbuf[0] << 8;
@@ -45,14 +53,15 @@ static int au6610_usb_msg(struct dvb_usb_device *d, u8 operation, u8 addr,
 		break;
 	default:
 		warn("wlen = %x, aborting.", wlen);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto error;
 	}
 
 	ret = usb_control_msg(d->udev, usb_rcvctrlpipe(d->udev, 0), operation,
 			      USB_TYPE_VENDOR|USB_DIR_IN, addr << 1, index,
-			      usb_buf, sizeof(usb_buf), AU6610_USB_TIMEOUT);
+			      usb_buf, 6, AU6610_USB_TIMEOUT);
 	if (ret < 0)
-		return ret;
+		goto error;
 
 	switch (operation) {
 	case AU6610_REQ_I2C_READ:
@@ -60,7 +69,8 @@ static int au6610_usb_msg(struct dvb_usb_device *d, u8 operation, u8 addr,
 		/* requested value is always 5th byte in buffer */
 		rbuf[0] = usb_buf[4];
 	}
-
+error:
+	kfree(usb_buf);
 	return ret;
 }
 
@@ -130,9 +140,9 @@ static struct zl10353_config au6610_zl10353_config = {
 
 static int au6610_zl10353_frontend_attach(struct dvb_usb_adapter *adap)
 {
-	adap->fe = dvb_attach(zl10353_attach, &au6610_zl10353_config,
+	adap->fe_adap[0].fe = dvb_attach(zl10353_attach, &au6610_zl10353_config,
 		&adap->dev->i2c_adap);
-	if (adap->fe == NULL)
+	if (adap->fe_adap[0].fe == NULL)
 		return -ENODEV;
 
 	return 0;
@@ -145,7 +155,7 @@ static struct qt1010_config au6610_qt1010_config = {
 static int au6610_qt1010_tuner_attach(struct dvb_usb_adapter *adap)
 {
 	return dvb_attach(qt1010_attach,
-			  adap->fe, &adap->dev->i2c_adap,
+			  adap->fe_adap[0].fe, &adap->dev->i2c_adap,
 			  &au6610_qt1010_config) == NULL ? -ENODEV : 0;
 }
 
@@ -194,6 +204,8 @@ static struct dvb_usb_device_properties au6610_properties = {
 	.num_adapters = 1,
 	.adapter = {
 		{
+		.num_frontends = 1,
+		.fe = {{
 			.frontend_attach  = au6610_zl10353_frontend_attach,
 			.tuner_attach     = au6610_qt1010_tuner_attach,
 
@@ -209,6 +221,7 @@ static struct dvb_usb_device_properties au6610_properties = {
 					}
 				}
 			},
+		}},
 		}
 	},
 
@@ -231,26 +244,7 @@ static struct usb_driver au6610_driver = {
 	.id_table   = au6610_table,
 };
 
-/* module stuff */
-static int __init au6610_module_init(void)
-{
-	int ret;
-
-	ret = usb_register(&au6610_driver);
-	if (ret)
-		err("usb_register failed. Error number %d", ret);
-
-	return ret;
-}
-
-static void __exit au6610_module_exit(void)
-{
-	/* deregister this driver from the USB subsystem */
-	usb_deregister(&au6610_driver);
-}
-
-module_init(au6610_module_init);
-module_exit(au6610_module_exit);
+module_usb_driver(au6610_driver);
 
 MODULE_AUTHOR("Antti Palosaari <crope@iki.fi>");
 MODULE_DESCRIPTION("Driver for Alcor Micro AU6610 DVB-T USB2.0");

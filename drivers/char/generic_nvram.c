@@ -19,7 +19,7 @@
 #include <linux/miscdevice.h>
 #include <linux/fcntl.h>
 #include <linux/init.h>
-#include <linux/smp_lock.h>
+#include <linux/mutex.h>
 #include <asm/uaccess.h>
 #include <asm/nvram.h>
 #ifdef CONFIG_PPC_PMAC
@@ -28,17 +28,22 @@
 
 #define NVRAM_SIZE	8192
 
+static DEFINE_MUTEX(nvram_mutex);
 static ssize_t nvram_len;
 
 static loff_t nvram_llseek(struct file *file, loff_t offset, int origin)
 {
 	switch (origin) {
+	case 0:
+		break;
 	case 1:
 		offset += file->f_pos;
 		break;
 	case 2:
 		offset += nvram_len;
 		break;
+	default:
+		offset = -1;
 	}
 	if (offset < 0)
 		return -EINVAL;
@@ -120,9 +125,9 @@ static long nvram_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned l
 {
 	int ret;
 
-	lock_kernel();
+	mutex_lock(&nvram_mutex);
 	ret = nvram_ioctl(file, cmd, arg);
-	unlock_kernel();
+	mutex_unlock(&nvram_mutex);
 
 	return ret;
 }

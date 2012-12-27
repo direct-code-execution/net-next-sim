@@ -31,7 +31,6 @@
 #include <linux/security.h>
 #include <linux/compat.h>
 #include <linux/fs_stack.h>
-#include <linux/smp_lock.h>
 #include "ecryptfs_kernel.h"
 
 /**
@@ -48,9 +47,8 @@ static ssize_t ecryptfs_read_update_atime(struct kiocb *iocb,
 				const struct iovec *iov,
 				unsigned long nr_segs, loff_t pos)
 {
-	int rc;
-	struct dentry *lower_dentry;
-	struct vfsmount *lower_vfsmount;
+	ssize_t rc;
+	struct path lower;
 	struct file *file = iocb->ki_filp;
 
 	rc = generic_file_aio_read(iocb, iov, nr_segs, pos);
@@ -61,9 +59,9 @@ static ssize_t ecryptfs_read_update_atime(struct kiocb *iocb,
 	if (-EIOCBQUEUED == rc)
 		rc = wait_on_sync_kiocb(iocb);
 	if (rc >= 0) {
-		lower_dentry = ecryptfs_dentry_to_lower(file->f_path.dentry);
-		lower_vfsmount = ecryptfs_dentry_to_lower_mnt(file->f_path.dentry);
-		touch_atime(lower_vfsmount, lower_dentry);
+		lower.dentry = ecryptfs_dentry_to_lower(file->f_path.dentry);
+		lower.mnt = ecryptfs_dentry_to_lower_mnt(file->f_path.dentry);
+		touch_atime(&lower);
 	}
 	return rc;
 }
@@ -140,6 +138,27 @@ out:
 	return rc;
 }
 
+static void ecryptfs_vma_close(struct vm_area_struct *vma)
+{
+	filemap_write_and_wait(vma->vm_file->f_mapping);
+}
+
+static const struct vm_operations_struct ecryptfs_file_vm_ops = {
+	.close		= ecryptfs_vma_close,
+	.fault		= filemap_fault,
+};
+
+static int ecryptfs_file_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	int rc;
+
+	rc = generic_file_mmap(file, vma);
+	if (!rc)
+		vma->vm_ops = &ecryptfs_file_vm_ops;
+
+	return rc;
+}
+
 struct kmem_cache *ecryptfs_file_info_cache;
 
 /**
@@ -192,22 +211,20 @@ static int ecryptfs_open(struct inode *inode, struct file *file)
 				      | ECRYPTFS_ENCRYPTED);
 	}
 	mutex_unlock(&crypt_stat->cs_mutex);
-	if (!ecryptfs_inode_to_private(inode)->lower_file) {
-		rc = ecryptfs_init_persistent_file(ecryptfs_dentry);
-		if (rc) {
-			printk(KERN_ERR "%s: Error attempting to initialize "
-			       "the persistent file for the dentry with name "
-			       "[%s]; rc = [%d]\n", __func__,
-			       ecryptfs_dentry->d_name.name, rc);
-			goto out_free;
-		}
-	}
-	if ((ecryptfs_inode_to_private(inode)->lower_file->f_flags & O_RDONLY)
-	    && !(file->f_flags & O_RDONLY)) {
-		rc = -EPERM;
-		printk(KERN_WARNING "%s: Lower persistent file is RO; eCryptfs "
-		       "file must hence be opened RO\n", __func__);
+	rc = ecryptfs_get_lower_file(ecryptfs_dentry, inode);
+	if (rc) {
+		printk(KERN_ERR "%s: Error attempting to initialize "
+			"the lower file for the dentry with name "
+			"[%s]; rc = [%d]\n", __func__,
+			ecryptfs_dentry->d_name.name, rc);
 		goto out_free;
+	}
+	if ((ecryptfs_inode_to_private(inode)->lower_file->f_flags & O_ACCMODE)
+	    == O_RDONLY && (file->f_flags & O_ACCMODE) != O_RDONLY) {
+		rc = -EPERM;
+		printk(KERN_WARNING "%s: Lower file is RO; eCryptfs "
+		       "file must hence be opened RO\n", __func__);
+		goto out_put;
 	}
 	ecryptfs_set_file_lower(
 		file, ecryptfs_inode_to_private(inode)->lower_file);
@@ -235,19 +252,22 @@ static int ecryptfs_open(struct inode *inode, struct file *file)
 				       "Plaintext passthrough mode is not "
 				       "enabled; returning -EIO\n");
 				mutex_unlock(&crypt_stat->cs_mutex);
-				goto out_free;
+				goto out_put;
 			}
 			rc = 0;
-			crypt_stat->flags &= ~(ECRYPTFS_ENCRYPTED);
+			crypt_stat->flags &= ~(ECRYPTFS_I_SIZE_INITIALIZED
+					       | ECRYPTFS_ENCRYPTED);
 			mutex_unlock(&crypt_stat->cs_mutex);
 			goto out;
 		}
 	}
 	mutex_unlock(&crypt_stat->cs_mutex);
-	ecryptfs_printk(KERN_DEBUG, "inode w/ addr = [0x%p], i_ino = [0x%.16x] "
-			"size: [0x%.16x]\n", inode, inode->i_ino,
-			i_size_read(inode));
+	ecryptfs_printk(KERN_DEBUG, "inode w/ addr = [0x%p], i_ino = "
+			"[0x%.16lx] size: [0x%.16llx]\n", inode, inode->i_ino,
+			(unsigned long long)i_size_read(inode));
 	goto out;
+out_put:
+	ecryptfs_put_lower_file(inode);
 out_free:
 	kmem_cache_free(ecryptfs_file_info_cache,
 			ecryptfs_file_to_private(file));
@@ -257,26 +277,30 @@ out:
 
 static int ecryptfs_flush(struct file *file, fl_owner_t td)
 {
-	int rc = 0;
-	struct file *lower_file = NULL;
-
-	lower_file = ecryptfs_file_to_lower(file);
-	if (lower_file->f_op && lower_file->f_op->flush)
-		rc = lower_file->f_op->flush(lower_file, td);
-	return rc;
+	return file->f_mode & FMODE_WRITE
+	       ? filemap_write_and_wait(file->f_mapping) : 0;
 }
 
 static int ecryptfs_release(struct inode *inode, struct file *file)
 {
+	ecryptfs_put_lower_file(inode);
 	kmem_cache_free(ecryptfs_file_info_cache,
 			ecryptfs_file_to_private(file));
 	return 0;
 }
 
 static int
-ecryptfs_fsync(struct file *file, int datasync)
+ecryptfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 {
-	return vfs_fsync(ecryptfs_file_to_lower(file), datasync);
+	int rc = 0;
+
+	rc = generic_file_fsync(file, start, end, datasync);
+	if (rc)
+		goto out;
+	rc = vfs_fsync_range(ecryptfs_file_to_lower(file), start, end,
+			     datasync);
+out:
+	return rc;
 }
 
 static int ecryptfs_fasync(int fd, struct file *file, int flag)
@@ -284,11 +308,9 @@ static int ecryptfs_fasync(int fd, struct file *file, int flag)
 	int rc = 0;
 	struct file *lower_file = NULL;
 
-	lock_kernel();
 	lower_file = ecryptfs_file_to_lower(file);
 	if (lower_file->f_op && lower_file->f_op->fasync)
 		rc = lower_file->f_op->fasync(fd, lower_file, flag);
-	unlock_kernel();
 	return rc;
 }
 
@@ -322,6 +344,7 @@ ecryptfs_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 const struct file_operations ecryptfs_dir_fops = {
 	.readdir = ecryptfs_readdir,
+	.read = generic_read_dir,
 	.unlocked_ioctl = ecryptfs_unlocked_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = ecryptfs_compat_ioctl,
@@ -332,6 +355,7 @@ const struct file_operations ecryptfs_dir_fops = {
 	.fsync = ecryptfs_fsync,
 	.fasync = ecryptfs_fasync,
 	.splice_read = generic_file_splice_read,
+	.llseek = default_llseek,
 };
 
 const struct file_operations ecryptfs_main_fops = {
@@ -345,7 +369,7 @@ const struct file_operations ecryptfs_main_fops = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = ecryptfs_compat_ioctl,
 #endif
-	.mmap = generic_file_mmap,
+	.mmap = ecryptfs_file_mmap,
 	.open = ecryptfs_open,
 	.flush = ecryptfs_flush,
 	.release = ecryptfs_release,

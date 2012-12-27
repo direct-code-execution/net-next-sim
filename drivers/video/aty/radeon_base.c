@@ -263,19 +263,19 @@ static reg_val common_regs[] = {
         
 static char *mode_option;
 static char *monitor_layout;
-static int noaccel = 0;
+static bool noaccel = 0;
 static int default_dynclk = -2;
-static int nomodeset = 0;
-static int ignore_edid = 0;
-static int mirror = 0;
+static bool nomodeset = 0;
+static bool ignore_edid = 0;
+static bool mirror = 0;
 static int panel_yres = 0;
-static int force_dfp = 0;
-static int force_measure_pll = 0;
+static bool force_dfp = 0;
+static bool force_measure_pll = 0;
 #ifdef CONFIG_MTRR
-static int nomtrr = 0;
+static bool nomtrr = 0;
 #endif
-static int force_sleep;
-static int ignore_devlist;
+static bool force_sleep;
+static bool ignore_devlist;
 #ifdef CONFIG_PMAC_BACKLIGHT
 static int backlight = 1;
 #else
@@ -845,16 +845,16 @@ static int radeonfb_pan_display (struct fb_var_screeninfo *var,
 {
         struct radeonfb_info *rinfo = info->par;
 
-        if ((var->xoffset + var->xres > var->xres_virtual)
-	    || (var->yoffset + var->yres > var->yres_virtual))
-               return -EINVAL;
+	if ((var->xoffset + info->var.xres > info->var.xres_virtual)
+	    || (var->yoffset + info->var.yres > info->var.yres_virtual))
+		return -EINVAL;
                 
         if (rinfo->asleep)
         	return 0;
 
 	radeon_fifo_wait(2);
-        OUTREG(CRTC_OFFSET, ((var->yoffset * var->xres_virtual + var->xoffset)
-			     * var->bits_per_pixel / 8) & ~7);
+	OUTREG(CRTC_OFFSET, (var->yoffset * info->fix.line_length +
+			     var->xoffset * info->var.bits_per_pixel / 8) & ~7);
         return 0;
 }
 
@@ -1248,7 +1248,7 @@ static void radeon_write_pll_regs(struct radeonfb_info *rinfo, struct radeon_reg
 
 	/* Workaround from XFree */
 	if (rinfo->is_mobility) {
-	        /* A temporal workaround for the occational blanking on certain laptop
+	        /* A temporal workaround for the occasional blanking on certain laptop
 		 * panels. This appears to related to the PLL divider registers
 		 * (fail to lock?). It occurs even when all dividers are the same
 		 * with their old settings. In this case we really don't need to

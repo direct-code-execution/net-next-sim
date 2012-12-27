@@ -22,8 +22,11 @@
 #include <linux/init.h>
 #include <mach/hardware.h>
 #include <mach/common.h>
+#include <mach/devices-common.h>
 #include <asm/pgtable.h>
 #include <asm/mach/map.h>
+#include <mach/irqs.h>
+#include <mach/iomux-v1.h>
 
 /* MX21 memory map definition */
 static struct map_desc imx21_io_desc[] __initdata = {
@@ -35,33 +38,18 @@ static struct map_desc imx21_io_desc[] __initdata = {
 	 * - ROM Patch
 	 * - and some reserved space
 	 */
-	{
-		.virtual = MX21_AIPI_BASE_ADDR_VIRT,
-		.pfn = __phys_to_pfn(MX21_AIPI_BASE_ADDR),
-		.length = MX21_AIPI_SIZE,
-		.type = MT_DEVICE
-	},
+	imx_map_entry(MX21, AIPI, MT_DEVICE),
 	/*
 	 * this fixed mapping covers:
 	 * - CSI
 	 * - ATA
 	 */
-	{
-		.virtual = MX21_SAHB1_BASE_ADDR_VIRT,
-		.pfn = __phys_to_pfn(MX21_SAHB1_BASE_ADDR),
-		.length = MX21_SAHB1_SIZE,
-		.type = MT_DEVICE
-	},
+	imx_map_entry(MX21, SAHB1, MT_DEVICE),
 	/*
 	 * this fixed mapping covers:
 	 * - EMI
 	 */
-	{
-		.virtual = MX21_X_MEMC_BASE_ADDR_VIRT,
-		.pfn = __phys_to_pfn(MX21_X_MEMC_BASE_ADDR),
-		.length = MX21_X_MEMC_SIZE,
-		.type = MT_DEVICE
-	},
+	imx_map_entry(MX21, X_MEMC, MT_DEVICE),
 };
 
 /*
@@ -71,16 +59,36 @@ static struct map_desc imx21_io_desc[] __initdata = {
  */
 void __init mx21_map_io(void)
 {
-	mxc_set_cpu_type(MXC_CPU_MX21);
-	mxc_arch_reset_init(MX21_IO_ADDRESS(MX21_WDOG_BASE_ADDR));
-
 	iotable_init(imx21_io_desc, ARRAY_SIZE(imx21_io_desc));
 }
 
-int imx21_register_gpios(void);
+void __init imx21_init_early(void)
+{
+	mxc_set_cpu_type(MXC_CPU_MX21);
+	mxc_arch_reset_init(MX21_IO_ADDRESS(MX21_WDOG_BASE_ADDR));
+	imx_iomuxv1_init(MX21_IO_ADDRESS(MX21_GPIO_BASE_ADDR),
+			MX21_NUM_GPIO_PORT);
+}
 
 void __init mx21_init_irq(void)
 {
 	mxc_init_irq(MX21_IO_ADDRESS(MX21_AVIC_BASE_ADDR));
-	imx21_register_gpios();
+}
+
+static const struct resource imx21_audmux_res[] __initconst = {
+	DEFINE_RES_MEM(MX21_AUDMUX_BASE_ADDR, SZ_4K),
+};
+
+void __init imx21_soc_init(void)
+{
+	mxc_register_gpio("imx21-gpio", 0, MX21_GPIO1_BASE_ADDR, SZ_256, MX21_INT_GPIO, 0);
+	mxc_register_gpio("imx21-gpio", 1, MX21_GPIO2_BASE_ADDR, SZ_256, MX21_INT_GPIO, 0);
+	mxc_register_gpio("imx21-gpio", 2, MX21_GPIO3_BASE_ADDR, SZ_256, MX21_INT_GPIO, 0);
+	mxc_register_gpio("imx21-gpio", 3, MX21_GPIO4_BASE_ADDR, SZ_256, MX21_INT_GPIO, 0);
+	mxc_register_gpio("imx21-gpio", 4, MX21_GPIO5_BASE_ADDR, SZ_256, MX21_INT_GPIO, 0);
+	mxc_register_gpio("imx21-gpio", 5, MX21_GPIO6_BASE_ADDR, SZ_256, MX21_INT_GPIO, 0);
+
+	imx_add_imx_dma();
+	platform_device_register_simple("imx21-audmux", 0, imx21_audmux_res,
+					ARRAY_SIZE(imx21_audmux_res));
 }

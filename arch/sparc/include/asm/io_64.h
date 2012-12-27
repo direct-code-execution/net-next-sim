@@ -6,8 +6,8 @@
 #include <linux/types.h>
 
 #include <asm/page.h>      /* IO address mapping routines need this */
-#include <asm/system.h>
 #include <asm/asi.h>
+#include <asm-generic/pci_iomap.h>
 
 /* PC crapola... */
 #define __SLOW_DOWN_IO	do { } while (0)
@@ -419,6 +419,21 @@ _memset_io(volatile void __iomem *dst, int c, __kernel_size_t n)
 #define memset_io(d,c,sz)	_memset_io(d,c,sz)
 
 static inline void
+_sbus_memcpy_fromio(void *dst, const volatile void __iomem *src,
+		    __kernel_size_t n)
+{
+	char *d = dst;
+
+	while (n--) {
+		char tmp = sbus_readb(src);
+		*d++ = tmp;
+		src++;
+	}
+}
+
+#define sbus_memcpy_fromio(d, s, sz)	_sbus_memcpy_fromio(d, s, sz)
+
+static inline void
 _memcpy_fromio(void *dst, const volatile void __iomem *src, __kernel_size_t n)
 {
 	char *d = dst;
@@ -431,6 +446,22 @@ _memcpy_fromio(void *dst, const volatile void __iomem *src, __kernel_size_t n)
 }
 
 #define memcpy_fromio(d,s,sz)	_memcpy_fromio(d,s,sz)
+
+static inline void
+_sbus_memcpy_toio(volatile void __iomem *dst, const void *src,
+		  __kernel_size_t n)
+{
+	const char *s = src;
+	volatile void __iomem *d = dst;
+
+	while (n--) {
+		char tmp = *s++;
+		sbus_writeb(tmp, d);
+		d++;
+	}
+}
+
+#define sbus_memcpy_toio(d, s, sz)	_sbus_memcpy_toio(d, s, sz)
 
 static inline void
 _memcpy_toio(volatile void __iomem *dst, const void *src, __kernel_size_t n)
@@ -483,7 +514,6 @@ extern void ioport_unmap(void __iomem *);
 
 /* Create a virtual mapping cookie for a PCI BAR (memory or IO) */
 struct pci_dev;
-extern void __iomem *pci_iomap(struct pci_dev *dev, int bar, unsigned long max);
 extern void pci_iounmap(struct pci_dev *dev, void __iomem *);
 
 static inline int sbus_can_dma_64bit(void)

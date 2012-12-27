@@ -45,7 +45,6 @@ struct hpsa_scsi_dev_t {
 	unsigned char device_id[16];    /* from inquiry pg. 0x83 */
 	unsigned char vendor[8];        /* bytes 8-15 of inquiry data */
 	unsigned char model[16];        /* bytes 16-31 of inquiry data */
-	unsigned char revision[4];      /* bytes 32-35 of inquiry data */
 	unsigned char raid_level;	/* from inquiry page 0xC1 */
 };
 
@@ -59,7 +58,6 @@ struct ctlr_info {
 	unsigned long paddr;
 	int 	nr_cmds; /* Number of commands allowed on this controller */
 	struct CfgTable __iomem *cfgtable;
-	int     max_sg_entries;
 	int	interrupts_enabled;
 	int	major;
 	int 	max_commands;
@@ -73,11 +71,12 @@ struct ctlr_info {
 	unsigned int intr[4];
 	unsigned int msix_vector;
 	unsigned int msi_vector;
+	int intr_mode; /* either PERF_MODE_INT or SIMPLE_MODE_INT */
 	struct access_method access;
 
 	/* queue and queue Info */
-	struct hlist_head reqQ;
-	struct hlist_head cmpQ;
+	struct list_head reqQ;
+	struct list_head cmpQ;
 	unsigned int Qdepth;
 	unsigned int maxQsinceinit;
 	unsigned int maxSG;
@@ -95,8 +94,6 @@ struct ctlr_info {
 	unsigned long  		*cmd_pool_bits;
 	int			nr_allocs;
 	int			nr_frees;
-	int			busy_initializing;
-	int			busy_scanning;
 	int			scan_finished;
 	spinlock_t		scan_lock;
 	wait_queue_head_t	scan_wait_queue;
@@ -104,8 +101,7 @@ struct ctlr_info {
 	struct Scsi_Host *scsi_host;
 	spinlock_t devlock; /* to protect hba[ctlr]->dev[];  */
 	int ndevices; /* number of used elements in .dev[] array. */
-#define HPSA_MAX_SCSI_DEVS_PER_HBA 256
-	struct hpsa_scsi_dev_t *dev[HPSA_MAX_SCSI_DEVS_PER_HBA];
+	struct hpsa_scsi_dev_t *dev[HPSA_MAX_DEVICES];
 	/*
 	 * Performant mode tables.
 	 */
@@ -124,13 +120,20 @@ struct ctlr_info {
 	unsigned char reply_pool_wraparound;
 	u32 *blockFetchTable;
 	unsigned char *hba_inquiry_data;
+	u64 last_intr_timestamp;
+	u32 last_heartbeat;
+	u64 last_heartbeat_timestamp;
+	u32 lockup_detected;
+	struct list_head lockup_list;
 };
 #define HPSA_ABORT_MSG 0
 #define HPSA_DEVICE_RESET_MSG 1
-#define HPSA_BUS_RESET_MSG 2
-#define HPSA_HOST_RESET_MSG 3
+#define HPSA_RESET_TYPE_CONTROLLER 0x00
+#define HPSA_RESET_TYPE_BUS 0x01
+#define HPSA_RESET_TYPE_TARGET 0x03
+#define HPSA_RESET_TYPE_LUN 0x04
 #define HPSA_MSG_SEND_RETRY_LIMIT 10
-#define HPSA_MSG_SEND_RETRY_INTERVAL_MSECS 1000
+#define HPSA_MSG_SEND_RETRY_INTERVAL_MSECS (10000)
 
 /* Maximum time in seconds driver will wait for command completions
  * when polling before giving up.
@@ -155,11 +158,15 @@ struct ctlr_info {
  * HPSA_BOARD_READY_ITERATIONS are derived from those.
  */
 #define HPSA_BOARD_READY_WAIT_SECS (120)
+#define HPSA_BOARD_NOT_READY_WAIT_SECS (100)
 #define HPSA_BOARD_READY_POLL_INTERVAL_MSECS (100)
 #define HPSA_BOARD_READY_POLL_INTERVAL \
 	((HPSA_BOARD_READY_POLL_INTERVAL_MSECS * HZ) / 1000)
 #define HPSA_BOARD_READY_ITERATIONS \
 	((HPSA_BOARD_READY_WAIT_SECS * 1000) / \
+		HPSA_BOARD_READY_POLL_INTERVAL_MSECS)
+#define HPSA_BOARD_NOT_READY_ITERATIONS \
+	((HPSA_BOARD_NOT_READY_WAIT_SECS * 1000) / \
 		HPSA_BOARD_READY_POLL_INTERVAL_MSECS)
 #define HPSA_POST_RESET_PAUSE_MSECS (3000)
 #define HPSA_POST_RESET_NOOP_RETRIES (12)
@@ -208,6 +215,7 @@ static void SA5_submit_command(struct ctlr_info *h,
 	dev_dbg(&h->pdev->dev, "Sending %x, tag = %x\n", c->busaddr,
 		c->Header.Tag.lower);
 	writel(c->busaddr, h->vaddr + SA5_REQUEST_PORT_OFFSET);
+	(void) readl(h->vaddr + SA5_SCRATCHPAD_OFFSET);
 	h->commands_outstanding++;
 	if (h->commands_outstanding > h->max_outstanding)
 		h->max_outstanding = h->commands_outstanding;
@@ -223,10 +231,12 @@ static void SA5_intr_mask(struct ctlr_info *h, unsigned long val)
 	if (val) { /* Turn interrupts on */
 		h->interrupts_enabled = 1;
 		writel(0, h->vaddr + SA5_REPLY_INTR_MASK_OFFSET);
+		(void) readl(h->vaddr + SA5_REPLY_INTR_MASK_OFFSET);
 	} else { /* Turn them off */
 		h->interrupts_enabled = 0;
 		writel(SA5_INTR_OFF,
 			h->vaddr + SA5_REPLY_INTR_MASK_OFFSET);
+		(void) readl(h->vaddr + SA5_REPLY_INTR_MASK_OFFSET);
 	}
 }
 
@@ -235,10 +245,12 @@ static void SA5_performant_intr_mask(struct ctlr_info *h, unsigned long val)
 	if (val) { /* turn on interrupts */
 		h->interrupts_enabled = 1;
 		writel(0, h->vaddr + SA5_REPLY_INTR_MASK_OFFSET);
+		(void) readl(h->vaddr + SA5_REPLY_INTR_MASK_OFFSET);
 	} else {
 		h->interrupts_enabled = 0;
 		writel(SA5_PERF_INTR_OFF,
 			h->vaddr + SA5_REPLY_INTR_MASK_OFFSET);
+		(void) readl(h->vaddr + SA5_REPLY_INTR_MASK_OFFSET);
 	}
 }
 
@@ -304,7 +316,7 @@ static unsigned long SA5_completed(struct ctlr_info *h)
 		dev_dbg(&h->pdev->dev, "Read %lx back from board\n",
 			register_value);
 	else
-		dev_dbg(&h->pdev->dev, "hpsa: FIFO Empty read\n");
+		dev_dbg(&h->pdev->dev, "FIFO Empty read\n");
 #endif
 
 	return register_value;

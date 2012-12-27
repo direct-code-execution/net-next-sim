@@ -15,6 +15,7 @@
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/mm.h>
@@ -38,7 +39,6 @@
 #include <mach/regs-clock.h>
 #include <mach/regs-ldm.h>
 #include <mach/fb.h>
-#include <mach/clkdev.h>
 
 #include "nuc900fb.h"
 
@@ -550,7 +550,7 @@ static int __devinit nuc900fb_probe(struct platform_device *pdev)
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 
-	size = (res->end - res->start) + 1;
+	size = resource_size(res);
 	fbi->mem = request_mem_region(res->start, size, pdev->name);
 	if (fbi->mem == NULL) {
 		dev_err(&pdev->dev, "failed to alloc memory region\n");
@@ -587,7 +587,7 @@ static int __devinit nuc900fb_probe(struct platform_device *pdev)
 	fbinfo->flags			= FBINFO_FLAG_DEFAULT;
 	fbinfo->pseudo_palette		= &fbi->pseudo_pal;
 
-	ret = request_irq(irq, nuc900fb_irqhandler, IRQF_DISABLED,
+	ret = request_irq(irq, nuc900fb_irqhandler, 0,
 			  pdev->name, fbinfo);
 	if (ret) {
 		dev_err(&pdev->dev, "cannot register irq handler %d -err %d\n",
@@ -597,9 +597,9 @@ static int __devinit nuc900fb_probe(struct platform_device *pdev)
 	}
 
 	fbi->clk = clk_get(&pdev->dev, NULL);
-	if (!fbi->clk || IS_ERR(fbi->clk)) {
+	if (IS_ERR(fbi->clk)) {
 		printk(KERN_ERR "nuc900-lcd:failed to get lcd clock source\n");
-		ret = -ENOENT;
+		ret = PTR_ERR(fbi->clk);
 		goto release_irq;
 	}
 
@@ -695,6 +695,8 @@ static int nuc900fb_remove(struct platform_device *pdev)
 	nuc900fb_stop_lcd(fbinfo);
 	msleep(1);
 
+	unregister_framebuffer(fbinfo);
+	nuc900fb_cpufreq_deregister(fbi);
 	nuc900fb_unmap_video_memory(fbinfo);
 
 	iounmap(fbi->io);
@@ -722,7 +724,7 @@ static int nuc900fb_suspend(struct platform_device *dev, pm_message_t state)
 	struct fb_info	   *fbinfo = platform_get_drvdata(dev);
 	struct nuc900fb_info *info = fbinfo->par;
 
-	nuc900fb_stop_lcd();
+	nuc900fb_stop_lcd(fbinfo);
 	msleep(1);
 	clk_disable(info->clk);
 	return 0;
@@ -739,7 +741,7 @@ static int nuc900fb_resume(struct platform_device *dev)
 	msleep(1);
 
 	nuc900fb_init_registers(fbinfo);
-	nuc900fb_activate_var(bfinfo);
+	nuc900fb_activate_var(fbinfo);
 
 	return 0;
 }
@@ -760,18 +762,7 @@ static struct platform_driver nuc900fb_driver = {
 	},
 };
 
-int __devinit nuc900fb_init(void)
-{
-	return platform_driver_register(&nuc900fb_driver);
-}
-
-static void __exit nuc900fb_cleanup(void)
-{
-	platform_driver_unregister(&nuc900fb_driver);
-}
-
-module_init(nuc900fb_init);
-module_exit(nuc900fb_cleanup);
+module_platform_driver(nuc900fb_driver);
 
 MODULE_DESCRIPTION("Framebuffer driver for the NUC900");
 MODULE_LICENSE("GPL");

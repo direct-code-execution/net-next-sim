@@ -21,11 +21,13 @@
 #include <linux/clk.h>
 #include <linux/io.h>
 
+#include <plat/hardware.h>
 #include <plat/clock.h>
 
+#include "iomap.h"
 #include "clock.h"
 #include "clock2xxx.h"
-#include "cm.h"
+#include "cm2xxx_3xxx.h"
 #include "cm-regbits-24xx.h"
 
 /**

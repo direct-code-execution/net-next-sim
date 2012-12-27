@@ -15,7 +15,7 @@
  * Derived from iLib's single-stepping code.
  */
 
-#ifndef __tilegx__   /* No support for single-step yet. */
+#ifndef __tilegx__   /* Hardware support for single step unavailable. */
 
 /* These functions are only used on the TILE platform */
 #include <linux/slab.h>
@@ -25,9 +25,9 @@
 #include <linux/types.h>
 #include <linux/err.h>
 #include <asm/cacheflush.h>
-#include <asm/opcode-tile.h>
-#include <asm/opcode_constants.h>
+#include <asm/unaligned.h>
 #include <arch/abi.h>
+#include <arch/opcode.h>
 
 #define signExtend17(val) sign_extend((val), 17)
 #define TILE_X1_MASK (0xffffffffULL << 31)
@@ -56,7 +56,7 @@ enum mem_op {
 	MEMOP_STORE_POSTINCR
 };
 
-static inline tile_bundle_bits set_BrOff_X1(tile_bundle_bits n, int32_t offset)
+static inline tile_bundle_bits set_BrOff_X1(tile_bundle_bits n, s32 offset)
 {
 	tile_bundle_bits result;
 
@@ -118,7 +118,7 @@ static tile_bundle_bits rewrite_load_store_unaligned(
 	int val_reg, addr_reg, err, val;
 
 	/* Get address and value registers */
-	if (bundle & TILE_BUNDLE_Y_ENCODING_MASK) {
+	if (bundle & TILEPRO_BUNDLE_Y_ENCODING_MASK) {
 		addr_reg = get_SrcA_Y2(bundle);
 		val_reg = get_SrcBDest_Y2(bundle);
 	} else if (mem_op == MEMOP_LOAD || mem_op == MEMOP_LOAD_POSTINCR) {
@@ -153,6 +153,25 @@ static tile_bundle_bits rewrite_load_store_unaligned(
 	if (((unsigned long)addr % size) == 0)
 		return bundle;
 
+	/*
+	 * Return SIGBUS with the unaligned address, if requested.
+	 * Note that we return SIGBUS even for completely invalid addresses
+	 * as long as they are in fact unaligned; this matches what the
+	 * tilepro hardware would be doing, if it could provide us with the
+	 * actual bad address in an SPR, which it doesn't.
+	 */
+	if (unaligned_fixup == 0) {
+		siginfo_t info = {
+			.si_signo = SIGBUS,
+			.si_code = BUS_ADRALN,
+			.si_addr = addr
+		};
+		trace_unhandled_signal("unaligned trap", regs,
+				       (unsigned long)addr, SIGBUS);
+		force_sig_info(info.si_signo, &info, current);
+		return (tilepro_bundle_bits) 0;
+	}
+
 #ifndef __LITTLE_ENDIAN
 # error We assume little-endian representation with copy_xx_user size 2 here
 #endif
@@ -186,16 +205,8 @@ static tile_bundle_bits rewrite_load_store_unaligned(
 			.si_code = SEGV_MAPERR,
 			.si_addr = addr
 		};
-		force_sig_info(info.si_signo, &info, current);
-		return (tile_bundle_bits) 0;
-	}
-
-	if (unaligned_fixup == 0) {
-		siginfo_t info = {
-			.si_signo = SIGBUS,
-			.si_code = BUS_ADRALN,
-			.si_addr = addr
-		};
+		trace_unhandled_signal("segfault", regs,
+				       (unsigned long)addr, SIGSEGV);
 		force_sig_info(info.si_signo, &info, current);
 		return (tile_bundle_bits) 0;
 	}
@@ -225,7 +236,7 @@ P("\n");
 	}
 	++unaligned_fixup_count;
 
-	if (bundle & TILE_BUNDLE_Y_ENCODING_MASK) {
+	if (bundle & TILEPRO_BUNDLE_Y_ENCODING_MASK) {
 		/* Convert the Y2 instruction to a prefetch. */
 		bundle &= ~(create_SrcBDest_Y2(-1) |
 			    create_Opcode_Y2(-1));
@@ -252,6 +263,18 @@ P("\n");
 	}
 
 	return bundle;
+}
+
+/*
+ * Called after execve() has started the new image.  This allows us
+ * to reset the info state.  Note that the the mmap'ed memory, if there
+ * was any, has already been unmapped by the exec.
+ */
+void single_step_execve(void)
+{
+	struct thread_info *ti = current_thread_info();
+	kfree(ti->step_state);
+	ti->step_state = NULL;
 }
 
 /**
@@ -306,6 +329,14 @@ void single_step_once(struct pt_regs *regs)
 "    .popsection\n"
 	);
 
+	/*
+	 * Enable interrupts here to allow touching userspace and the like.
+	 * The callers expect this: do_trap() already has interrupts
+	 * enabled, and do_work_pending() handles functions that enable
+	 * interrupts internally.
+	 */
+	local_irq_enable();
+
 	if (state == NULL) {
 		/* allocate a page of writable, executable memory */
 		state = kmalloc(sizeof(struct single_step_state), GFP_KERNEL);
@@ -315,12 +346,10 @@ void single_step_once(struct pt_regs *regs)
 		}
 
 		/* allocate a cache line of writable, executable memory */
-		down_write(&current->mm->mmap_sem);
-		buffer = (void __user *) do_mmap(NULL, 0, 64,
+		buffer = (void __user *) vm_mmap(NULL, 0, 64,
 					  PROT_EXEC | PROT_READ | PROT_WRITE,
 					  MAP_PRIVATE | MAP_ANONYMOUS,
 					  0);
-		up_write(&current->mm->mmap_sem);
 
 		if (IS_ERR((void __force *)buffer)) {
 			kfree(state);
@@ -365,7 +394,7 @@ void single_step_once(struct pt_regs *regs)
 	state->branch_next_pc = 0;
 	state->update = 0;
 
-	if (!(bundle & TILE_BUNDLE_Y_ENCODING_MASK)) {
+	if (!(bundle & TILEPRO_BUNDLE_Y_ENCODING_MASK)) {
 		/* two wide, check for control flow */
 		int opcode = get_Opcode_X1(bundle);
 
@@ -373,7 +402,7 @@ void single_step_once(struct pt_regs *regs)
 		/* branches */
 		case BRANCH_OPCODE_X1:
 		{
-			int32_t offset = signExtend17(get_BrOff_X1(bundle));
+			s32 offset = signExtend17(get_BrOff_X1(bundle));
 
 			/*
 			 * For branches, we use a rewriting trick to let the
@@ -658,6 +687,82 @@ void single_step_once(struct pt_regs *regs)
 	/* Fault immediately if we are coming back from a syscall. */
 	if (regs->faultnum == INT_SWINT_1)
 		regs->pc += 8;
+}
+
+#else
+#include <linux/smp.h>
+#include <linux/ptrace.h>
+#include <arch/spr_def.h>
+
+static DEFINE_PER_CPU(unsigned long, ss_saved_pc);
+
+
+/*
+ * Called directly on the occasion of an interrupt.
+ *
+ * If the process doesn't have single step set, then we use this as an
+ * opportunity to turn single step off.
+ *
+ * It has been mentioned that we could conditionally turn off single stepping
+ * on each entry into the kernel and rely on single_step_once to turn it
+ * on for the processes that matter (as we already do), but this
+ * implementation is somewhat more efficient in that we muck with registers
+ * once on a bum interrupt rather than on every entry into the kernel.
+ *
+ * If SINGLE_STEP_CONTROL_K has CANCELED set, then an interrupt occurred,
+ * so we have to run through this process again before we can say that an
+ * instruction has executed.
+ *
+ * swint will set CANCELED, but it's a legitimate instruction.  Fortunately
+ * it changes the PC.  If it hasn't changed, then we know that the interrupt
+ * wasn't generated by swint and we'll need to run this process again before
+ * we can say an instruction has executed.
+ *
+ * If either CANCELED == 0 or the PC's changed, we send out SIGTRAPs and get
+ * on with our lives.
+ */
+
+void gx_singlestep_handle(struct pt_regs *regs, int fault_num)
+{
+	unsigned long *ss_pc = &__get_cpu_var(ss_saved_pc);
+	struct thread_info *info = (void *)current_thread_info();
+	int is_single_step = test_ti_thread_flag(info, TIF_SINGLESTEP);
+	unsigned long control = __insn_mfspr(SPR_SINGLE_STEP_CONTROL_K);
+
+	if (is_single_step == 0) {
+		__insn_mtspr(SPR_SINGLE_STEP_EN_K_K, 0);
+
+	} else if ((*ss_pc != regs->pc) ||
+		   (!(control & SPR_SINGLE_STEP_CONTROL_1__CANCELED_MASK))) {
+
+		ptrace_notify(SIGTRAP);
+		control |= SPR_SINGLE_STEP_CONTROL_1__CANCELED_MASK;
+		control |= SPR_SINGLE_STEP_CONTROL_1__INHIBIT_MASK;
+		__insn_mtspr(SPR_SINGLE_STEP_CONTROL_K, control);
+	}
+}
+
+
+/*
+ * Called from need_singlestep.  Set up the control registers and the enable
+ * register, then return back.
+ */
+
+void single_step_once(struct pt_regs *regs)
+{
+	unsigned long *ss_pc = &__get_cpu_var(ss_saved_pc);
+	unsigned long control = __insn_mfspr(SPR_SINGLE_STEP_CONTROL_K);
+
+	*ss_pc = regs->pc;
+	control |= SPR_SINGLE_STEP_CONTROL_1__CANCELED_MASK;
+	control |= SPR_SINGLE_STEP_CONTROL_1__INHIBIT_MASK;
+	__insn_mtspr(SPR_SINGLE_STEP_CONTROL_K, control);
+	__insn_mtspr(SPR_SINGLE_STEP_EN_K_K, 1 << USER_PL);
+}
+
+void single_step_execve(void)
+{
+	/* Nothing */
 }
 
 #endif /* !__tilegx__ */

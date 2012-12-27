@@ -30,13 +30,12 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-chip-ident.h>
 #include <media/v4l2-ctrls.h>
-#include <media/v4l2-i2c-drv.h>
 
 MODULE_DESCRIPTION("i2c device driver for cs53l32a Audio ADC");
 MODULE_AUTHOR("Martin Vaughan");
 MODULE_LICENSE("GPL");
 
-static int debug;
+static bool debug;
 
 module_param(debug, bool, 0644);
 
@@ -239,9 +238,14 @@ static const struct i2c_device_id cs53l32a_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, cs53l32a_id);
 
-static struct v4l2_i2c_driver_data v4l2_i2c_data = {
-	.name = "cs53l32a",
-	.remove = cs53l32a_remove,
-	.probe = cs53l32a_probe,
-	.id_table = cs53l32a_id,
+static struct i2c_driver cs53l32a_driver = {
+	.driver = {
+		.owner	= THIS_MODULE,
+		.name	= "cs53l32a",
+	},
+	.probe		= cs53l32a_probe,
+	.remove		= cs53l32a_remove,
+	.id_table	= cs53l32a_id,
 };
+
+module_i2c_driver(cs53l32a_driver);

@@ -38,6 +38,9 @@ enum {
 	/* module tvaudio: reserved range 50-99 */
 	V4L2_IDENT_TVAUDIO = 50,	/* A tvaudio chip, unknown which it is exactly */
 
+	/* Sony IMX074 */
+	V4L2_IDENT_IMX074 = 74,
+
 	/* module saa7110: just ident 100 */
 	V4L2_IDENT_SAA7110 = 100,
 
@@ -70,6 +73,10 @@ enum {
 	V4L2_IDENT_OV9655 = 255,
 	V4L2_IDENT_SOI968 = 256,
 	V4L2_IDENT_OV9640 = 257,
+	V4L2_IDENT_OV6650 = 258,
+	V4L2_IDENT_OV2640 = 259,
+	V4L2_IDENT_OV9740 = 260,
+	V4L2_IDENT_OV5642 = 261,
 
 	/* module saa7146: reserved range 300-309 */
 	V4L2_IDENT_SAA7146 = 300,
@@ -111,6 +118,10 @@ enum {
 	V4L2_IDENT_VPX3216B = 3216,
 	V4L2_IDENT_VPX3220A = 3220,
 
+	/* VX855 just ident 3409 */
+	/* Other via devs could use 3314, 3324, 3327, 3336, 3364, 3353 */
+	V4L2_IDENT_VIA_VX855 = 3409,
+
 	/* module tvp5150 */
 	V4L2_IDENT_TVP5150 = 5150,
 
@@ -132,6 +143,9 @@ enum {
 	/* module saa6588: just ident 6588 */
 	V4L2_IDENT_SAA6588 = 6588,
 
+	/* module vs6624: just ident 6624 */
+	V4L2_IDENT_VS6624 = 6624,
+
 	/* module saa6752hs: reserved range 6750-6759 */
 	V4L2_IDENT_SAA6752HS = 6752,
 	V4L2_IDENT_SAA6752HS_AC3 = 6753,
@@ -150,6 +164,9 @@ enum {
 
 	/* module adv7180: just ident 7180 */
 	V4L2_IDENT_ADV7180 = 7180,
+
+	/* module adv7183: just ident 7183 */
+	V4L2_IDENT_ADV7183 = 7183,
 
 	/* module saa7185: just ident 7185 */
 	V4L2_IDENT_SAA7185 = 7185,
@@ -175,8 +192,9 @@ enum {
 	/* module wm8775: just ident 8775 */
 	V4L2_IDENT_WM8775 = 8775,
 
-	/* module cafe_ccic, just ident 8801 */
+	/* Marvell controllers starting at 8801 */
 	V4L2_IDENT_CAFE = 8801,
+	V4L2_IDENT_ARMADA610 = 8802,
 
 	/* AKM AK8813/AK8814 */
 	V4L2_IDENT_AK8813 = 8813,

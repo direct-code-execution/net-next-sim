@@ -19,13 +19,13 @@
 #include <linux/reboot.h>
 #include <linux/uaccess.h>
 #include <linux/ptrace.h>
-#include <asm/opcode-tile.h>
-#include <asm/opcode_constants.h>
 #include <asm/stack.h>
 #include <asm/traps.h>
+#include <asm/setup.h>
 
 #include <arch/interrupts.h>
 #include <arch/spr_def.h>
+#include <arch/opcode.h>
 
 void __init trap_init(void)
 {
@@ -135,7 +135,7 @@ static int special_ill(bundle_bits bundle, int *sigp, int *codep)
 	if (get_UnaryOpcodeExtension_X1(bundle) != ILL_UNARY_OPCODE_X1)
 		return 0;
 #else
-	if (bundle & TILE_BUNDLE_Y_ENCODING_MASK)
+	if (bundle & TILEPRO_BUNDLE_Y_ENCODING_MASK)
 		return 0;
 	if (get_Opcode_X1(bundle) != SHUN_0_OPCODE_X1)
 		return 0;
@@ -200,7 +200,7 @@ void __kprobes do_trap(struct pt_regs *regs, int fault_num,
 {
 	siginfo_t info = { 0 };
 	int signo, code;
-	unsigned long address;
+	unsigned long address = 0;
 	bundle_bits instr;
 
 	/* Re-enable interrupts. */
@@ -223,6 +223,10 @@ void __kprobes do_trap(struct pt_regs *regs, int fault_num,
 	}
 
 	switch (fault_num) {
+	case INT_MEM_ERROR:
+		signo = SIGBUS;
+		code = BUS_OBJERR;
+		break;
 	case INT_ILL:
 		if (copy_from_user(&instr, (void __user *)regs->pc,
 				   sizeof(instr))) {
@@ -260,7 +264,7 @@ void __kprobes do_trap(struct pt_regs *regs, int fault_num,
 		address = regs->pc;
 		break;
 	case INT_UNALIGN_DATA:
-#ifndef __tilegx__  /* FIXME: GX: no single-step yet */
+#ifndef __tilegx__  /* Emulated support for single step debugging */
 		if (unaligned_fixup >= 0) {
 			struct single_step_state *state =
 				current_thread_info()->step_state;
@@ -278,7 +282,7 @@ void __kprobes do_trap(struct pt_regs *regs, int fault_num,
 	case INT_DOUBLE_FAULT:
 		/*
 		 * For double fault, "reason" is actually passed as
-		 * SYSTEM_SAVE_1_2, the hypervisor's double-fault info, so
+		 * SYSTEM_SAVE_K_2, the hypervisor's double-fault info, so
 		 * we can provide the original fault number rather than
 		 * the uninteresting "INT_DOUBLE_FAULT" so the user can
 		 * learn what actually struck while PL0 ICS was set.
@@ -289,7 +293,10 @@ void __kprobes do_trap(struct pt_regs *regs, int fault_num,
 		address = regs->pc;
 		break;
 #ifdef __tilegx__
-	case INT_ILL_TRANS:
+	case INT_ILL_TRANS: {
+		/* Avoid a hardware erratum with the return address stack. */
+		fill_ra_stack();
+
 		signo = SIGSEGV;
 		code = SEGV_MAPERR;
 		if (reason & SPR_ILL_TRANS_REASON__I_STREAM_VA_RMASK)
@@ -297,6 +304,7 @@ void __kprobes do_trap(struct pt_regs *regs, int fault_num,
 		else
 			address = 0;  /* FIXME: GX: single-step for address */
 		break;
+	}
 #endif
 	default:
 		panic("Unexpected do_trap interrupt number %d", fault_num);
@@ -308,6 +316,8 @@ void __kprobes do_trap(struct pt_regs *regs, int fault_num,
 	info.si_addr = (void __user *)address;
 	if (signo == SIGILL)
 		info.si_trapno = fault_num;
+	if (signo != SIGTRAP)
+		trace_unhandled_signal("trap", regs, address, signo);
 	force_sig_info(signo, &info, current);
 }
 

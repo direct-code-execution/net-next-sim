@@ -28,7 +28,7 @@ struct buffer_head *omfs_bread(struct super_block *sb, sector_t block)
 	return sb_bread(sb, clus_to_blk(sbi, block));
 }
 
-struct inode *omfs_new_inode(struct inode *dir, int mode)
+struct inode *omfs_new_inode(struct inode *dir, umode_t mode)
 {
 	struct inode *inode;
 	u64 new_block;
@@ -539,11 +539,9 @@ static int omfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out_brelse_bh2;
 	}
 
-	sb->s_root = d_alloc_root(root);
-	if (!sb->s_root) {
-		iput(root);
+	sb->s_root = d_make_root(root);
+	if (!sb->s_root)
 		goto out_brelse_bh2;
-	}
 	printk(KERN_DEBUG "omfs: Mounted volume %s\n", omfs_rb->r_name);
 
 	ret = 0;
@@ -557,17 +555,16 @@ end:
 	return ret;
 }
 
-static int omfs_get_sb(struct file_system_type *fs_type,
-			int flags, const char *dev_name,
-			void *data, struct vfsmount *m)
+static struct dentry *omfs_mount(struct file_system_type *fs_type,
+			int flags, const char *dev_name, void *data)
 {
-	return get_sb_bdev(fs_type, flags, dev_name, data, omfs_fill_super, m);
+	return mount_bdev(fs_type, flags, dev_name, data, omfs_fill_super);
 }
 
 static struct file_system_type omfs_fs_type = {
 	.owner = THIS_MODULE,
 	.name = "omfs",
-	.get_sb = omfs_get_sb,
+	.mount = omfs_mount,
 	.kill_sb = kill_block_super,
 	.fs_flags = FS_REQUIRES_DEV,
 };

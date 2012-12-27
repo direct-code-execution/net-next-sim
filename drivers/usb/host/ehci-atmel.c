@@ -13,6 +13,8 @@
 
 #include <linux/clk.h>
 #include <linux/platform_device.h>
+#include <linux/of.h>
+#include <linux/of_platform.h>
 
 /* interface and function clocks */
 static struct clk *iclk, *fclk;
@@ -56,7 +58,7 @@ static int ehci_atmel_setup(struct usb_hcd *hcd)
 	/* registers start at offset 0x0 */
 	ehci->caps = hcd->regs;
 	ehci->regs = hcd->regs +
-		HC_LENGTH(ehci_readl(ehci, &ehci->caps->hc_capbase));
+		HC_LENGTH(ehci, ehci_readl(ehci, &ehci->caps->hc_capbase));
 	dbg_hcs_params(ehci, "reset");
 	dbg_hcc_params(ehci, "reset");
 
@@ -99,6 +101,7 @@ static const struct hc_driver ehci_atmel_hc_driver = {
 	.urb_enqueue		= ehci_urb_enqueue,
 	.urb_dequeue		= ehci_urb_dequeue,
 	.endpoint_disable	= ehci_endpoint_disable,
+	.endpoint_reset		= ehci_endpoint_reset,
 
 	/* scheduling support */
 	.get_frame_number	= ehci_get_frame,
@@ -110,9 +113,13 @@ static const struct hc_driver ehci_atmel_hc_driver = {
 	.bus_resume		= ehci_bus_resume,
 	.relinquish_port	= ehci_relinquish_port,
 	.port_handed_over	= ehci_port_handed_over,
+
+	.clear_tt_buffer_complete	= ehci_clear_tt_buffer_complete,
 };
 
-static int __init ehci_atmel_drv_probe(struct platform_device *pdev)
+static u64 at91_ehci_dma_mask = DMA_BIT_MASK(32);
+
+static int __devinit ehci_atmel_drv_probe(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd;
 	const struct hc_driver *driver = &ehci_atmel_hc_driver;
@@ -133,6 +140,13 @@ static int __init ehci_atmel_drv_probe(struct platform_device *pdev)
 		retval = -ENODEV;
 		goto fail_create_hcd;
 	}
+
+	/* Right now device-tree probed devices don't get dma_mask set.
+	 * Since shared usb code relies on it, set it here for now.
+	 * Once we have dma capability bindings this can go away.
+	 */
+	if (!pdev->dev.dma_mask)
+		pdev->dev.dma_mask = &at91_ehci_dma_mask;
 
 	hcd = usb_create_hcd(driver, &pdev->dev, dev_name(&pdev->dev));
 	if (!hcd) {
@@ -204,7 +218,7 @@ fail_create_hcd:
 	return retval;
 }
 
-static int __exit ehci_atmel_drv_remove(struct platform_device *pdev)
+static int __devexit ehci_atmel_drv_remove(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd = platform_get_drvdata(pdev);
 
@@ -222,9 +236,21 @@ static int __exit ehci_atmel_drv_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_OF
+static const struct of_device_id atmel_ehci_dt_ids[] = {
+	{ .compatible = "atmel,at91sam9g45-ehci" },
+	{ /* sentinel */ }
+};
+
+MODULE_DEVICE_TABLE(of, atmel_ehci_dt_ids);
+#endif
+
 static struct platform_driver ehci_atmel_driver = {
 	.probe		= ehci_atmel_drv_probe,
-	.remove		= __exit_p(ehci_atmel_drv_remove),
+	.remove		= __devexit_p(ehci_atmel_drv_remove),
 	.shutdown	= usb_hcd_platform_shutdown,
-	.driver.name	= "atmel-ehci",
+	.driver		= {
+		.name	= "atmel-ehci",
+		.of_match_table	= of_match_ptr(atmel_ehci_dt_ids),
+	},
 };

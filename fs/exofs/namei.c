@@ -55,16 +55,11 @@ static struct dentry *exofs_lookup(struct inode *dir, struct dentry *dentry,
 		return ERR_PTR(-ENAMETOOLONG);
 
 	ino = exofs_inode_by_name(dir, dentry);
-	inode = NULL;
-	if (ino) {
-		inode = exofs_iget(dir->i_sb, ino);
-		if (IS_ERR(inode))
-			return ERR_CAST(inode);
-	}
+	inode = ino ? exofs_iget(dir->i_sb, ino) : NULL;
 	return d_splice_alias(inode, dentry);
 }
 
-static int exofs_create(struct inode *dir, struct dentry *dentry, int mode,
+static int exofs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 			 struct nameidata *nd)
 {
 	struct inode *inode = exofs_new_inode(dir, mode);
@@ -79,7 +74,7 @@ static int exofs_create(struct inode *dir, struct dentry *dentry, int mode,
 	return err;
 }
 
-static int exofs_mknod(struct inode *dir, struct dentry *dentry, int mode,
+static int exofs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 		       dev_t rdev)
 {
 	struct inode *inode;
@@ -148,23 +143,17 @@ static int exofs_link(struct dentry *old_dentry, struct inode *dir,
 {
 	struct inode *inode = old_dentry->d_inode;
 
-	if (inode->i_nlink >= EXOFS_LINK_MAX)
-		return -EMLINK;
-
 	inode->i_ctime = CURRENT_TIME;
 	inode_inc_link_count(inode);
-	atomic_inc(&inode->i_count);
+	ihold(inode);
 
 	return exofs_add_nondir(dentry, inode);
 }
 
-static int exofs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
+static int exofs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	struct inode *inode;
-	int err = -EMLINK;
-
-	if (dir->i_nlink >= EXOFS_LINK_MAX)
-		goto out;
+	int err;
 
 	inode_inc_link_count(dir);
 
@@ -272,7 +261,6 @@ static int exofs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		new_de = exofs_find_entry(new_dir, new_dentry, &new_page);
 		if (!new_de)
 			goto out_dir;
-		inode_inc_link_count(old_inode);
 		err = exofs_set_link(new_dir, new_de, new_page, old_inode);
 		new_inode->i_ctime = CURRENT_TIME;
 		if (dir_de)
@@ -281,17 +269,9 @@ static int exofs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		if (err)
 			goto out_dir;
 	} else {
-		if (dir_de) {
-			err = -EMLINK;
-			if (new_dir->i_nlink >= EXOFS_LINK_MAX)
-				goto out_dir;
-		}
-		inode_inc_link_count(old_inode);
 		err = exofs_add_link(new_dentry, old_inode);
-		if (err) {
-			inode_dec_link_count(old_inode);
+		if (err)
 			goto out_dir;
-		}
 		if (dir_de)
 			inode_inc_link_count(new_dir);
 	}
@@ -299,7 +279,7 @@ static int exofs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	old_inode->i_ctime = CURRENT_TIME;
 
 	exofs_delete_entry(old_de, old_page);
-	inode_dec_link_count(old_inode);
+	mark_inode_dirty(old_inode);
 
 	if (dir_de) {
 		err = exofs_set_link(old_inode, dir_de, dir_page, new_dir);

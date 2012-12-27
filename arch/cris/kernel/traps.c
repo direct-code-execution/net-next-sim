@@ -17,6 +17,7 @@
 
 #include <asm/pgtable.h>
 #include <asm/uaccess.h>
+#include <arch/system.h>
 
 extern void arch_enable_nmi(void);
 extern void stop_watchdog(void);
@@ -183,7 +184,7 @@ __initcall(oops_nmi_register);
 
 /*
  * This gets called from entry.S when the watchdog has bitten. Show something
- * similiar to an Oops dump, and if the kernel is configured to be a nice
+ * similar to an Oops dump, and if the kernel is configured to be a nice
  * doggy, then halt instead of reboot.
  */
 void

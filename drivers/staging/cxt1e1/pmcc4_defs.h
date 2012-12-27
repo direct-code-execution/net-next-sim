@@ -1,7 +1,3 @@
-/*
- * $Id: pmcc4_defs.h,v 1.0 2005/09/28 00:10:09 rickd PMCC4_3_1B $
- */
-
 #ifndef _INC_PMCC4_DEFS_H_
 #define _INC_PMCC4_DEFS_H_
 
@@ -25,16 +21,6 @@
  * For further information, contact via email: support@sbei.com
  * SBE, Inc.  San Ramon, California  U.S.A.
  *-----------------------------------------------------------------------------
- * RCS info:
- * RCS revision: $Revision: 1.0 $
- * Last changed on $Date: 2005/09/28 00:10:09 $
- * Changed by $Author: rickd $
- *-----------------------------------------------------------------------------
- * $Log: pmcc4_defs.h,v $
- * Revision 1.0  2005/09/28 00:10:09  rickd
- * Initial revision
- *
- *-----------------------------------------------------------------------------
  */
 
 
@@ -54,8 +40,8 @@
 #define MUSYCC_MTU          2048  /* default */
 #define MUSYCC_TXDESC_MIN   10    /* HDLC mode default */
 #define MUSYCC_RXDESC_MIN   18    /* HDLC mode default */
-#define MUSYCC_TXDESC_TRANS 4     /* Transparent mode minumum # of TX descriptors */
-#define MUSYCC_RXDESC_TRANS 12    /* Transparent mode minumum # of RX descriptors */
+#define MUSYCC_TXDESC_TRANS 4     /* Transparent mode minimum # of TX descriptors */
+#define MUSYCC_RXDESC_TRANS 12    /* Transparent mode minimum # of RX descriptors */
 
 #define MAX_DEFAULT_IFQLEN  32    /* network qlen */
 

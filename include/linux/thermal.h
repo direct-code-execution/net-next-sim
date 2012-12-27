@@ -77,29 +77,13 @@ struct thermal_cooling_device {
 	char type[THERMAL_NAME_LENGTH];
 	struct device device;
 	void *devdata;
-	struct thermal_cooling_device_ops *ops;
+	const struct thermal_cooling_device_ops *ops;
 	struct list_head node;
 };
 
 #define KELVIN_TO_CELSIUS(t)	(long)(((long)t-2732 >= 0) ?	\
 				((long)t-2732+5)/10 : ((long)t-2732-5)/10)
 #define CELSIUS_TO_KELVIN(t)	((t)*10+2732)
-
-#if defined(CONFIG_THERMAL_HWMON)
-/* thermal zone devices with the same type share one hwmon device */
-struct thermal_hwmon_device {
-	char type[THERMAL_NAME_LENGTH];
-	struct device *device;
-	int count;
-	struct list_head tz_list;
-	struct list_head node;
-};
-
-struct thermal_hwmon_attr {
-	struct device_attribute attr;
-	char name[16];
-};
-#endif
 
 struct thermal_zone_device {
 	int id;
@@ -114,26 +98,48 @@ struct thermal_zone_device {
 	int last_temperature;
 	bool passive;
 	unsigned int forced_passive;
-	struct thermal_zone_device_ops *ops;
+	const struct thermal_zone_device_ops *ops;
 	struct list_head cooling_devices;
 	struct idr idr;
 	struct mutex lock;	/* protect cooling devices list */
 	struct list_head node;
 	struct delayed_work poll_queue;
-#if defined(CONFIG_THERMAL_HWMON)
-	struct list_head hwmon_node;
-	struct thermal_hwmon_device *hwmon;
-	struct thermal_hwmon_attr temp_input;	/* hwmon sys attr */
-	struct thermal_hwmon_attr temp_crit;	/* hwmon sys attr */
-#endif
+};
+/* Adding event notification support elements */
+#define THERMAL_GENL_FAMILY_NAME                "thermal_event"
+#define THERMAL_GENL_VERSION                    0x01
+#define THERMAL_GENL_MCAST_GROUP_NAME           "thermal_mc_group"
+
+enum events {
+	THERMAL_AUX0,
+	THERMAL_AUX1,
+	THERMAL_CRITICAL,
+	THERMAL_DEV_FAULT,
 };
 
+struct thermal_genl_event {
+	u32 orig;
+	enum events event;
+};
+/* attributes of thermal_genl_family */
+enum {
+	THERMAL_GENL_ATTR_UNSPEC,
+	THERMAL_GENL_ATTR_EVENT,
+	__THERMAL_GENL_ATTR_MAX,
+};
+#define THERMAL_GENL_ATTR_MAX (__THERMAL_GENL_ATTR_MAX - 1)
+
+/* commands supported by the thermal_genl_family */
+enum {
+	THERMAL_GENL_CMD_UNSPEC,
+	THERMAL_GENL_CMD_EVENT,
+	__THERMAL_GENL_CMD_MAX,
+};
+#define THERMAL_GENL_CMD_MAX (__THERMAL_GENL_CMD_MAX - 1)
+
 struct thermal_zone_device *thermal_zone_device_register(char *, int, void *,
-							 struct
-							 thermal_zone_device_ops
-							 *, int tc1, int tc2,
-							 int passive_freq,
-							 int polling_freq);
+		const struct thermal_zone_device_ops *, int tc1, int tc2,
+		int passive_freq, int polling_freq);
 void thermal_zone_device_unregister(struct thermal_zone_device *);
 
 int thermal_zone_bind_cooling_device(struct thermal_zone_device *, int,
@@ -142,9 +148,16 @@ int thermal_zone_unbind_cooling_device(struct thermal_zone_device *, int,
 				       struct thermal_cooling_device *);
 void thermal_zone_device_update(struct thermal_zone_device *);
 struct thermal_cooling_device *thermal_cooling_device_register(char *, void *,
-							       struct
-							       thermal_cooling_device_ops
-							       *);
+		const struct thermal_cooling_device_ops *);
 void thermal_cooling_device_unregister(struct thermal_cooling_device *);
+
+#ifdef CONFIG_NET
+extern int thermal_generate_netlink_event(u32 orig, enum events event);
+#else
+static inline int thermal_generate_netlink_event(u32 orig, enum events event)
+{
+	return 0;
+}
+#endif
 
 #endif /* __THERMAL_H__ */

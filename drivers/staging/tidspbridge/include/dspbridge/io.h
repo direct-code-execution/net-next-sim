@@ -22,7 +22,18 @@
 #include <dspbridge/cfgdefs.h>
 #include <dspbridge/devdefs.h>
 
-#include <dspbridge/iodefs.h>
+/* IO Objects: */
+struct io_mgr;
+
+/* IO manager attributes: */
+struct io_attrs {
+	u8 birq;		/* Channel's I/O IRQ number. */
+	bool irq_shared;	/* TRUE if the IRQ is shareable. */
+	u32 word_size;		/* DSP Word size. */
+	u32 shm_base;		/* Physical base address of shared memory. */
+	u32 sm_length;		/* Size (in bytes) of shared memory. */
+};
+
 
 /*
  *  ======== io_create ========
@@ -44,7 +55,6 @@
  *      -EINVAL: Invalid DSP word size (must be > 0).
  *               Invalid base address for DSP communications.
  *  Requires:
- *      io_init(void) called.
  *      io_man != NULL.
  *      mgr_attrts != NULL.
  *  Ensures:
@@ -63,52 +73,8 @@ extern int io_create(struct io_mgr **io_man,
  *      0:        Success.
  *      -EFAULT:    hio_mgr was invalid.
  *  Requires:
- *      io_init(void) called.
  *  Ensures:
  */
 extern int io_destroy(struct io_mgr *hio_mgr);
-
-/*
- *  ======== io_exit ========
- *  Purpose:
- *      Discontinue usage of the IO module.
- *  Parameters:
- *  Returns:
- *  Requires:
- *      io_init(void) previously called.
- *  Ensures:
- *      Resources, if any acquired in io_init(void), are freed when the last
- *      client of IO calls io_exit(void).
- */
-extern void io_exit(void);
-
-/*
- *  ======== io_init ========
- *  Purpose:
- *      Initialize the IO module's private state.
- *  Parameters:
- *  Returns:
- *      TRUE if initialized; FALSE if error occurred.
- *  Requires:
- *  Ensures:
- *      A requirement for each of the other public CHNL functions.
- */
-extern bool io_init(void);
-
-/*
- *  ======== io_on_loaded ========
- *  Purpose:
- *      Called when a program is loaded so IO manager can update its
- *      internal state.
- *  Parameters:
- *      hio_mgr:         IOmanager object.
- *  Returns:
- *      0:        Success.
- *      -EFAULT:    hio_mgr was invalid.
- *  Requires:
- *      io_init(void) called.
- *  Ensures:
- */
-extern int io_on_loaded(struct io_mgr *hio_mgr);
 
 #endif /* CHNL_ */

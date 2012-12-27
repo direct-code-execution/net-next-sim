@@ -148,7 +148,7 @@ int autoremove_wake_function(wait_queue_t *wait, unsigned mode, int sync, void *
   return ret;
 }
 
-void __init_waitqueue_head(wait_queue_head_t *q, struct lock_class_key *key)
+void __init_waitqueue_head(wait_queue_head_t *q, const char *name, struct lock_class_key *k)
 {
   INIT_LIST_HEAD(&q->task_list);
 }
@@ -273,8 +273,9 @@ void complete(struct completion *x)
   x->done++;
   __wake_up(&x->wait, TASK_NORMAL, 1, 0);
 }
-unsigned long 
-wait_for_completion_interruptible_timeout(struct completion *x, unsigned long timeout)
+
+long wait_for_completion_interruptible_timeout(
+	struct completion *x, unsigned long timeout)
 {
   return wait_for_completion_timeout(x, timeout);
 }
@@ -291,10 +292,6 @@ int _cond_resched(void)
 {
   // we never schedule to decrease latency.
   return 0;
-}
-void synchronize_sched_expedited(void)
-{
-  // nothing to do because we have !CONFIG_SMP
 }
 int idle_cpu (int cpu)
 {

@@ -142,16 +142,19 @@ static u32 gl861_i2c_func(struct i2c_adapter *adapter)
 	return I2C_FUNC_I2C;
 }
 
-
 static int friio_ext_ctl(struct dvb_usb_adapter *adap,
 			 u32 sat_color, int lnb_on)
 {
 	int i;
 	int ret;
 	struct i2c_msg msg;
-	u8 buf[2];
+	u8 *buf;
 	u32 mask;
 	u8 lnb = (lnb_on) ? FRIIO_CTL_LNB : 0;
+
+	buf = kmalloc(2, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
 
 	msg.addr = 0x00;
 	msg.flags = 0;
@@ -189,6 +192,7 @@ static int friio_ext_ctl(struct dvb_usb_adapter *adap,
 	buf[1] |= FRIIO_CTL_CLK;
 	ret += gl861_i2c_xfer(&adap->dev->i2c_adap, &msg, 1);
 
+	kfree(buf);
 	return (ret == 70);
 }
 
@@ -219,10 +223,19 @@ static int friio_initialize(struct dvb_usb_device *d)
 	int ret;
 	int i;
 	int retry = 0;
-	u8 rbuf[2];
-	u8 wbuf[3];
+	u8 *rbuf, *wbuf;
 
 	deb_info("%s called.\n", __func__);
+
+	wbuf = kmalloc(3, GFP_KERNEL);
+	if (!wbuf)
+		return -ENOMEM;
+
+	rbuf = kmalloc(2, GFP_KERNEL);
+	if (!rbuf) {
+		kfree(wbuf);
+		return -ENOMEM;
+	}
 
 	/* use gl861_i2c_msg instead of gl861_i2c_xfer(), */
 	/* because the i2c device is not set up yet. */
@@ -358,6 +371,8 @@ restart:
 	return 0;
 
 error:
+	kfree(wbuf);
+	kfree(rbuf);
 	deb_info("%s:ret == %d\n", __func__, ret);
 	return -EIO;
 }
@@ -388,8 +403,8 @@ static int friio_frontend_attach(struct dvb_usb_adapter *adap)
 	if (friio_initialize(adap->dev) < 0)
 		return -EIO;
 
-	adap->fe = jdvbt90502_attach(adap->dev);
-	if (adap->fe == NULL)
+	adap->fe_adap[0].fe = jdvbt90502_attach(adap->dev);
+	if (adap->fe_adap[0].fe == NULL)
 		return -EIO;
 
 	return 0;
@@ -458,6 +473,8 @@ static struct dvb_usb_device_properties friio_properties = {
 		/* caps:0 =>  no pid filter, 188B TS packet */
 		/* GL861 has a HW pid filter, but no info available. */
 		{
+		.num_frontends = 1,
+		.fe = {{
 			.caps  = 0,
 
 			.frontend_attach  = friio_frontend_attach,
@@ -475,6 +492,7 @@ static struct dvb_usb_device_properties friio_properties = {
 					}
 				}
 			},
+		}},
 		}
 	},
 	.i2c_algo = &gl861_i2c_algo,
@@ -496,28 +514,7 @@ static struct usb_driver friio_driver = {
 	.id_table	= friio_table,
 };
 
-
-/* module stuff */
-static int __init friio_module_init(void)
-{
-	int ret;
-
-	ret = usb_register(&friio_driver);
-	if (ret)
-		err("usb_register failed. Error number %d", ret);
-
-	return ret;
-}
-
-
-static void __exit friio_module_exit(void)
-{
-	/* deregister this driver from the USB subsystem */
-	usb_deregister(&friio_driver);
-}
-
-module_init(friio_module_init);
-module_exit(friio_module_exit);
+module_usb_driver(friio_driver);
 
 MODULE_AUTHOR("Akihiro Tsukada <tskd2@yahoo.co.jp>");
 MODULE_DESCRIPTION("Driver for Friio ISDB-T USB2.0 Receiver");

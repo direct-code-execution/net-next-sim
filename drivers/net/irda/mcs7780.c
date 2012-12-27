@@ -588,7 +588,7 @@ static int mcs_speed_change(struct mcs_cb *mcs)
 
 	mcs_get_reg(mcs, MCS_MODE_REG, &rval);
 
-	/* MINRXPW values recomended by MosChip */
+	/* MINRXPW values recommended by MosChip */
 	if (mcs->new_speed <= 115200) {
 		rval &= ~MCS_FIR;
 
@@ -734,7 +734,7 @@ static int mcs_net_open(struct net_device *netdev)
 	}
 
 	if (!mcs_setup_urbs(mcs))
-	goto error3;
+		goto error3;
 
 	ret = mcs_receive_start(mcs);
 	if (ret)
@@ -799,7 +799,7 @@ static void mcs_receive_irq(struct urb *urb)
 	ret = usb_submit_urb(urb, GFP_ATOMIC);
 }
 
-/* Transmit callback funtion.  */
+/* Transmit callback function.  */
 static void mcs_send_irq(struct urb *urb)
 {
 	struct mcs_cb *mcs = urb->context;
@@ -811,7 +811,7 @@ static void mcs_send_irq(struct urb *urb)
 		netif_wake_queue(ndev);
 }
 
-/* Transmit callback funtion.  */
+/* Transmit callback function.  */
 static netdev_tx_t mcs_hard_xmit(struct sk_buff *skb,
 				       struct net_device *ndev)
 {
@@ -959,7 +959,7 @@ static void mcs_disconnect(struct usb_interface *intf)
 	if (!mcs)
 		return;
 
-	flush_scheduled_work();
+	cancel_work_sync(&mcs->work);
 
 	unregister_netdev(mcs->netdev);
 	free_netdev(mcs->netdev);
@@ -968,25 +968,4 @@ static void mcs_disconnect(struct usb_interface *intf)
 	IRDA_DEBUG(0, "MCS7780 now disconnected.\n");
 }
 
-/* Module insertion */
-static int __init mcs_init(void)
-{
-	int result;
-
-	/* register this driver with the USB subsystem */
-	result = usb_register(&mcs_driver);
-	if (result)
-		IRDA_ERROR("usb_register failed. Error number %d\n", result);
-
-	return result;
-}
-module_init(mcs_init);
-
-/* Module removal */
-static void __exit mcs_exit(void)
-{
-	/* deregister this driver with the USB subsystem */
-	usb_deregister(&mcs_driver);
-}
-module_exit(mcs_exit);
-
+module_usb_driver(mcs_driver);

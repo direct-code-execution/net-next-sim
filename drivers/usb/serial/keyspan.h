@@ -9,7 +9,7 @@
   the Free Software Foundation; either version 2 of the License, or
   (at your option) any later version.
 
-  See http://misc.nu/hugh/keyspan.html for more information.
+  See http://blemings.org/hugh/keyspan.html for more information.
   
   Code in this driver inspired by and in a number of places taken
   from Brian Warner's original Keyspan-PDA driver.
@@ -58,10 +58,9 @@ static void keyspan_set_termios		(struct tty_struct *tty,
 					 struct ktermios *old);
 static void keyspan_break_ctl		(struct tty_struct *tty,
 					 int break_state);
-static int  keyspan_tiocmget		(struct tty_struct *tty,
-					 struct file *file);
+static int  keyspan_tiocmget		(struct tty_struct *tty);
 static int  keyspan_tiocmset		(struct tty_struct *tty,
-					 struct file *file, unsigned int set,
+					 unsigned int set,
 					 unsigned int clear);
 static int  keyspan_fake_startup	(struct usb_serial *serial);
 
@@ -493,7 +492,6 @@ static struct usb_driver keyspan_driver = {
 	.probe =	usb_serial_probe,
 	.disconnect =	usb_serial_disconnect,
 	.id_table =	keyspan_ids_combined,
-	.no_dynamic_id = 	1,
 };
 
 /* usb_device_id table for the pre-firmware download keyspan devices */
@@ -615,6 +613,11 @@ static struct usb_serial_driver keyspan_4port_device = {
 	.attach			= keyspan_startup,
 	.disconnect		= keyspan_disconnect,
 	.release		= keyspan_release,
+};
+
+static struct usb_serial_driver * const serial_drivers[] = {
+	&keyspan_pre_device, &keyspan_1port_device,
+	&keyspan_2port_device, &keyspan_4port_device, NULL
 };
 
 #endif

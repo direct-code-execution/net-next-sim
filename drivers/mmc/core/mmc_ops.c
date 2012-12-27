@@ -10,6 +10,7 @@
  */
 
 #include <linux/slab.h>
+#include <linux/export.h>
 #include <linux/types.h>
 #include <linux/scatterlist.h>
 
@@ -23,11 +24,9 @@
 static int _mmc_select_card(struct mmc_host *host, struct mmc_card *card)
 {
 	int err;
-	struct mmc_command cmd;
+	struct mmc_command cmd = {0};
 
 	BUG_ON(!host);
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
 
 	cmd.opcode = MMC_SELECT_CARD;
 
@@ -60,14 +59,12 @@ int mmc_deselect_cards(struct mmc_host *host)
 
 int mmc_card_sleepawake(struct mmc_host *host, int sleep)
 {
-	struct mmc_command cmd;
+	struct mmc_command cmd = {0};
 	struct mmc_card *card = host->card;
 	int err;
 
 	if (sleep)
 		mmc_deselect_cards(host);
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
 
 	cmd.opcode = MMC_SLEEP_AWAKE;
 	cmd.arg = card->rca << 16;
@@ -97,7 +94,7 @@ int mmc_card_sleepawake(struct mmc_host *host, int sleep)
 int mmc_go_idle(struct mmc_host *host)
 {
 	int err;
-	struct mmc_command cmd;
+	struct mmc_command cmd = {0};
 
 	/*
 	 * Non-SPI hosts need to prevent chipselect going active during
@@ -105,15 +102,13 @@ int mmc_go_idle(struct mmc_host *host)
 	 * that in case of hardware that won't pull up DAT3/nCS otherwise.
 	 *
 	 * SPI hosts ignore ios.chip_select; it's managed according to
-	 * rules that must accomodate non-MMC slaves which this layer
+	 * rules that must accommodate non-MMC slaves which this layer
 	 * won't even know about.
 	 */
 	if (!mmc_host_is_spi(host)) {
 		mmc_set_chip_select(host, MMC_CS_HIGH);
 		mmc_delay(1);
 	}
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
 
 	cmd.opcode = MMC_GO_IDLE_STATE;
 	cmd.arg = 0;
@@ -135,12 +130,10 @@ int mmc_go_idle(struct mmc_host *host)
 
 int mmc_send_op_cond(struct mmc_host *host, u32 ocr, u32 *rocr)
 {
-	struct mmc_command cmd;
+	struct mmc_command cmd = {0};
 	int i, err = 0;
 
 	BUG_ON(!host);
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
 
 	cmd.opcode = MMC_SEND_OP_COND;
 	cmd.arg = mmc_host_is_spi(host) ? 0 : ocr;
@@ -178,12 +171,10 @@ int mmc_send_op_cond(struct mmc_host *host, u32 ocr, u32 *rocr)
 int mmc_all_send_cid(struct mmc_host *host, u32 *cid)
 {
 	int err;
-	struct mmc_command cmd;
+	struct mmc_command cmd = {0};
 
 	BUG_ON(!host);
 	BUG_ON(!cid);
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
 
 	cmd.opcode = MMC_ALL_SEND_CID;
 	cmd.arg = 0;
@@ -201,12 +192,10 @@ int mmc_all_send_cid(struct mmc_host *host, u32 *cid)
 int mmc_set_relative_addr(struct mmc_card *card)
 {
 	int err;
-	struct mmc_command cmd;
+	struct mmc_command cmd = {0};
 
 	BUG_ON(!card);
 	BUG_ON(!card->host);
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
 
 	cmd.opcode = MMC_SET_RELATIVE_ADDR;
 	cmd.arg = card->rca << 16;
@@ -223,12 +212,10 @@ static int
 mmc_send_cxd_native(struct mmc_host *host, u32 arg, u32 *cxd, int opcode)
 {
 	int err;
-	struct mmc_command cmd;
+	struct mmc_command cmd = {0};
 
 	BUG_ON(!host);
 	BUG_ON(!cxd);
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
 
 	cmd.opcode = opcode;
 	cmd.arg = arg;
@@ -247,9 +234,9 @@ static int
 mmc_send_cxd_data(struct mmc_card *card, struct mmc_host *host,
 		u32 opcode, void *buf, unsigned len)
 {
-	struct mmc_request mrq;
-	struct mmc_command cmd;
-	struct mmc_data data;
+	struct mmc_request mrq = {NULL};
+	struct mmc_command cmd = {0};
+	struct mmc_data data = {0};
 	struct scatterlist sg;
 	void *data_buf;
 
@@ -259,10 +246,6 @@ mmc_send_cxd_data(struct mmc_card *card, struct mmc_host *host,
 	data_buf = kmalloc(len, GFP_KERNEL);
 	if (data_buf == NULL)
 		return -ENOMEM;
-
-	memset(&mrq, 0, sizeof(struct mmc_request));
-	memset(&cmd, 0, sizeof(struct mmc_command));
-	memset(&data, 0, sizeof(struct mmc_data));
 
 	mrq.cmd = &cmd;
 	mrq.data = &data;
@@ -355,10 +338,8 @@ int mmc_send_ext_csd(struct mmc_card *card, u8 *ext_csd)
 
 int mmc_spi_read_ocr(struct mmc_host *host, int highcap, u32 *ocrp)
 {
-	struct mmc_command cmd;
+	struct mmc_command cmd = {0};
 	int err;
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
 
 	cmd.opcode = MMC_SPI_READ_OCR;
 	cmd.arg = highcap ? (1 << 30) : 0;
@@ -372,10 +353,8 @@ int mmc_spi_read_ocr(struct mmc_host *host, int highcap, u32 *ocrp)
 
 int mmc_spi_set_crc(struct mmc_host *host, int use_crc)
 {
-	struct mmc_command cmd;
+	struct mmc_command cmd = {0};
 	int err;
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
 
 	cmd.opcode = MMC_SPI_CRC_ON_OFF;
 	cmd.flags = MMC_RSP_SPI_R1;
@@ -387,16 +366,26 @@ int mmc_spi_set_crc(struct mmc_host *host, int use_crc)
 	return err;
 }
 
-int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value)
+/**
+ *	mmc_switch - modify EXT_CSD register
+ *	@card: the MMC card associated with the data transfer
+ *	@set: cmd set values
+ *	@index: EXT_CSD register index
+ *	@value: value to program into EXT_CSD register
+ *	@timeout_ms: timeout (ms) for operation performed by register write,
+ *                   timeout of zero implies maximum possible timeout
+ *
+ *	Modifies the EXT_CSD register for selected card.
+ */
+int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value,
+	       unsigned int timeout_ms)
 {
 	int err;
-	struct mmc_command cmd;
+	struct mmc_command cmd = {0};
 	u32 status;
 
 	BUG_ON(!card);
 	BUG_ON(!card->host);
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
 
 	cmd.opcode = MMC_SWITCH;
 	cmd.arg = (MMC_SWITCH_MODE_WRITE_BYTE << 24) |
@@ -404,6 +393,7 @@ int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value)
 		  (value << 8) |
 		  set;
 	cmd.flags = MMC_RSP_SPI_R1B | MMC_RSP_R1B | MMC_CMD_AC;
+	cmd.cmd_timeout_ms = timeout_ms;
 
 	err = mmc_wait_for_cmd(card->host, &cmd, MMC_CMD_RETRIES);
 	if (err)
@@ -418,14 +408,14 @@ int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value)
 			break;
 		if (mmc_host_is_spi(card->host))
 			break;
-	} while (R1_CURRENT_STATE(status) == 7);
+	} while (R1_CURRENT_STATE(status) == R1_STATE_PRG);
 
 	if (mmc_host_is_spi(card->host)) {
 		if (status & R1_SPI_ILLEGAL_COMMAND)
 			return -EBADMSG;
 	} else {
 		if (status & 0xFDFFA000)
-			printk(KERN_WARNING "%s: unexpected status %#x after "
+			pr_warning("%s: unexpected status %#x after "
 			       "switch", mmc_hostname(card->host), status);
 		if (status & R1_SWITCH_ERROR)
 			return -EBADMSG;
@@ -433,16 +423,15 @@ int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(mmc_switch);
 
 int mmc_send_status(struct mmc_card *card, u32 *status)
 {
 	int err;
-	struct mmc_command cmd;
+	struct mmc_command cmd = {0};
 
 	BUG_ON(!card);
 	BUG_ON(!card->host);
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
 
 	cmd.opcode = MMC_SEND_STATUS;
 	if (!mmc_host_is_spi(card->host))
@@ -462,3 +451,135 @@ int mmc_send_status(struct mmc_card *card, u32 *status)
 	return 0;
 }
 
+static int
+mmc_send_bus_test(struct mmc_card *card, struct mmc_host *host, u8 opcode,
+		  u8 len)
+{
+	struct mmc_request mrq = {NULL};
+	struct mmc_command cmd = {0};
+	struct mmc_data data = {0};
+	struct scatterlist sg;
+	u8 *data_buf;
+	u8 *test_buf;
+	int i, err;
+	static u8 testdata_8bit[8] = { 0x55, 0xaa, 0, 0, 0, 0, 0, 0 };
+	static u8 testdata_4bit[4] = { 0x5a, 0, 0, 0 };
+
+	/* dma onto stack is unsafe/nonportable, but callers to this
+	 * routine normally provide temporary on-stack buffers ...
+	 */
+	data_buf = kmalloc(len, GFP_KERNEL);
+	if (!data_buf)
+		return -ENOMEM;
+
+	if (len == 8)
+		test_buf = testdata_8bit;
+	else if (len == 4)
+		test_buf = testdata_4bit;
+	else {
+		pr_err("%s: Invalid bus_width %d\n",
+		       mmc_hostname(host), len);
+		kfree(data_buf);
+		return -EINVAL;
+	}
+
+	if (opcode == MMC_BUS_TEST_W)
+		memcpy(data_buf, test_buf, len);
+
+	mrq.cmd = &cmd;
+	mrq.data = &data;
+	cmd.opcode = opcode;
+	cmd.arg = 0;
+
+	/* NOTE HACK:  the MMC_RSP_SPI_R1 is always correct here, but we
+	 * rely on callers to never use this with "native" calls for reading
+	 * CSD or CID.  Native versions of those commands use the R2 type,
+	 * not R1 plus a data block.
+	 */
+	cmd.flags = MMC_RSP_SPI_R1 | MMC_RSP_R1 | MMC_CMD_ADTC;
+
+	data.blksz = len;
+	data.blocks = 1;
+	if (opcode == MMC_BUS_TEST_R)
+		data.flags = MMC_DATA_READ;
+	else
+		data.flags = MMC_DATA_WRITE;
+
+	data.sg = &sg;
+	data.sg_len = 1;
+	sg_init_one(&sg, data_buf, len);
+	mmc_wait_for_req(host, &mrq);
+	err = 0;
+	if (opcode == MMC_BUS_TEST_R) {
+		for (i = 0; i < len / 4; i++)
+			if ((test_buf[i] ^ data_buf[i]) != 0xff) {
+				err = -EIO;
+				break;
+			}
+	}
+	kfree(data_buf);
+
+	if (cmd.error)
+		return cmd.error;
+	if (data.error)
+		return data.error;
+
+	return err;
+}
+
+int mmc_bus_test(struct mmc_card *card, u8 bus_width)
+{
+	int err, width;
+
+	if (bus_width == MMC_BUS_WIDTH_8)
+		width = 8;
+	else if (bus_width == MMC_BUS_WIDTH_4)
+		width = 4;
+	else if (bus_width == MMC_BUS_WIDTH_1)
+		return 0; /* no need for test */
+	else
+		return -EINVAL;
+
+	/*
+	 * Ignore errors from BUS_TEST_W.  BUS_TEST_R will fail if there
+	 * is a problem.  This improves chances that the test will work.
+	 */
+	mmc_send_bus_test(card, card->host, MMC_BUS_TEST_W, width);
+	err = mmc_send_bus_test(card, card->host, MMC_BUS_TEST_R, width);
+	return err;
+}
+
+int mmc_send_hpi_cmd(struct mmc_card *card, u32 *status)
+{
+	struct mmc_command cmd = {0};
+	unsigned int opcode;
+	int err;
+
+	if (!card->ext_csd.hpi) {
+		pr_warning("%s: Card didn't support HPI command\n",
+			   mmc_hostname(card->host));
+		return -EINVAL;
+	}
+
+	opcode = card->ext_csd.hpi_cmd;
+	if (opcode == MMC_STOP_TRANSMISSION)
+		cmd.flags = MMC_RSP_R1B | MMC_CMD_AC;
+	else if (opcode == MMC_SEND_STATUS)
+		cmd.flags = MMC_RSP_R1 | MMC_CMD_AC;
+
+	cmd.opcode = opcode;
+	cmd.arg = card->rca << 16 | 1;
+	cmd.cmd_timeout_ms = card->ext_csd.out_of_int_time;
+
+	err = mmc_wait_for_cmd(card->host, &cmd, 0);
+	if (err) {
+		pr_warn("%s: error %d interrupting operation. "
+			"HPI command response %#x\n", mmc_hostname(card->host),
+			err, cmd.resp[0]);
+		return err;
+	}
+	if (status)
+		*status = cmd.resp[0];
+
+	return 0;
+}

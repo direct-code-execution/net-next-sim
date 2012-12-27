@@ -54,6 +54,7 @@ Devices: [JR3] PCI force sensor board (jr3_pci)
 
 #define PCI_VENDOR_ID_JR3 0x1762
 #define PCI_DEVICE_ID_JR3_1_CHANNEL 0x3111
+#define PCI_DEVICE_ID_JR3_1_CHANNEL_NEW 0x1111
 #define PCI_DEVICE_ID_JR3_2_CHANNEL 0x3112
 #define PCI_DEVICE_ID_JR3_3_CHANNEL 0x3113
 #define PCI_DEVICE_ID_JR3_4_CHANNEL 0x3114
@@ -70,16 +71,12 @@ static struct comedi_driver driver_jr3_pci = {
 };
 
 static DEFINE_PCI_DEVICE_TABLE(jr3_pci_pci_table) = {
-	{
-	PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_1_CHANNEL,
-		    PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0}, {
-	PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_2_CHANNEL,
-		    PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0}, {
-	PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_3_CHANNEL,
-		    PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0}, {
-	PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_4_CHANNEL,
-		    PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0}, {
-	0}
+	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_1_CHANNEL) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_1_CHANNEL_NEW) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_2_CHANNEL) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_3_CHANNEL) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_4_CHANNEL) },
+	{0}
 };
 
 MODULE_DEVICE_TABLE(pci, jr3_pci_pci_table);
@@ -190,9 +187,8 @@ static void set_transforms(volatile struct jr3_channel *channel,
 		set_s16(&channel->transforms[num].link[i].link_amount,
 			transf.link[i].link_amount);
 		udelay(1);
-		if (transf.link[i].link_type == end_x_form) {
+		if (transf.link[i].link_type == end_x_form)
 			break;
-		}
 	}
 }
 
@@ -376,14 +372,14 @@ static int jr3_pci_open(struct comedi_device *dev)
 	int i;
 	struct jr3_pci_dev_private *devpriv = dev->private;
 
-	printk("jr3_pci_open\n");
+	dev_dbg(dev->hw_dev, "jr3_pci_open\n");
 	for (i = 0; i < devpriv->n_channels; i++) {
 		struct jr3_pci_subdev_private *p;
 
 		p = dev->subdevices[i].private;
 		if (p) {
-			printk("serial: %p %d (%d)\n", p, p->serial_no,
-			       p->channel_no);
+			dev_dbg(dev->hw_dev, "serial: %p %d (%d)\n", p,
+				p->serial_no, p->channel_no);
 		}
 	}
 	return 0;
@@ -457,13 +453,12 @@ static int jr3_download_firmware(struct comedi_device *dev, const u8 * data,
 				unsigned int count, addr;
 				more = more
 				    && read_idm_word(data, size, &pos, &count);
-				if (more && count == 0xffff) {
+				if (more && count == 0xffff)
 					break;
-				}
 				more = more
 				    && read_idm_word(data, size, &pos, &addr);
-				printk("Loading#%d %4.4x bytes at %4.4x\n", i,
-				       count, addr);
+				dev_dbg(dev->hw_dev, "Loading#%d %4.4x bytes at %4.4x\n",
+					i, count, addr);
 				while (more && count > 0) {
 					if (addr & 0x4000) {
 						/*  16 bit data, never seen in real life!! */
@@ -598,24 +593,24 @@ static struct poll_delay_t jr3_pci_poll_subdevice(struct comedi_subdevice *s)
 					min_full_scale =
 					    get_min_full_scales(channel);
 					printk("Obtained Min. Full Scales:\n");
-					printk("%i   ", (min_full_scale).fx);
-					printk("%i   ", (min_full_scale).fy);
-					printk("%i   ", (min_full_scale).fz);
-					printk("%i   ", (min_full_scale).mx);
-					printk("%i   ", (min_full_scale).my);
-					printk("%i   ", (min_full_scale).mz);
-					printk("\n");
+					printk(KERN_DEBUG "%i ", (min_full_scale).fx);
+					printk(KERN_CONT "%i ", (min_full_scale).fy);
+					printk(KERN_CONT "%i ", (min_full_scale).fz);
+					printk(KERN_CONT "%i ", (min_full_scale).mx);
+					printk(KERN_CONT "%i ", (min_full_scale).my);
+					printk(KERN_CONT "%i ", (min_full_scale).mz);
+					printk(KERN_CONT "\n");
 
 					max_full_scale =
 					    get_max_full_scales(channel);
 					printk("Obtained Max. Full Scales:\n");
-					printk("%i   ", (max_full_scale).fx);
-					printk("%i   ", (max_full_scale).fy);
-					printk("%i   ", (max_full_scale).fz);
-					printk("%i   ", (max_full_scale).mx);
-					printk("%i   ", (max_full_scale).my);
-					printk("%i   ", (max_full_scale).mz);
-					printk("\n");
+					printk(KERN_DEBUG "%i ", (max_full_scale).fx);
+					printk(KERN_CONT "%i ", (max_full_scale).fy);
+					printk(KERN_CONT "%i ", (max_full_scale).fz);
+					printk(KERN_CONT "%i ", (max_full_scale).mx);
+					printk(KERN_CONT "%i ", (max_full_scale).my);
+					printk(KERN_CONT "%i ", (max_full_scale).mz);
+					printk(KERN_CONT "\n");
 
 					set_full_scales(channel,
 							max_full_scale);
@@ -778,21 +773,18 @@ static int jr3_pci_attach(struct comedi_device *dev,
 	int opt_bus, opt_slot, i;
 	struct jr3_pci_dev_private *devpriv;
 
-	printk("comedi%d: jr3_pci\n", dev->minor);
-
 	opt_bus = it->options[0];
 	opt_slot = it->options[1];
 
 	if (sizeof(struct jr3_channel) != 0xc00) {
-		printk("sizeof(struct jr3_channel) = %x [expected %x]\n",
-		       (unsigned)sizeof(struct jr3_channel), 0xc00);
+		dev_err(dev->hw_dev, "sizeof(struct jr3_channel) = %x [expected %x]\n",
+			(unsigned)sizeof(struct jr3_channel), 0xc00);
 		return -EINVAL;
 	}
 
 	result = alloc_private(dev, sizeof(struct jr3_pci_dev_private));
-	if (result < 0) {
+	if (result < 0)
 		return -ENOMEM;
-	}
 	card = NULL;
 	devpriv = dev->private;
 	init_timer(&devpriv->timer);
@@ -804,6 +796,10 @@ static int jr3_pci_attach(struct comedi_device *dev,
 		} else {
 			switch (card->device) {
 			case PCI_DEVICE_ID_JR3_1_CHANNEL:{
+					devpriv->n_channels = 1;
+				}
+				break;
+			case PCI_DEVICE_ID_JR3_1_CHANNEL_NEW:{
 					devpriv->n_channels = 1;
 				}
 				break;
@@ -836,7 +832,7 @@ static int jr3_pci_attach(struct comedi_device *dev,
 		}
 	}
 	if (!card) {
-		printk(" no jr3_pci found\n");
+		dev_err(dev->hw_dev, "no jr3_pci found\n");
 		return -EIO;
 	} else {
 		devpriv->pci_dev = card;
@@ -844,9 +840,8 @@ static int jr3_pci_attach(struct comedi_device *dev,
 	}
 
 	result = comedi_pci_enable(card, "jr3_pci");
-	if (result < 0) {
+	if (result < 0)
 		return -EIO;
-	}
 
 	devpriv->pci_enabled = 1;
 	devpriv->iobase = ioremap(pci_resource_start(card, 0),
@@ -872,10 +867,10 @@ static int jr3_pci_attach(struct comedi_device *dev,
 
 			p = dev->subdevices[i].private;
 			p->channel = &devpriv->iobase->channel[i].data;
-			printk("p->channel %p %p (%tx)\n",
-			       p->channel, devpriv->iobase,
-			       ((char *)(p->channel) -
-				(char *)(devpriv->iobase)));
+			dev_dbg(dev->hw_dev, "p->channel %p %p (%tx)\n",
+				p->channel, devpriv->iobase,
+				((char *)(p->channel) -
+				 (char *)(devpriv->iobase)));
 			p->channel_no = i;
 			for (j = 0; j < 8; j++) {
 				int k;
@@ -913,11 +908,10 @@ static int jr3_pci_attach(struct comedi_device *dev,
 	devpriv->iobase->channel[0].reset = 0;
 
 	result = comedi_load_firmware(dev, "jr3pci.idm", jr3_download_firmware);
-	printk("Firmare load %d\n", result);
+	dev_dbg(dev->hw_dev, "Firmare load %d\n", result);
 
-	if (result < 0) {
+	if (result < 0)
 		goto out;
-	}
 /*
  * TODO: use firmware to load preferred offset tables. Suggested
  * format:
@@ -932,9 +926,9 @@ static int jr3_pci_attach(struct comedi_device *dev,
  */
 	msleep_interruptible(25);
 	for (i = 0; i < 0x18; i++) {
-		printk("%c",
-		       get_u16(&devpriv->iobase->channel[0].
-			       data.copyright[i]) >> 8);
+		dev_dbg(dev->hw_dev, "%c\n",
+			get_u16(&devpriv->iobase->channel[0].
+				data.copyright[i]) >> 8);
 	}
 
 	/*  Start card timer */
@@ -961,26 +955,21 @@ static int jr3_pci_detach(struct comedi_device *dev)
 	int i;
 	struct jr3_pci_dev_private *devpriv = dev->private;
 
-	printk("comedi%d: jr3_pci: remove\n", dev->minor);
 	if (devpriv) {
 		del_timer_sync(&devpriv->timer);
 
 		if (dev->subdevices) {
-			for (i = 0; i < devpriv->n_channels; i++) {
+			for (i = 0; i < devpriv->n_channels; i++)
 				kfree(dev->subdevices[i].private);
-			}
 		}
 
-		if (devpriv->iobase) {
+		if (devpriv->iobase)
 			iounmap((void *)devpriv->iobase);
-		}
-		if (devpriv->pci_enabled) {
+		if (devpriv->pci_enabled)
 			comedi_pci_disable(devpriv->pci_dev);
-		}
 
-		if (devpriv->pci_dev) {
+		if (devpriv->pci_dev)
 			pci_dev_put(devpriv->pci_dev);
-		}
 	}
 	return 0;
 }

@@ -28,14 +28,13 @@
 #include <linux/slab.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-chip-ident.h>
-#include <media/v4l2-i2c-drv.h>
 #include <media/upd64083.h>
 
 MODULE_DESCRIPTION("uPD64083 driver");
 MODULE_AUTHOR("T. Adachi, Takeru KOMORIYA, Hans Verkuil");
 MODULE_LICENSE("GPL");
 
-static int debug;
+static bool debug;
 module_param(debug, bool, 0644);
 
 MODULE_PARM_DESC(debug, "Debug level (0-1)");
@@ -203,7 +202,7 @@ static int upd64083_probe(struct i2c_client *client,
 	v4l_info(client, "chip found @ 0x%x (%s)\n",
 			client->addr << 1, client->adapter->name);
 
-	state = kmalloc(sizeof(struct upd64083_state), GFP_KERNEL);
+	state = kzalloc(sizeof(struct upd64083_state), GFP_KERNEL);
 	if (state == NULL)
 		return -ENOMEM;
 	sd = &state->sd;
@@ -234,9 +233,14 @@ static const struct i2c_device_id upd64083_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, upd64083_id);
 
-static struct v4l2_i2c_driver_data v4l2_i2c_data = {
-	.name = "upd64083",
-	.probe = upd64083_probe,
-	.remove = upd64083_remove,
-	.id_table = upd64083_id,
+static struct i2c_driver upd64083_driver = {
+	.driver = {
+		.owner	= THIS_MODULE,
+		.name	= "upd64083",
+	},
+	.probe		= upd64083_probe,
+	.remove		= upd64083_remove,
+	.id_table	= upd64083_id,
 };
+
+module_i2c_driver(upd64083_driver);

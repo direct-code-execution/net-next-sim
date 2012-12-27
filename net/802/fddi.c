@@ -27,7 +27,6 @@
  */
 
 #include <linux/module.h>
-#include <asm/system.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
@@ -82,10 +81,10 @@ static int fddi_header(struct sk_buff *skb, struct net_device *dev,
 	if (daddr != NULL)
 	{
 		memcpy(fddi->daddr, daddr, dev->addr_len);
-		return(hl);
+		return hl;
 	}
 
-	return(-hl);
+	return -hl;
 }
 
 
@@ -108,7 +107,7 @@ static int fddi_rebuild_header(struct sk_buff	*skb)
 	{
 		printk("%s: Don't know how to resolve type %04X addresses.\n",
 		       skb->dev->name, ntohs(fddi->hdr.llc_snap.ethertype));
-		return(0);
+		return 0;
 	}
 }
 
@@ -162,7 +161,7 @@ __be16 fddi_type_trans(struct sk_buff *skb, struct net_device *dev)
 
 	/* Assume 802.2 SNAP frames, for now */
 
-	return(type);
+	return type;
 }
 
 EXPORT_SYMBOL(fddi_type_trans);
@@ -170,9 +169,9 @@ EXPORT_SYMBOL(fddi_type_trans);
 int fddi_change_mtu(struct net_device *dev, int new_mtu)
 {
 	if ((new_mtu < FDDI_K_SNAP_HLEN) || (new_mtu > FDDI_K_SNAP_DLEN))
-		return(-EINVAL);
+		return -EINVAL;
 	dev->mtu = new_mtu;
-	return(0);
+	return 0;
 }
 EXPORT_SYMBOL(fddi_change_mtu);
 

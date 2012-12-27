@@ -36,6 +36,22 @@ static unsigned long __iomem *ipi_mappings[NR_CPUS];
 /* Set by smp_send_stop() to avoid recursive panics. */
 static int stopping_cpus;
 
+static void __send_IPI_many(HV_Recipient *recip, int nrecip, int tag)
+{
+	int sent = 0;
+	while (sent < nrecip) {
+		int rc = hv_send_message(recip, nrecip,
+					 (HV_VirtAddr)&tag, sizeof(tag));
+		if (rc < 0) {
+			if (!stopping_cpus)  /* avoid recursive panic */
+				panic("hv_send_message returned %d", rc);
+			break;
+		}
+		WARN_ONCE(rc == 0, "hv_send_message() returned zero\n");
+		sent += rc;
+	}
+}
+
 void send_IPI_single(int cpu, int tag)
 {
 	HV_Recipient recip = {
@@ -43,14 +59,13 @@ void send_IPI_single(int cpu, int tag)
 		.x = cpu % smp_width,
 		.state = HV_TO_BE_SENT
 	};
-	int rc = hv_send_message(&recip, 1, (HV_VirtAddr)&tag, sizeof(tag));
-	BUG_ON(rc <= 0);
+	__send_IPI_many(&recip, 1, tag);
 }
 
 void send_IPI_many(const struct cpumask *mask, int tag)
 {
 	HV_Recipient recip[NR_CPUS];
-	int cpu, sent;
+	int cpu;
 	int nrecip = 0;
 	int my_cpu = smp_processor_id();
 	for_each_cpu(cpu, mask) {
@@ -61,17 +76,7 @@ void send_IPI_many(const struct cpumask *mask, int tag)
 		r->x = cpu % smp_width;
 		r->state = HV_TO_BE_SENT;
 	}
-	sent = 0;
-	while (sent < nrecip) {
-		int rc = hv_send_message(recip, nrecip,
-					 (HV_VirtAddr)&tag, sizeof(tag));
-		if (rc <= 0) {
-			if (!stopping_cpus)  /* avoid recursive panic */
-				panic("hv_send_message returned %d", rc);
-			break;
-		}
-		sent += rc;
-	}
+	__send_IPI_many(recip, nrecip, tag);
 }
 
 void send_IPI_allbutself(int tag)
@@ -81,25 +86,6 @@ void send_IPI_allbutself(int tag)
 	cpumask_clear_cpu(smp_processor_id(), &mask);
 	send_IPI_many(&mask, tag);
 }
-
-
-/*
- * Provide smp_call_function_mask, but also run function locally
- * if specified in the mask.
- */
-void on_each_cpu_mask(const struct cpumask *mask, void (*func)(void *),
-		      void *info, bool wait)
-{
-	int cpu = get_cpu();
-	smp_call_function_many(mask, func, info, wait);
-	if (cpumask_test_cpu(cpu, mask)) {
-		local_irq_disable();
-		func(info);
-		local_irq_enable();
-	}
-	put_cpu();
-}
-
 
 /*
  * Functions related to starting/stopping cpus.
@@ -115,9 +101,9 @@ static void smp_start_cpu_interrupt(void)
 static void smp_stop_cpu_interrupt(void)
 {
 	set_cpu_online(smp_processor_id(), 0);
-	raw_local_irq_disable_all();
+	arch_local_irq_disable_all();
 	for (;;)
-		asm("nap");
+		asm("nap; nop");
 }
 
 /* This function calls the 'stop' function on all other CPUs in the system. */
@@ -127,6 +113,12 @@ void smp_send_stop(void)
 	send_IPI_allbutself(MSG_TAG_STOP_CPU);
 }
 
+/* On panic, just wait; we may get an smp_send_stop() later on. */
+void panic_smp_self_stop(void)
+{
+	while (1)
+		asm("nap; nop");
+}
 
 /*
  * Dispatch code called from hv_message_intr() for HV_MSG_TILE hv messages.
@@ -184,12 +176,8 @@ void flush_icache_range(unsigned long start, unsigned long end)
 /* Called when smp_send_reschedule() triggers IRQ_RESCHEDULE. */
 static irqreturn_t handle_reschedule_ipi(int irq, void *token)
 {
-	/*
-	 * Nothing to do here; when we return from interrupt, the
-	 * rescheduling will occur there. But do bump the interrupt
-	 * profiler count in the meantime.
-	 */
 	__get_cpu_var(irq_stat).irq_resched_count++;
+	scheduler_ipi();
 
 	return IRQ_HANDLED;
 }
@@ -212,7 +200,7 @@ void __init ipi_init(void)
 
 		tile.x = cpu_x(cpu);
 		tile.y = cpu_y(cpu);
-		if (hv_get_ipi_pte(tile, 1, &pte) != 0)
+		if (hv_get_ipi_pte(tile, KERNEL_PL, &pte) != 0)
 			panic("Failed to initialize IPI for cpu %d\n", cpu);
 
 		offset = hv_pte_get_pfn(pte) << PAGE_SHIFT;

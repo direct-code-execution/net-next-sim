@@ -15,7 +15,10 @@
 
 #include <linux/types.h>
 #include <linux/spinlock.h>
-#include <asm/atomic.h>
+#include <linux/init.h>
+#include <linux/errno.h>
+#include <linux/printk.h>
+#include <linux/atomic.h>
  
 /* Each escaped entry is prefixed by ESCAPE_CODE
  * then one of the following codes, then the
@@ -103,6 +106,13 @@ void oprofile_add_sample(struct pt_regs * const regs, unsigned long event);
 void oprofile_add_ext_sample(unsigned long pc, struct pt_regs * const regs,
 				unsigned long event, int is_kernel);
 
+/**
+ * Add an hardware sample.
+ */
+void oprofile_add_ext_hw_sample(unsigned long pc, struct pt_regs * const regs,
+	unsigned long event, int is_kernel,
+	struct task_struct *task);
+
 /* Use this instead when the PC value is not from the regs. Doesn't
  * backtrace. */
 void oprofile_add_pc(unsigned long pc, int is_kernel, unsigned long event);
@@ -156,7 +166,7 @@ ssize_t oprofilefs_ulong_to_user(unsigned long val, char __user * buf, size_t co
 int oprofilefs_ulong_from_user(unsigned long * val, char const __user * buf, size_t count);
 
 /** lock for read/write safety */
-extern spinlock_t oprofilefs_lock;
+extern raw_spinlock_t oprofilefs_lock;
 
 /**
  * Add the contents of a circular buffer to the event buffer.
@@ -184,5 +194,18 @@ void oprofile_write_reserve(struct op_entry *entry,
 int oprofile_add_data(struct op_entry *entry, unsigned long val);
 int oprofile_add_data64(struct op_entry *entry, u64 val);
 int oprofile_write_commit(struct op_entry *entry);
+
+#ifdef CONFIG_HW_PERF_EVENTS
+int __init oprofile_perf_init(struct oprofile_operations *ops);
+void oprofile_perf_exit(void);
+char *op_name_from_perf_id(void);
+#else
+static inline int __init oprofile_perf_init(struct oprofile_operations *ops)
+{
+	pr_info("oprofile: hardware counters not available\n");
+	return -ENODEV;
+}
+static inline void oprofile_perf_exit(void) { }
+#endif /* CONFIG_HW_PERF_EVENTS */
 
 #endif /* OPROFILE_H */

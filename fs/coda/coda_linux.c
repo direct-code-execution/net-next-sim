@@ -17,9 +17,8 @@
 #include <linux/string.h>
 
 #include <linux/coda.h>
-#include <linux/coda_linux.h>
 #include <linux/coda_psdev.h>
-#include <linux/coda_fs_i.h>
+#include "coda_linux.h"
 
 /* initialize the debugging variables */
 int coda_fake_statfs;
@@ -105,7 +104,7 @@ void coda_vattr_to_iattr(struct inode *inode, struct coda_vattr *attr)
         if (attr->va_gid != -1)
 	        inode->i_gid = (gid_t) attr->va_gid;
 	if (attr->va_nlink != -1)
-	        inode->i_nlink = attr->va_nlink;
+		set_nlink(inode, attr->va_nlink);
 	if (attr->va_size != -1)
 	        inode->i_size = attr->va_size;
 	if (attr->va_size != -1)

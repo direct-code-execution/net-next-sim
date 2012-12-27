@@ -209,7 +209,7 @@ tools.  One such tool that is particularly recommended is the Linux
 Cross-Reference project, which is able to present source code in a
 self-referential, indexed webpage format. An excellent up-to-date
 repository of the kernel code may be found at:
-	http://users.sosdg.org/~qiyong/lxr/
+	http://lxr.linux.no/+trees
 
 
 The development process
@@ -275,8 +275,8 @@ versions.
 If no 2.6.x.y kernel is available, then the highest numbered 2.6.x
 kernel is the current stable kernel.
 
-2.6.x.y are maintained by the "stable" team <stable@kernel.org>, and are
-released as needs dictate.  The normal release period is approximately 
+2.6.x.y are maintained by the "stable" team <stable@vger.kernel.org>, and
+are released as needs dictate.  The normal release period is approximately
 two weeks, but it can be longer if there are no pressing problems.  A
 security-related problem, instead, can cause a release to happen almost
 instantly.

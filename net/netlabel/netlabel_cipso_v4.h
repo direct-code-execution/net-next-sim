@@ -5,7 +5,7 @@
  * NetLabel system manages static and dynamic label mappings for network
  * protocols such as CIPSO and RIPSO.
  *
- * Author: Paul Moore <paul.moore@hp.com>
+ * Author: Paul Moore <paul@paul-moore.com>
  *
  */
 
@@ -107,7 +107,6 @@ enum {
 	NLBL_CIPSOV4_C_LISTALL,
 	__NLBL_CIPSOV4_C_MAX,
 };
-#define NLBL_CIPSOV4_C_MAX (__NLBL_CIPSOV4_C_MAX - 1)
 
 /* NetLabel CIPSOv4 attributes */
 enum {

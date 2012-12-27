@@ -12,7 +12,6 @@
 struct file;
 
 extern void fput(struct file *);
-extern void drop_file_write_access(struct file *file);
 
 struct file_operations;
 struct vfsmount;
@@ -23,12 +22,14 @@ extern struct file *alloc_file(struct path *, fmode_t mode,
 
 static inline void fput_light(struct file *file, int fput_needed)
 {
-	if (unlikely(fput_needed))
+	if (fput_needed)
 		fput(file);
 }
 
 extern struct file *fget(unsigned int fd);
 extern struct file *fget_light(unsigned int fd, int *fput_needed);
+extern struct file *fget_raw(unsigned int fd);
+extern struct file *fget_raw_light(unsigned int fd, int *fput_needed);
 extern void set_close_on_exec(unsigned int fd, int flag);
 extern void put_filp(struct file *);
 extern int alloc_fd(unsigned start, unsigned flags);

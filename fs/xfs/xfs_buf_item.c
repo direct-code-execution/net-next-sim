@@ -90,13 +90,11 @@ xfs_buf_item_flush_log_debug(
 	uint		first,
 	uint		last)
 {
-	xfs_buf_log_item_t	*bip;
+	xfs_buf_log_item_t	*bip = bp->b_fspriv;
 	uint			nbytes;
 
-	bip = XFS_BUF_FSPRIVATE(bp, xfs_buf_log_item_t*);
-	if ((bip == NULL) || (bip->bli_item.li_type != XFS_LI_BUF)) {
+	if (bip == NULL || (bip->bli_item.li_type != XFS_LI_BUF))
 		return;
-	}
 
 	ASSERT(bip->bli_logged != NULL);
 	nbytes = last - first + 1;
@@ -126,14 +124,16 @@ xfs_buf_item_log_check(
 
 	bp = bip->bli_buf;
 	ASSERT(XFS_BUF_COUNT(bp) > 0);
-	ASSERT(XFS_BUF_PTR(bp) != NULL);
+	ASSERT(bp->b_addr != NULL);
 	orig = bip->bli_orig;
-	buffer = XFS_BUF_PTR(bp);
+	buffer = bp->b_addr;
 	for (x = 0; x < XFS_BUF_COUNT(bp); x++) {
-		if (orig[x] != buffer[x] && !btst(bip->bli_logged, x))
-			cmn_err(CE_PANIC,
-	"xfs_buf_item_log_check bip %x buffer %x orig %x index %d",
-				bip, bp, orig, x);
+		if (orig[x] != buffer[x] && !btst(bip->bli_logged, x)) {
+			xfs_emerg(bp->b_mount,
+				"%s: bip %x buffer %x orig %x index %d",
+				__func__, bip, bp, orig, x);
+			ASSERT(0);
+		}
 	}
 }
 #else
@@ -141,8 +141,7 @@ xfs_buf_item_log_check(
 #define		xfs_buf_item_log_check(x)
 #endif
 
-STATIC void	xfs_buf_error_relse(xfs_buf_t *bp);
-STATIC void	xfs_buf_do_callbacks(xfs_buf_t *bp, xfs_log_item_t *lip);
+STATIC void	xfs_buf_do_callbacks(struct xfs_buf *bp);
 
 /*
  * This returns the number of log iovecs needed to log the
@@ -372,7 +371,6 @@ xfs_buf_item_pin(
 {
 	struct xfs_buf_log_item	*bip = BUF_ITEM(lip);
 
-	ASSERT(XFS_BUF_ISBUSY(bip->bli_buf));
 	ASSERT(atomic_read(&bip->bli_refcount) > 0);
 	ASSERT((bip->bli_flags & XFS_BLI_LOGGED) ||
 	       (bip->bli_flags & XFS_BLI_STALE));
@@ -407,7 +405,7 @@ xfs_buf_item_unpin(
 	int		stale = bip->bli_flags & XFS_BLI_STALE;
 	int		freed;
 
-	ASSERT(XFS_BUF_FSPRIVATE(bp, xfs_buf_log_item_t *) == bip);
+	ASSERT(bp->b_fspriv == bip);
 	ASSERT(atomic_read(&bip->bli_refcount) > 0);
 
 	trace_xfs_buf_item_unpin(bip);
@@ -419,7 +417,7 @@ xfs_buf_item_unpin(
 
 	if (freed && stale) {
 		ASSERT(bip->bli_flags & XFS_BLI_STALE);
-		ASSERT(XFS_BUF_VALUSEMA(bp) <= 0);
+		ASSERT(xfs_buf_islocked(bp));
 		ASSERT(!(XFS_BUF_ISDELAYWRITE(bp)));
 		ASSERT(XFS_BUF_ISSTALE(bp));
 		ASSERT(bip->bli_format.blf_flags & XFS_BLF_CANCEL);
@@ -428,19 +426,21 @@ xfs_buf_item_unpin(
 
 		if (remove) {
 			/*
-			 * We have to remove the log item from the transaction
-			 * as we are about to release our reference to the
-			 * buffer.  If we don't, the unlock that occurs later
-			 * in xfs_trans_uncommit() will ry to reference the
+			 * If we are in a transaction context, we have to
+			 * remove the log item from the transaction as we are
+			 * about to release our reference to the buffer.  If we
+			 * don't, the unlock that occurs later in
+			 * xfs_trans_uncommit() will try to reference the
 			 * buffer which we no longer have a hold on.
 			 */
-			xfs_trans_del_item(lip);
+			if (lip->li_desc)
+				xfs_trans_del_item(lip);
 
 			/*
 			 * Since the transaction no longer refers to the buffer,
 			 * the buffer should no longer refer to the transaction.
 			 */
-			XFS_BUF_SET_FSPRIVATE2(bp, NULL);
+			bp->b_transp = NULL;
 		}
 
 		/*
@@ -450,14 +450,14 @@ xfs_buf_item_unpin(
 		 * xfs_trans_ail_delete() drops the AIL lock.
 		 */
 		if (bip->bli_flags & XFS_BLI_STALE_INODE) {
-			xfs_buf_do_callbacks(bp, (xfs_log_item_t *)bip);
-			XFS_BUF_SET_FSPRIVATE(bp, NULL);
-			XFS_BUF_CLR_IODONE_FUNC(bp);
+			xfs_buf_do_callbacks(bp);
+			bp->b_fspriv = NULL;
+			bp->b_iodone = NULL;
 		} else {
 			spin_lock(&ailp->xa_lock);
 			xfs_trans_ail_delete(ailp, (xfs_log_item_t *)bip);
 			xfs_buf_item_relse(bp);
-			ASSERT(XFS_BUF_FSPRIVATE(bp, void *) == NULL);
+			ASSERT(bp->b_fspriv == NULL);
 		}
 		xfs_buf_relse(bp);
 	}
@@ -478,13 +478,13 @@ xfs_buf_item_trylock(
 	struct xfs_buf_log_item	*bip = BUF_ITEM(lip);
 	struct xfs_buf		*bp = bip->bli_buf;
 
-	if (XFS_BUF_ISPINNED(bp))
+	if (xfs_buf_ispinned(bp))
 		return XFS_ITEM_PINNED;
-	if (!XFS_BUF_CPSEMA(bp))
+	if (!xfs_buf_trylock(bp))
 		return XFS_ITEM_LOCKED;
 
 	/* take a reference to the buffer.  */
-	XFS_BUF_HOLD(bp);
+	xfs_buf_hold(bp);
 
 	ASSERT(!(bip->bli_flags & XFS_BLI_STALE));
 	trace_xfs_buf_item_trylock(bip);
@@ -522,7 +522,7 @@ xfs_buf_item_unlock(
 	uint			hold;
 
 	/* Clear the buffer's association with this transaction. */
-	XFS_BUF_SET_FSPRIVATE2(bp, NULL);
+	bp->b_transp = NULL;
 
 	/*
 	 * If this is a transaction abort, don't return early.  Instead, allow
@@ -629,7 +629,7 @@ xfs_buf_item_push(
  * the xfsbufd to get this buffer written. We have to unlock the buffer
  * to allow the xfsbufd to write it, too.
  */
-STATIC void
+STATIC bool
 xfs_buf_item_pushbuf(
 	struct xfs_log_item	*lip)
 {
@@ -643,6 +643,7 @@ xfs_buf_item_pushbuf(
 
 	xfs_buf_delwri_promote(bp);
 	xfs_buf_relse(bp);
+	return true;
 }
 
 STATIC void
@@ -655,7 +656,7 @@ xfs_buf_item_committing(
 /*
  * This is the ops vector shared by all buf log items.
  */
-static struct xfs_item_ops xfs_buf_item_ops = {
+static const struct xfs_item_ops xfs_buf_item_ops = {
 	.iop_size	= xfs_buf_item_size,
 	.iop_format	= xfs_buf_item_format,
 	.iop_pin	= xfs_buf_item_pin,
@@ -681,7 +682,7 @@ xfs_buf_item_init(
 	xfs_buf_t	*bp,
 	xfs_mount_t	*mp)
 {
-	xfs_log_item_t		*lip;
+	xfs_log_item_t		*lip = bp->b_fspriv;
 	xfs_buf_log_item_t	*bip;
 	int			chunks;
 	int			map_size;
@@ -692,14 +693,9 @@ xfs_buf_item_init(
 	 * the first.  If we do already have one, there is
 	 * nothing to do here so return.
 	 */
-	if (bp->b_mount != mp)
-		bp->b_mount = mp;
-	if (XFS_BUF_FSPRIVATE(bp, void *) != NULL) {
-		lip = XFS_BUF_FSPRIVATE(bp, xfs_log_item_t *);
-		if (lip->li_type == XFS_LI_BUF) {
-			return;
-		}
-	}
+	ASSERT(bp->b_target->bt_mount == mp);
+	if (lip != NULL && lip->li_type == XFS_LI_BUF)
+		return;
 
 	/*
 	 * chunks is the number of XFS_BLF_CHUNK size pieces
@@ -730,7 +726,7 @@ xfs_buf_item_init(
 	 * to have logged.
 	 */
 	bip->bli_orig = (char *)kmem_alloc(XFS_BUF_COUNT(bp), KM_SLEEP);
-	memcpy(bip->bli_orig, XFS_BUF_PTR(bp), XFS_BUF_COUNT(bp));
+	memcpy(bip->bli_orig, bp->b_addr, XFS_BUF_COUNT(bp));
 	bip->bli_logged = (char *)kmem_zalloc(XFS_BUF_COUNT(bp) / NBBY, KM_SLEEP);
 #endif
 
@@ -738,11 +734,9 @@ xfs_buf_item_init(
 	 * Put the buf item into the list of items attached to the
 	 * buffer at the front.
 	 */
-	if (XFS_BUF_FSPRIVATE(bp, void *) != NULL) {
-		bip->bli_item.li_bio_list =
-				XFS_BUF_FSPRIVATE(bp, xfs_log_item_t *);
-	}
-	XFS_BUF_SET_FSPRIVATE(bp, bip);
+	if (bp->b_fspriv)
+		bip->bli_item.li_bio_list = bp->b_fspriv;
+	bp->b_fspriv = bip;
 }
 
 
@@ -874,12 +868,11 @@ xfs_buf_item_relse(
 
 	trace_xfs_buf_item_relse(bp, _RET_IP_);
 
-	bip = XFS_BUF_FSPRIVATE(bp, xfs_buf_log_item_t*);
-	XFS_BUF_SET_FSPRIVATE(bp, bip->bli_item.li_bio_list);
-	if ((XFS_BUF_FSPRIVATE(bp, void *) == NULL) &&
-	    (XFS_BUF_IODONE_FUNC(bp) != NULL)) {
-		XFS_BUF_CLR_IODONE_FUNC(bp);
-	}
+	bip = bp->b_fspriv;
+	bp->b_fspriv = bip->bli_item.li_bio_list;
+	if (bp->b_fspriv == NULL)
+		bp->b_iodone = NULL;
+
 	xfs_buf_rele(bp);
 	xfs_buf_item_free(bip);
 }
@@ -902,32 +895,42 @@ xfs_buf_attach_iodone(
 {
 	xfs_log_item_t	*head_lip;
 
-	ASSERT(XFS_BUF_ISBUSY(bp));
-	ASSERT(XFS_BUF_VALUSEMA(bp) <= 0);
+	ASSERT(xfs_buf_islocked(bp));
 
 	lip->li_cb = cb;
-	if (XFS_BUF_FSPRIVATE(bp, void *) != NULL) {
-		head_lip = XFS_BUF_FSPRIVATE(bp, xfs_log_item_t *);
+	head_lip = bp->b_fspriv;
+	if (head_lip) {
 		lip->li_bio_list = head_lip->li_bio_list;
 		head_lip->li_bio_list = lip;
 	} else {
-		XFS_BUF_SET_FSPRIVATE(bp, lip);
+		bp->b_fspriv = lip;
 	}
 
-	ASSERT((XFS_BUF_IODONE_FUNC(bp) == xfs_buf_iodone_callbacks) ||
-	       (XFS_BUF_IODONE_FUNC(bp) == NULL));
-	XFS_BUF_SET_IODONE_FUNC(bp, xfs_buf_iodone_callbacks);
+	ASSERT(bp->b_iodone == NULL ||
+	       bp->b_iodone == xfs_buf_iodone_callbacks);
+	bp->b_iodone = xfs_buf_iodone_callbacks;
 }
 
+/*
+ * We can have many callbacks on a buffer. Running the callbacks individually
+ * can cause a lot of contention on the AIL lock, so we allow for a single
+ * callback to be able to scan the remaining lip->li_bio_list for other items
+ * of the same type and callback to be processed in the first call.
+ *
+ * As a result, the loop walking the callback list below will also modify the
+ * list. it removes the first item from the list and then runs the callback.
+ * The loop then restarts from the new head of the list. This allows the
+ * callback to scan and modify the list attached to the buffer and we don't
+ * have to care about maintaining a next item pointer.
+ */
 STATIC void
 xfs_buf_do_callbacks(
-	xfs_buf_t	*bp,
-	xfs_log_item_t	*lip)
+	struct xfs_buf		*bp)
 {
-	xfs_log_item_t	*nlip;
+	struct xfs_log_item	*lip;
 
-	while (lip != NULL) {
-		nlip = lip->li_bio_list;
+	while ((lip = bp->b_fspriv) != NULL) {
+		bp->b_fspriv = lip->li_bio_list;
 		ASSERT(lip->li_cb != NULL);
 		/*
 		 * Clear the next pointer so we don't have any
@@ -937,7 +940,6 @@ xfs_buf_do_callbacks(
 		 */
 		lip->li_bio_list = NULL;
 		lip->li_cb(bp, lip);
-		lip = nlip;
 	}
 }
 
@@ -950,127 +952,70 @@ xfs_buf_do_callbacks(
  */
 void
 xfs_buf_iodone_callbacks(
-	xfs_buf_t	*bp)
+	struct xfs_buf		*bp)
 {
-	xfs_log_item_t	*lip;
-	static ulong	lasttime;
-	static xfs_buftarg_t *lasttarg;
-	xfs_mount_t	*mp;
+	struct xfs_log_item	*lip = bp->b_fspriv;
+	struct xfs_mount	*mp = lip->li_mountp;
+	static ulong		lasttime;
+	static xfs_buftarg_t	*lasttarg;
 
-	ASSERT(XFS_BUF_FSPRIVATE(bp, void *) != NULL);
-	lip = XFS_BUF_FSPRIVATE(bp, xfs_log_item_t *);
+	if (likely(!xfs_buf_geterror(bp)))
+		goto do_callbacks;
 
-	if (XFS_BUF_GETERROR(bp) != 0) {
-		/*
-		 * If we've already decided to shutdown the filesystem
-		 * because of IO errors, there's no point in giving this
-		 * a retry.
-		 */
-		mp = lip->li_mountp;
-		if (XFS_FORCED_SHUTDOWN(mp)) {
-			ASSERT(XFS_BUF_TARGET(bp) == mp->m_ddev_targp);
-			XFS_BUF_SUPER_STALE(bp);
-			trace_xfs_buf_item_iodone(bp, _RET_IP_);
-			xfs_buf_do_callbacks(bp, lip);
-			XFS_BUF_SET_FSPRIVATE(bp, NULL);
-			XFS_BUF_CLR_IODONE_FUNC(bp);
-			xfs_biodone(bp);
-			return;
-		}
+	/*
+	 * If we've already decided to shutdown the filesystem because of
+	 * I/O errors, there's no point in giving this a retry.
+	 */
+	if (XFS_FORCED_SHUTDOWN(mp)) {
+		xfs_buf_stale(bp);
+		XFS_BUF_DONE(bp);
+		trace_xfs_buf_item_iodone(bp, _RET_IP_);
+		goto do_callbacks;
+	}
 
-		if ((XFS_BUF_TARGET(bp) != lasttarg) ||
-		    (time_after(jiffies, (lasttime + 5*HZ)))) {
-			lasttime = jiffies;
-			cmn_err(CE_ALERT, "Device %s, XFS metadata write error"
-					" block 0x%llx in %s",
-				XFS_BUFTARG_NAME(XFS_BUF_TARGET(bp)),
-			      (__uint64_t)XFS_BUF_ADDR(bp), mp->m_fsname);
-		}
-		lasttarg = XFS_BUF_TARGET(bp);
+	if (bp->b_target != lasttarg ||
+	    time_after(jiffies, (lasttime + 5*HZ))) {
+		lasttime = jiffies;
+		xfs_buf_ioerror_alert(bp, __func__);
+	}
+	lasttarg = bp->b_target;
 
-		if (XFS_BUF_ISASYNC(bp)) {
-			/*
-			 * If the write was asynchronous then noone will be
-			 * looking for the error.  Clear the error state
-			 * and write the buffer out again delayed write.
-			 *
-			 * XXXsup This is OK, so long as we catch these
-			 * before we start the umount; we don't want these
-			 * DELWRI metadata bufs to be hanging around.
-			 */
-			XFS_BUF_ERROR(bp,0); /* errno of 0 unsets the flag */
+	/*
+	 * If the write was asynchronous then no one will be looking for the
+	 * error.  Clear the error state and write the buffer out again.
+	 *
+	 * During sync or umount we'll write all pending buffers again
+	 * synchronous, which will catch these errors if they keep hanging
+	 * around.
+	 */
+	if (XFS_BUF_ISASYNC(bp)) {
+		xfs_buf_ioerror(bp, 0); /* errno of 0 unsets the flag */
 
-			if (!(XFS_BUF_ISSTALE(bp))) {
-				XFS_BUF_DELAYWRITE(bp);
-				XFS_BUF_DONE(bp);
-				XFS_BUF_SET_START(bp);
-			}
-			ASSERT(XFS_BUF_IODONE_FUNC(bp));
-			trace_xfs_buf_item_iodone_async(bp, _RET_IP_);
-			xfs_buf_relse(bp);
-		} else {
-			/*
-			 * If the write of the buffer was not asynchronous,
-			 * then we want to make sure to return the error
-			 * to the caller of bwrite().  Because of this we
-			 * cannot clear the B_ERROR state at this point.
-			 * Instead we install a callback function that
-			 * will be called when the buffer is released, and
-			 * that routine will clear the error state and
-			 * set the buffer to be written out again after
-			 * some delay.
-			 */
-			/* We actually overwrite the existing b-relse
-			   function at times, but we're gonna be shutting down
-			   anyway. */
-			XFS_BUF_SET_BRELSE_FUNC(bp,xfs_buf_error_relse);
+		if (!XFS_BUF_ISSTALE(bp)) {
+			xfs_buf_delwri_queue(bp);
 			XFS_BUF_DONE(bp);
-			XFS_BUF_FINISH_IOWAIT(bp);
 		}
+		ASSERT(bp->b_iodone != NULL);
+		trace_xfs_buf_item_iodone_async(bp, _RET_IP_);
+		xfs_buf_relse(bp);
 		return;
 	}
 
-	xfs_buf_do_callbacks(bp, lip);
-	XFS_BUF_SET_FSPRIVATE(bp, NULL);
-	XFS_BUF_CLR_IODONE_FUNC(bp);
-	xfs_biodone(bp);
-}
-
-/*
- * This is a callback routine attached to a buffer which gets an error
- * when being written out synchronously.
- */
-STATIC void
-xfs_buf_error_relse(
-	xfs_buf_t	*bp)
-{
-	xfs_log_item_t	*lip;
-	xfs_mount_t	*mp;
-
-	lip = XFS_BUF_FSPRIVATE(bp, xfs_log_item_t *);
-	mp = (xfs_mount_t *)lip->li_mountp;
-	ASSERT(XFS_BUF_TARGET(bp) == mp->m_ddev_targp);
-
-	XFS_BUF_STALE(bp);
+	/*
+	 * If the write of the buffer was synchronous, we want to make
+	 * sure to return the error to the caller of xfs_bwrite().
+	 */
+	xfs_buf_stale(bp);
 	XFS_BUF_DONE(bp);
-	XFS_BUF_UNDELAYWRITE(bp);
-	XFS_BUF_ERROR(bp,0);
 
 	trace_xfs_buf_error_relse(bp, _RET_IP_);
 
-	if (! XFS_FORCED_SHUTDOWN(mp))
-		xfs_force_shutdown(mp, SHUTDOWN_META_IO_ERROR);
-	/*
-	 * We have to unpin the pinned buffers so do the
-	 * callbacks.
-	 */
-	xfs_buf_do_callbacks(bp, lip);
-	XFS_BUF_SET_FSPRIVATE(bp, NULL);
-	XFS_BUF_CLR_IODONE_FUNC(bp);
-	XFS_BUF_SET_BRELSE_FUNC(bp,NULL);
-	xfs_buf_relse(bp);
+do_callbacks:
+	xfs_buf_do_callbacks(bp);
+	bp->b_fspriv = NULL;
+	bp->b_iodone = NULL;
+	xfs_buf_ioend(bp, 0);
 }
-
 
 /*
  * This is the iodone() function for buffers which have been

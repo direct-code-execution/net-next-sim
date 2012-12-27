@@ -8,7 +8,6 @@
 
 #include <linux/slab.h>
 #include <linux/pagemap.h>
-#include <linux/smp_lock.h>
 
 #include "isofs.h"
 #include "rock.h"
@@ -364,7 +363,7 @@ repeat:
 			break;
 		case SIG('P', 'X'):
 			inode->i_mode = isonum_733(rr->u.PX.mode);
-			inode->i_nlink = isonum_733(rr->u.PX.n_links);
+			set_nlink(inode, isonum_733(rr->u.PX.n_links));
 			inode->i_uid = isonum_733(rr->u.PX.uid);
 			inode->i_gid = isonum_733(rr->u.PX.gid);
 			break;
@@ -497,7 +496,7 @@ repeat:
 				goto out;
 			}
 			inode->i_mode = reloc->i_mode;
-			inode->i_nlink = reloc->i_nlink;
+			set_nlink(inode, reloc->i_nlink);
 			inode->i_uid = reloc->i_uid;
 			inode->i_gid = reloc->i_gid;
 			inode->i_rdev = reloc->i_rdev;
@@ -661,6 +660,7 @@ static int rock_ridge_symlink_readpage(struct file *file, struct page *page)
 {
 	struct inode *inode = page->mapping->host;
 	struct iso_inode_info *ei = ISOFS_I(inode);
+	struct isofs_sb_info *sbi = ISOFS_SB(inode->i_sb);
 	char *link = kmap(page);
 	unsigned long bufsize = ISOFS_BUFFER_SIZE(inode);
 	struct buffer_head *bh;
@@ -673,12 +673,11 @@ static int rock_ridge_symlink_readpage(struct file *file, struct page *page)
 	struct rock_state rs;
 	int ret;
 
-	if (!ISOFS_SB(inode->i_sb)->s_rock)
+	if (!sbi->s_rock)
 		goto error;
 
 	init_rock_state(&rs, inode);
 	block = ei->i_iget5_block;
-	lock_kernel();
 	bh = sb_bread(inode->i_sb, block);
 	if (!bh)
 		goto out_noread;
@@ -748,7 +747,6 @@ repeat:
 		goto fail;
 	brelse(bh);
 	*rpnt = '\0';
-	unlock_kernel();
 	SetPageUptodate(page);
 	kunmap(page);
 	unlock_page(page);
@@ -765,7 +763,6 @@ out_bad_span:
 	printk("symlink spans iso9660 blocks\n");
 fail:
 	brelse(bh);
-	unlock_kernel();
 error:
 	SetPageError(page);
 	kunmap(page);

@@ -34,14 +34,4 @@
 #define AK4535_VOL		0xe
 #define AK4535_STATUS		0xf
 
-#define AK4535_CACHEREGNUM 	0x10
-
-struct ak4535_setup_data {
-	int            i2c_bus;
-	unsigned short i2c_address;
-};
-
-extern struct snd_soc_dai ak4535_dai;
-extern struct snd_soc_codec_device soc_codec_dev_ak4535;
-
 #endif

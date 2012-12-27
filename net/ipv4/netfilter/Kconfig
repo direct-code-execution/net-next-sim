@@ -27,7 +27,7 @@ config NF_CONNTRACK_IPV4
 
 config NF_CONNTRACK_PROC_COMPAT
 	bool "proc/sysctl compatibility with old connection tracking"
-	depends on NF_CONNTRACK_IPV4
+	depends on NF_CONNTRACK_PROCFS && NF_CONNTRACK_IPV4
 	default y
 	help
 	  This option enables /proc and sysctl compatibility with the old
@@ -64,16 +64,6 @@ config IP_NF_IPTABLES
 if IP_NF_IPTABLES
 
 # The matches.
-config IP_NF_MATCH_ADDRTYPE
-	tristate '"addrtype" address type match support'
-	depends on NETFILTER_ADVANCED
-	help
-	  This option allows you to match what routing thinks of an address,
-	  eg. UNICAST, LOCAL, BROADCAST, ...
-
-	  If you want to compile it as a module, say M here and read
-	  <file:Documentation/kbuild/modules.txt>.  If unsure, say `N'.
-
 config IP_NF_MATCH_AH
 	tristate '"ah" match support'
 	depends on NETFILTER_ADVANCED
@@ -86,11 +76,21 @@ config IP_NF_MATCH_AH
 config IP_NF_MATCH_ECN
 	tristate '"ecn" match support'
 	depends on NETFILTER_ADVANCED
-	help
-	  This option adds a `ECN' match, which allows you to match against
-	  the IPv4 and TCP header ECN fields.
+	select NETFILTER_XT_MATCH_ECN
+	---help---
+	This is a backwards-compat option for the user's convenience
+	(e.g. when running oldconfig). It selects
+	CONFIG_NETFILTER_XT_MATCH_ECN.
+
+config IP_NF_MATCH_RPFILTER
+	tristate '"rpfilter" reverse path filter match support'
+	depends on NETFILTER_ADVANCED
+	---help---
+	  This option allows you to match packets whose replies would
+	  go out via the interface the packet came in.
 
 	  To compile it as a module, choose M here.  If unsure, say N.
+	  The module will be called ipt_rpfilter.
 
 config IP_NF_MATCH_TTL
 	tristate '"ttl" match support'
@@ -123,15 +123,6 @@ config IP_NF_TARGET_REJECT
 
 	  To compile it as a module, choose M here.  If unsure, say N.
 
-config IP_NF_TARGET_LOG
-	tristate "LOG target support"
-	default m if NETFILTER_ADVANCED=n
-	help
-	  This option adds a `LOG' target, which allows you to create rules in
-	  any iptables table which records the packet header to the syslog.
-
-	  To compile it as a module, choose M here.  If unsure, say N.
-
 config IP_NF_TARGET_ULOG
 	tristate "ULOG target support"
 	default m if NETFILTER_ADVANCED=n
@@ -147,7 +138,7 @@ config IP_NF_TARGET_ULOG
 	  which can only be viewed through syslog.
 
 	  The appropriate userspace logging daemon (ulogd) may be obtained from
-	  <http://www.gnumonks.org/projects/ulogd/>
+	  <http://www.netfilter.org/projects/ulogd/index.html>
 
 	  To compile it as a module, choose M here.  If unsure, say N.
 
@@ -206,8 +197,9 @@ config IP_NF_TARGET_REDIRECT
 
 config NF_NAT_SNMP_BASIC
 	tristate "Basic SNMP-ALG support"
-	depends on NF_NAT
+	depends on NF_CONNTRACK_SNMP && NF_NAT
 	depends on NETFILTER_ADVANCED
+	default NF_NAT && NF_CONNTRACK_SNMP
 	---help---
 
 	  This module implements an Application Layer Gateway (ALG) for
@@ -324,17 +316,16 @@ config IP_NF_TARGET_ECN
 
 config IP_NF_TARGET_TTL
 	tristate '"TTL" target support'
-	depends on NETFILTER_ADVANCED
+	depends on NETFILTER_ADVANCED && IP_NF_MANGLE
 	select NETFILTER_XT_TARGET_HL
 	---help---
-	This is a backwards-compat option for the user's convenience
+	This is a backwards-compatible option for the user's convenience
 	(e.g. when running oldconfig). It selects
 	CONFIG_NETFILTER_XT_TARGET_HL.
 
 # raw + specific targets
 config IP_NF_RAW
 	tristate  'raw table support (required for NOTRACK/TRACE)'
-	depends on NETFILTER_ADVANCED
 	help
 	  This option adds a `raw' table to iptables. This table is the very
 	  first in the netfilter framework and hooks in at the PREROUTING

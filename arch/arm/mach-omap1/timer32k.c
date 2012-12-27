@@ -46,15 +46,16 @@
 #include <linux/clockchips.h>
 #include <linux/io.h>
 
-#include <asm/system.h>
-#include <mach/hardware.h>
 #include <asm/leds.h>
 #include <asm/irq.h>
 #include <asm/mach/irq.h>
 #include <asm/mach/time.h>
+
 #include <plat/dmtimer.h>
 
-struct sys_timer omap_timer;
+#include <mach/hardware.h>
+
+#include "common.h"
 
 /*
  * ---------------------------------------------------------------------------
@@ -181,14 +182,10 @@ static __init void omap_init_32k_timer(void)
  * Timer initialization
  * ---------------------------------------------------------------------------
  */
-static void __init omap_timer_init(void)
+bool __init omap_32k_timer_init(void)
 {
-#ifdef CONFIG_OMAP_DM_TIMER
-	omap_dm_timer_init();
-#endif
+	omap_init_clocksource_32k();
 	omap_init_32k_timer();
-}
 
-struct sys_timer omap_timer = {
-	.init		= omap_timer_init,
-};
+	return true;
+}

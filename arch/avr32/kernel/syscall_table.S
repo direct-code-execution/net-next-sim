@@ -158,7 +158,7 @@ sys_call_table:
 	.long	sys_sched_rr_get_interval
 	.long	sys_nanosleep
 	.long	sys_poll
-	.long	sys_nfsservctl		/* 145 */
+	.long	sys_ni_syscall		/* 145 was nfsservctl */
 	.long	sys_setresgid
 	.long	sys_getresgid
 	.long	sys_prctl
@@ -296,4 +296,5 @@ sys_call_table:
 	.long	sys_ni_syscall		/* 280, was sys_timerfd */
 	.long	sys_eventfd
 	.long	sys_recvmmsg
+	.long	sys_setns
 	.long	sys_ni_syscall		/* r8 is saturated at nr_syscalls */

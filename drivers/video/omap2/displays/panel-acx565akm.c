@@ -30,7 +30,7 @@
 #include <linux/backlight.h>
 #include <linux/fb.h>
 
-#include <plat/display.h>
+#include <video/omapdss.h>
 
 #define MIPID_CMD_READ_DISP_ID		0x04
 #define MIPID_CMD_READ_RED		0x06
@@ -534,6 +534,7 @@ static int acx_panel_probe(struct omap_dss_device *dssdev)
 
 	props.fb_blank = FB_BLANK_UNBLANK;
 	props.power = FB_BLANK_UNBLANK;
+	props.type = BACKLIGHT_RAW;
 
 	bldev = backlight_device_register("acx565akm", &md->spi->dev,
 			md, &acx565akm_bl_ops, &props);
@@ -586,6 +587,9 @@ static int acx_panel_power_on(struct omap_dss_device *dssdev)
 	int r;
 
 	dev_dbg(&dssdev->dev, "%s\n", __func__);
+
+	if (dssdev->state == OMAP_DSS_DISPLAY_ACTIVE)
+		return 0;
 
 	mutex_lock(&md->mutex);
 
@@ -643,6 +647,9 @@ static void acx_panel_power_off(struct omap_dss_device *dssdev)
 	struct acx565akm_device *md = &acx_dev;
 
 	dev_dbg(&dssdev->dev, "%s\n", __func__);
+
+	if (dssdev->state != OMAP_DSS_DISPLAY_ACTIVE)
+		return;
 
 	mutex_lock(&md->mutex);
 
@@ -796,25 +803,13 @@ static int acx565akm_spi_remove(struct spi_device *spi)
 static struct spi_driver acx565akm_spi_driver = {
 	.driver = {
 		.name	= "acx565akm",
-		.bus	= &spi_bus_type,
 		.owner	= THIS_MODULE,
 	},
 	.probe	= acx565akm_spi_probe,
 	.remove	= __devexit_p(acx565akm_spi_remove),
 };
 
-static int __init acx565akm_init(void)
-{
-	return spi_register_driver(&acx565akm_spi_driver);
-}
-
-static void __exit acx565akm_exit(void)
-{
-	spi_unregister_driver(&acx565akm_spi_driver);
-}
-
-module_init(acx565akm_init);
-module_exit(acx565akm_exit);
+module_spi_driver(acx565akm_spi_driver);
 
 MODULE_AUTHOR("Nokia Corporation");
 MODULE_DESCRIPTION("acx565akm LCD Driver");

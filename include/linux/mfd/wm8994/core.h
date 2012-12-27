@@ -15,10 +15,18 @@
 #ifndef __MFD_WM8994_CORE_H__
 #define __MFD_WM8994_CORE_H__
 
+#include <linux/mutex.h>
 #include <linux/interrupt.h>
+
+enum wm8994_type {
+	WM8994 = 0,
+	WM8958 = 1,
+	WM1811 = 2,
+};
 
 struct regulator_dev;
 struct regulator_bulk_data;
+struct regmap;
 
 #define WM8994_NUM_GPIO_REGS 11
 #define WM8994_NUM_LDO_REGS   2
@@ -45,29 +53,27 @@ struct regulator_bulk_data;
 #define WM8994_IRQ_GPIO(x) (x + WM8994_IRQ_TEMP_WARN)
 
 struct wm8994 {
-	struct mutex io_lock;
 	struct mutex irq_lock;
 
-	struct device *dev;
-	int (*read_dev)(struct wm8994 *wm8994, unsigned short reg,
-			int bytes, void *dest);
-	int (*write_dev)(struct wm8994 *wm8994, unsigned short reg,
-			 int bytes, void *src);
+	enum wm8994_type type;
+	int revision;
 
-	void *control_data;
+	struct device *dev;
+	struct regmap *regmap;
+
+	bool ldo_ena_always_driven;
 
 	int gpio_base;
 	int irq_base;
 
 	int irq;
-	u16 irq_masks_cur[WM8994_NUM_IRQ_REGS];
-	u16 irq_masks_cache[WM8994_NUM_IRQ_REGS];
+	struct regmap_irq_chip_data *irq_data;
 
 	/* Used over suspend/resume */
-	u16 ldo_regs[WM8994_NUM_LDO_REGS];
-	u16 gpio_regs[WM8994_NUM_GPIO_REGS];
+	bool suspended;
 
 	struct regulator_dev *dbvdd;
+	int num_supplies;
 	struct regulator_bulk_data *supplies;
 };
 
@@ -79,6 +85,8 @@ int wm8994_set_bits(struct wm8994 *wm8994, unsigned short reg,
 		    unsigned short mask, unsigned short val);
 int wm8994_bulk_read(struct wm8994 *wm8994, unsigned short reg,
 		     int count, u16 *buf);
+int wm8994_bulk_write(struct wm8994 *wm8994, unsigned short reg,
+		     int count, const u16 *buf);
 
 
 /* Helper to save on boilerplate */

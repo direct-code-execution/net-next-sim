@@ -52,6 +52,8 @@
  *
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/miscdevice.h>
 #include <linux/interrupt.h>
 #include <linux/watchdog.h>
@@ -64,6 +66,7 @@
 #include <linux/cpu.h>
 #include <linux/smp.h>
 #include <linux/fs.h>
+#include <linux/irq.h>
 
 #include <asm/mipsregs.h>
 #include <asm/uasm.h>
@@ -94,8 +97,8 @@ MODULE_PARM_DESC(heartbeat,
 	"Watchdog heartbeat in seconds. (0 < heartbeat, default="
 				__MODULE_STRING(WD_TIMO) ")");
 
-static int nowayout = WATCHDOG_NOWAYOUT;
-module_param(nowayout, int, S_IRUGO);
+static bool nowayout = WATCHDOG_NOWAYOUT;
+module_param(nowayout, bool, S_IRUGO);
 MODULE_PARM_DESC(nowayout,
 	"Watchdog cannot be stopped once started (default="
 				__MODULE_STRING(WATCHDOG_NOWAYOUT) ")");
@@ -200,7 +203,7 @@ static void __init octeon_wdt_build_stage1(void)
 	uasm_resolve_relocs(relocs, labels);
 
 	len = (int)(p - nmi_stage1_insns);
-	pr_debug("Synthesized NMI stage 1 handler (%d instructions).\n", len);
+	pr_debug("Synthesized NMI stage 1 handler (%d instructions)\n", len);
 
 	pr_debug("\t.set push\n");
 	pr_debug("\t.set noreorder\n");
@@ -401,7 +404,7 @@ static void octeon_wdt_setup_interrupt(int cpu)
 	irq = OCTEON_IRQ_WDOG0 + core;
 
 	if (request_irq(irq, octeon_wdt_poke_irq,
-			IRQF_DISABLED, "octeon_wdt", octeon_wdt_poke_irq))
+			IRQF_NO_THREAD, "octeon_wdt", octeon_wdt_poke_irq))
 		panic("octeon_wdt: Couldn't obtain irq %d", irq);
 
 	cpumask_set_cpu(cpu, &irq_enabled_cpus);
@@ -477,7 +480,7 @@ static void octeon_wdt_calc_parameters(int t)
 
 	countdown_reset = periods > 2 ? periods - 2 : 0;
 	heartbeat = t;
-	timeout_cnt = ((octeon_get_clock_rate() >> 8) * timeout_sec) >> 8;
+	timeout_cnt = ((octeon_get_io_clock_rate() >> 8) * timeout_sec) >> 8;
 }
 
 static int octeon_wdt_set_heartbeat(int t)
@@ -626,7 +629,7 @@ static int octeon_wdt_release(struct inode *inode, struct file *file)
 		do_coundown = 0;
 		octeon_wdt_ping();
 	} else {
-		pr_crit("octeon_wdt: WDT device closed unexpectedly.  WDT will not stop!\n");
+		pr_crit("WDT device closed unexpectedly.  WDT will not stop!\n");
 	}
 	clear_bit(0, &octeon_wdt_is_open);
 	expect_close = 0;
@@ -676,19 +679,19 @@ static int __init octeon_wdt_init(void)
 	max_timeout_sec = 6;
 	do {
 		max_timeout_sec--;
-		timeout_cnt = ((octeon_get_clock_rate() >> 8) * max_timeout_sec) >> 8;
+		timeout_cnt = ((octeon_get_io_clock_rate() >> 8) * max_timeout_sec) >> 8;
 	} while (timeout_cnt > 65535);
 
 	BUG_ON(timeout_cnt == 0);
 
 	octeon_wdt_calc_parameters(heartbeat);
 
-	pr_info("octeon_wdt: Initial granularity %d Sec.\n", timeout_sec);
+	pr_info("Initial granularity %d Sec\n", timeout_sec);
 
 	ret = misc_register(&octeon_wdt_miscdev);
 	if (ret) {
-		pr_err("octeon_wdt: cannot register miscdev on minor=%d (err=%d)\n",
-			WATCHDOG_MINOR, ret);
+		pr_err("cannot register miscdev on minor=%d (err=%d)\n",
+		       WATCHDOG_MINOR, ret);
 		goto out;
 	}
 

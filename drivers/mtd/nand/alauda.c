@@ -120,7 +120,7 @@ static void alauda_delete(struct kref *kref)
 	struct alauda *al = container_of(kref, struct alauda, kref);
 
 	if (al->mtd) {
-		del_mtd_device(al->mtd);
+		mtd_device_unregister(al->mtd);
 		kfree(al->mtd);
 	}
 	usb_put_dev(al->dev);
@@ -585,14 +585,15 @@ static int alauda_init_media(struct alauda *al)
 	mtd->writesize = 1<<card->pageshift;
 	mtd->type = MTD_NANDFLASH;
 	mtd->flags = MTD_CAP_NANDFLASH;
-	mtd->read = alauda_read;
-	mtd->write = alauda_write;
-	mtd->erase = alauda_erase;
-	mtd->block_isbad = alauda_isbad;
+	mtd->_read = alauda_read;
+	mtd->_write = alauda_write;
+	mtd->_erase = alauda_erase;
+	mtd->_block_isbad = alauda_isbad;
 	mtd->priv = al;
 	mtd->owner = THIS_MODULE;
+	mtd->ecc_strength = 1;
 
-	err = add_mtd_device(mtd);
+	err = mtd_device_register(mtd, NULL, 0);
 	if (err) {
 		err = -ENFILE;
 		goto error;
@@ -717,17 +718,6 @@ static struct usb_driver alauda_driver = {
 	.id_table =	alauda_table,
 };
 
-static int __init alauda_init(void)
-{
-	return usb_register(&alauda_driver);
-}
-
-static void __exit alauda_exit(void)
-{
-	usb_deregister(&alauda_driver);
-}
-
-module_init(alauda_init);
-module_exit(alauda_exit);
+module_usb_driver(alauda_driver);
 
 MODULE_LICENSE("GPL");

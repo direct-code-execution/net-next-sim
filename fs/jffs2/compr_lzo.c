@@ -33,7 +33,6 @@ static int __init alloc_workspace(void)
 	lzo_compress_buf = vmalloc(lzo1x_worst_compress(PAGE_SIZE));
 
 	if (!lzo_mem || !lzo_compress_buf) {
-		printk(KERN_WARNING "Failed to allocate lzo deflate workspace\n");
 		free_workspace();
 		return -ENOMEM;
 	}
@@ -42,7 +41,7 @@ static int __init alloc_workspace(void)
 }
 
 static int jffs2_lzo_compress(unsigned char *data_in, unsigned char *cpage_out,
-			      uint32_t *sourcelen, uint32_t *dstlen, void *model)
+			      uint32_t *sourcelen, uint32_t *dstlen)
 {
 	size_t compress_size;
 	int ret;
@@ -67,7 +66,7 @@ static int jffs2_lzo_compress(unsigned char *data_in, unsigned char *cpage_out,
 }
 
 static int jffs2_lzo_decompress(unsigned char *data_in, unsigned char *cpage_out,
-				 uint32_t srclen, uint32_t destlen, void *model)
+				 uint32_t srclen, uint32_t destlen)
 {
 	size_t dl = destlen;
 	int ret;

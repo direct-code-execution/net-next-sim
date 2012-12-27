@@ -359,7 +359,7 @@ typedef struct {
     u32     cmd_buff_addr2;     /* physical address of cmd buffer 1 */   
     u32     cmd_buff_u_addr2;   /* reserved for 64 bit addressing */
     u32     cmd_buff_indx2;     /* cmd buf addr1 unique identifier */
-    u32     cmd_buff_size;      /* size of each cmd bufer in bytes */
+    u32     cmd_buff_size;      /* size of each cmd buffer in bytes */
     u32     reserved1;
     u32     reserved2;
 } __attribute__((packed)) gdth_perf_modes;
@@ -895,7 +895,7 @@ typedef struct {
         u8          ldr_no;                 /* log. drive no. */
         u8          rw_attribs;             /* r/w attributes */
         u8          cluster_type;           /* cluster properties */
-        u8          media_changed;          /* Flag:MOUNT/UNMOUNT occured */
+        u8          media_changed;          /* Flag:MOUNT/UNMOUNT occurred */
         u32         start_sec;              /* start sector */
     } hdr[MAX_LDRIVES];                         /* host drives */
     struct {

@@ -88,7 +88,7 @@ struct workqueue_struct *user_dlm_worker;
  *		  signifies a bast fired on the lock.
  */
 #define DLMFS_CAPABILITIES "bast stackglue"
-extern int param_set_dlmfs_capabilities(const char *val,
+static int param_set_dlmfs_capabilities(const char *val,
 					struct kernel_param *kp)
 {
 	printk(KERN_ERR "%s: readonly parameter\n", kp->name);
@@ -351,9 +351,15 @@ static struct inode *dlmfs_alloc_inode(struct super_block *sb)
 	return &ip->ip_vfs_inode;
 }
 
+static void dlmfs_i_callback(struct rcu_head *head)
+{
+	struct inode *inode = container_of(head, struct inode, i_rcu);
+	kmem_cache_free(dlmfs_inode_cache, DLMFS_I(inode));
+}
+
 static void dlmfs_destroy_inode(struct inode *inode)
 {
-	kmem_cache_free(dlmfs_inode_cache, DLMFS_I(inode));
+	call_rcu(&inode->i_rcu, dlmfs_i_callback);
 }
 
 static void dlmfs_evict_inode(struct inode *inode)
@@ -394,15 +400,14 @@ static struct backing_dev_info dlmfs_backing_dev_info = {
 static struct inode *dlmfs_get_root_inode(struct super_block *sb)
 {
 	struct inode *inode = new_inode(sb);
-	int mode = S_IFDIR | 0755;
+	umode_t mode = S_IFDIR | 0755;
 	struct dlmfs_inode_private *ip;
 
 	if (inode) {
 		ip = DLMFS_I(inode);
 
-		inode->i_mode = mode;
-		inode->i_uid = current_fsuid();
-		inode->i_gid = current_fsgid();
+		inode->i_ino = get_next_ino();
+		inode_init_owner(inode, NULL, mode);
 		inode->i_mapping->backing_dev_info = &dlmfs_backing_dev_info;
 		inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 		inc_nlink(inode);
@@ -416,7 +421,7 @@ static struct inode *dlmfs_get_root_inode(struct super_block *sb)
 
 static struct inode *dlmfs_get_inode(struct inode *parent,
 				     struct dentry *dentry,
-				     int mode)
+				     umode_t mode)
 {
 	struct super_block *sb = parent->i_sb;
 	struct inode * inode = new_inode(sb);
@@ -425,9 +430,8 @@ static struct inode *dlmfs_get_inode(struct inode *parent,
 	if (!inode)
 		return NULL;
 
-	inode->i_mode = mode;
-	inode->i_uid = current_fsuid();
-	inode->i_gid = current_fsgid();
+	inode->i_ino = get_next_ino();
+	inode_init_owner(inode, parent, mode);
 	inode->i_mapping->backing_dev_info = &dlmfs_backing_dev_info;
 	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 
@@ -464,13 +468,6 @@ static struct inode *dlmfs_get_inode(struct inode *parent,
 		inc_nlink(inode);
 		break;
 	}
-
-	if (parent->i_mode & S_ISGID) {
-		inode->i_gid = parent->i_gid;
-		if (S_ISDIR(mode))
-			inode->i_mode |= S_ISGID;
-	}
-
 	return inode;
 }
 
@@ -480,7 +477,7 @@ static struct inode *dlmfs_get_inode(struct inode *parent,
 /* SMP-safe */
 static int dlmfs_mkdir(struct inode * dir,
 		       struct dentry * dentry,
-		       int mode)
+		       umode_t mode)
 {
 	int status;
 	struct inode *inode = NULL;
@@ -528,7 +525,7 @@ bail:
 
 static int dlmfs_create(struct inode *dir,
 			struct dentry *dentry,
-			int mode,
+			umode_t mode,
 			struct nameidata *nd)
 {
 	int status = 0;
@@ -585,24 +582,14 @@ static int dlmfs_fill_super(struct super_block * sb,
 			    void * data,
 			    int silent)
 {
-	struct inode * inode;
-	struct dentry * root;
-
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_blocksize = PAGE_CACHE_SIZE;
 	sb->s_blocksize_bits = PAGE_CACHE_SHIFT;
 	sb->s_magic = DLMFS_MAGIC;
 	sb->s_op = &dlmfs_ops;
-	inode = dlmfs_get_root_inode(sb);
-	if (!inode)
+	sb->s_root = d_make_root(dlmfs_get_root_inode(sb));
+	if (!sb->s_root)
 		return -ENOMEM;
-
-	root = d_alloc_root(inode);
-	if (!root) {
-		iput(inode);
-		return -ENOMEM;
-	}
-	sb->s_root = root;
 	return 0;
 }
 
@@ -612,6 +599,7 @@ static const struct file_operations dlmfs_file_operations = {
 	.poll		= dlmfs_file_poll,
 	.read		= dlmfs_file_read,
 	.write		= dlmfs_file_write,
+	.llseek		= default_llseek,
 };
 
 static const struct inode_operations dlmfs_dir_inode_operations = {
@@ -640,16 +628,16 @@ static const struct inode_operations dlmfs_file_inode_operations = {
 	.setattr	= dlmfs_file_setattr,
 };
 
-static int dlmfs_get_sb(struct file_system_type *fs_type,
-	int flags, const char *dev_name, void *data, struct vfsmount *mnt)
+static struct dentry *dlmfs_mount(struct file_system_type *fs_type,
+	int flags, const char *dev_name, void *data)
 {
-	return get_sb_nodev(fs_type, flags, data, dlmfs_fill_super, mnt);
+	return mount_nodev(fs_type, flags, data, dlmfs_fill_super);
 }
 
 static struct file_system_type dlmfs_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "ocfs2_dlmfs",
-	.get_sb		= dlmfs_get_sb,
+	.mount		= dlmfs_mount,
 	.kill_sb	= kill_litter_super,
 };
 

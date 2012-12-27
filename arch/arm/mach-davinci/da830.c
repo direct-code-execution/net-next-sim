@@ -8,6 +8,7 @@
  * is licensed "as is" without any warranty of any kind, whether express
  * or implied.
  */
+#include <linux/gpio.h>
 #include <linux/init.h>
 #include <linux/clk.h>
 
@@ -19,7 +20,7 @@
 #include <mach/common.h>
 #include <mach/time.h>
 #include <mach/da8xx.h>
-#include <mach/gpio.h>
+#include <mach/gpio-davinci.h>
 
 #include "clock.h"
 #include "mux.h"
@@ -148,7 +149,7 @@ static struct clk scr2_ss_clk = {
 static struct clk dmax_clk = {
 	.name		= "dmax",
 	.parent		= &pll0_sysclk2,
-	.lpsc		= DA8XX_LPSC0_DMAX,
+	.lpsc		= DA8XX_LPSC0_PRUSS,
 	.flags		= ALWAYS_ENABLED,
 };
 
@@ -397,8 +398,8 @@ static struct clk_lookup da830_clks[] = {
 	CLK(NULL,		"uart0",	&uart0_clk),
 	CLK(NULL,		"uart1",	&uart1_clk),
 	CLK(NULL,		"uart2",	&uart2_clk),
-	CLK("dm_spi.0",		NULL,		&spi0_clk),
-	CLK("dm_spi.1",		NULL,		&spi1_clk),
+	CLK("spi_davinci.0",	NULL,		&spi0_clk),
+	CLK("spi_davinci.1",	NULL,		&spi1_clk),
 	CLK(NULL,		"ecap0",	&ecap0_clk),
 	CLK(NULL,		"ecap1",	&ecap1_clk),
 	CLK(NULL,		"ecap2",	&ecap2_clk),
@@ -1200,7 +1201,6 @@ static struct davinci_soc_info davinci_soc_info_da830 = {
 	.gpio_irq		= IRQ_DA8XX_GPIO0,
 	.serial_dev		= &da8xx_serial_device,
 	.emac_pdata		= &da8xx_emac_pdata,
-	.reset_device		= &da8xx_wdt_device,
 };
 
 void __init da830_init(void)

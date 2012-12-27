@@ -109,11 +109,17 @@ void res_counter_init(struct res_counter *counter, struct res_counter *parent);
  *
  * returns 0 on success and <0 if the counter->usage will exceed the
  * counter->limit _locked call expects the counter->lock to be taken
+ *
+ * charge_nofail works the same, except that it charges the resource
+ * counter unconditionally, and returns < 0 if the after the current
+ * charge we are over limit.
  */
 
 int __must_check res_counter_charge_locked(struct res_counter *counter,
 		unsigned long val);
 int __must_check res_counter_charge(struct res_counter *counter,
+		unsigned long val, struct res_counter **limit_fail_at);
+int __must_check res_counter_charge_nofail(struct res_counter *counter,
 		unsigned long val, struct res_counter **limit_fail_at);
 
 /*
@@ -129,20 +135,25 @@ int __must_check res_counter_charge(struct res_counter *counter,
 void res_counter_uncharge_locked(struct res_counter *counter, unsigned long val);
 void res_counter_uncharge(struct res_counter *counter, unsigned long val);
 
-static inline bool res_counter_limit_check_locked(struct res_counter *cnt)
+/**
+ * res_counter_margin - calculate chargeable space of a counter
+ * @cnt: the counter
+ *
+ * Returns the difference between the hard limit and the current usage
+ * of resource counter @cnt.
+ */
+static inline unsigned long long res_counter_margin(struct res_counter *cnt)
 {
-	if (cnt->usage < cnt->limit)
-		return true;
+	unsigned long long margin;
+	unsigned long flags;
 
-	return false;
-}
-
-static inline bool res_counter_soft_limit_check_locked(struct res_counter *cnt)
-{
-	if (cnt->usage < cnt->soft_limit)
-		return true;
-
-	return false;
+	spin_lock_irqsave(&cnt->lock, flags);
+	if (cnt->limit > cnt->usage)
+		margin = cnt->limit - cnt->usage;
+	else
+		margin = 0;
+	spin_unlock_irqrestore(&cnt->lock, flags);
+	return margin;
 }
 
 /**
@@ -165,32 +176,6 @@ res_counter_soft_limit_excess(struct res_counter *cnt)
 		excess = cnt->usage - cnt->soft_limit;
 	spin_unlock_irqrestore(&cnt->lock, flags);
 	return excess;
-}
-
-/*
- * Helper function to detect if the cgroup is within it's limit or
- * not. It's currently called from cgroup_rss_prepare()
- */
-static inline bool res_counter_check_under_limit(struct res_counter *cnt)
-{
-	bool ret;
-	unsigned long flags;
-
-	spin_lock_irqsave(&cnt->lock, flags);
-	ret = res_counter_limit_check_locked(cnt);
-	spin_unlock_irqrestore(&cnt->lock, flags);
-	return ret;
-}
-
-static inline bool res_counter_check_under_soft_limit(struct res_counter *cnt)
-{
-	bool ret;
-	unsigned long flags;
-
-	spin_lock_irqsave(&cnt->lock, flags);
-	ret = res_counter_soft_limit_check_locked(cnt);
-	spin_unlock_irqrestore(&cnt->lock, flags);
-	return ret;
 }
 
 static inline void res_counter_reset_max(struct res_counter *cnt)

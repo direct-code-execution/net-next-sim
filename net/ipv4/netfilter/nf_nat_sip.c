@@ -249,25 +249,25 @@ static void ip_nat_sip_seq_adjust(struct sk_buff *skb, s16 off)
 static void ip_nat_sip_expected(struct nf_conn *ct,
 				struct nf_conntrack_expect *exp)
 {
-	struct nf_nat_range range;
+	struct nf_nat_ipv4_range range;
 
 	/* This must be a fresh one. */
 	BUG_ON(ct->status & IPS_NAT_DONE_MASK);
 
 	/* For DST manip, map port here to where it's expected. */
-	range.flags = (IP_NAT_RANGE_MAP_IPS | IP_NAT_RANGE_PROTO_SPECIFIED);
+	range.flags = (NF_NAT_RANGE_MAP_IPS | NF_NAT_RANGE_PROTO_SPECIFIED);
 	range.min = range.max = exp->saved_proto;
 	range.min_ip = range.max_ip = exp->saved_ip;
-	nf_nat_setup_info(ct, &range, IP_NAT_MANIP_DST);
+	nf_nat_setup_info(ct, &range, NF_NAT_MANIP_DST);
 
 	/* Change src to where master sends to, but only if the connection
 	 * actually came from the same source. */
 	if (ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.src.u3.ip ==
 	    ct->master->tuplehash[exp->dir].tuple.src.u3.ip) {
-		range.flags = IP_NAT_RANGE_MAP_IPS;
+		range.flags = NF_NAT_RANGE_MAP_IPS;
 		range.min_ip = range.max_ip
 			= ct->master->tuplehash[!exp->dir].tuple.dst.u3.ip;
-		nf_nat_setup_info(ct, &range, IP_NAT_MANIP_SRC);
+		nf_nat_setup_info(ct, &range, NF_NAT_MANIP_SRC);
 	}
 }
 
@@ -307,9 +307,16 @@ static unsigned int ip_nat_sip_expect(struct sk_buff *skb, unsigned int dataoff,
 	exp->expectfn = ip_nat_sip_expected;
 
 	for (; port != 0; port++) {
+		int ret;
+
 		exp->tuple.dst.u.udp.port = htons(port);
-		if (nf_ct_expect_related(exp) == 0)
+		ret = nf_ct_expect_related(exp);
+		if (ret == 0)
 			break;
+		else if (ret != -EBUSY) {
+			port = 0;
+			break;
+		}
 	}
 
 	if (port == 0)
@@ -480,13 +487,25 @@ static unsigned int ip_nat_sdp_media(struct sk_buff *skb, unsigned int dataoff,
 	/* Try to get same pair of ports: if not, try to change them. */
 	for (port = ntohs(rtp_exp->tuple.dst.u.udp.port);
 	     port != 0; port += 2) {
+		int ret;
+
 		rtp_exp->tuple.dst.u.udp.port = htons(port);
-		if (nf_ct_expect_related(rtp_exp) != 0)
+		ret = nf_ct_expect_related(rtp_exp);
+		if (ret == -EBUSY)
 			continue;
-		rtcp_exp->tuple.dst.u.udp.port = htons(port + 1);
-		if (nf_ct_expect_related(rtcp_exp) == 0)
+		else if (ret < 0) {
+			port = 0;
 			break;
-		nf_ct_unexpect_related(rtp_exp);
+		}
+		rtcp_exp->tuple.dst.u.udp.port = htons(port + 1);
+		ret = nf_ct_expect_related(rtcp_exp);
+		if (ret == 0)
+			break;
+		else if (ret != -EBUSY) {
+			nf_ct_unexpect_related(rtp_exp);
+			port = 0;
+			break;
+		}
 	}
 
 	if (port == 0)
@@ -507,15 +526,21 @@ err1:
 	return NF_DROP;
 }
 
+static struct nf_ct_helper_expectfn sip_nat = {
+        .name           = "sip",
+        .expectfn       = ip_nat_sip_expected,
+};
+
 static void __exit nf_nat_sip_fini(void)
 {
-	rcu_assign_pointer(nf_nat_sip_hook, NULL);
-	rcu_assign_pointer(nf_nat_sip_seq_adjust_hook, NULL);
-	rcu_assign_pointer(nf_nat_sip_expect_hook, NULL);
-	rcu_assign_pointer(nf_nat_sdp_addr_hook, NULL);
-	rcu_assign_pointer(nf_nat_sdp_port_hook, NULL);
-	rcu_assign_pointer(nf_nat_sdp_session_hook, NULL);
-	rcu_assign_pointer(nf_nat_sdp_media_hook, NULL);
+	RCU_INIT_POINTER(nf_nat_sip_hook, NULL);
+	RCU_INIT_POINTER(nf_nat_sip_seq_adjust_hook, NULL);
+	RCU_INIT_POINTER(nf_nat_sip_expect_hook, NULL);
+	RCU_INIT_POINTER(nf_nat_sdp_addr_hook, NULL);
+	RCU_INIT_POINTER(nf_nat_sdp_port_hook, NULL);
+	RCU_INIT_POINTER(nf_nat_sdp_session_hook, NULL);
+	RCU_INIT_POINTER(nf_nat_sdp_media_hook, NULL);
+	nf_ct_helper_expectfn_unregister(&sip_nat);
 	synchronize_rcu();
 }
 
@@ -528,13 +553,14 @@ static int __init nf_nat_sip_init(void)
 	BUG_ON(nf_nat_sdp_port_hook != NULL);
 	BUG_ON(nf_nat_sdp_session_hook != NULL);
 	BUG_ON(nf_nat_sdp_media_hook != NULL);
-	rcu_assign_pointer(nf_nat_sip_hook, ip_nat_sip);
-	rcu_assign_pointer(nf_nat_sip_seq_adjust_hook, ip_nat_sip_seq_adjust);
-	rcu_assign_pointer(nf_nat_sip_expect_hook, ip_nat_sip_expect);
-	rcu_assign_pointer(nf_nat_sdp_addr_hook, ip_nat_sdp_addr);
-	rcu_assign_pointer(nf_nat_sdp_port_hook, ip_nat_sdp_port);
-	rcu_assign_pointer(nf_nat_sdp_session_hook, ip_nat_sdp_session);
-	rcu_assign_pointer(nf_nat_sdp_media_hook, ip_nat_sdp_media);
+	RCU_INIT_POINTER(nf_nat_sip_hook, ip_nat_sip);
+	RCU_INIT_POINTER(nf_nat_sip_seq_adjust_hook, ip_nat_sip_seq_adjust);
+	RCU_INIT_POINTER(nf_nat_sip_expect_hook, ip_nat_sip_expect);
+	RCU_INIT_POINTER(nf_nat_sdp_addr_hook, ip_nat_sdp_addr);
+	RCU_INIT_POINTER(nf_nat_sdp_port_hook, ip_nat_sdp_port);
+	RCU_INIT_POINTER(nf_nat_sdp_session_hook, ip_nat_sdp_session);
+	RCU_INIT_POINTER(nf_nat_sdp_media_hook, ip_nat_sdp_media);
+	nf_ct_helper_expectfn_register(&sip_nat);
 	return 0;
 }
 

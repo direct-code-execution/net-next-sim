@@ -21,10 +21,10 @@
 #include <linux/mm.h>
 #include <asm/processor.h>
 #include <asm/uaccess.h>
-#include <asm/system.h>
 #include <asm/cache.h>
 #include <asm/cputable.h>
 #include <asm/emulated_ops.h>
+#include <asm/switch_to.h>
 
 struct aligninfo {
 	unsigned char len;
@@ -889,7 +889,7 @@ int fix_alignment(struct pt_regs *regs)
 #ifdef CONFIG_PPC_FPU
 			preempt_disable();
 			enable_kernel_fp();
-			cvt_df(&data.dd, (float *)&data.v[4], &current->thread);
+			cvt_df(&data.dd, (float *)&data.v[4]);
 			preempt_enable();
 #else
 			return 0;
@@ -933,7 +933,7 @@ int fix_alignment(struct pt_regs *regs)
 #ifdef CONFIG_PPC_FPU
 		preempt_disable();
 		enable_kernel_fp();
-		cvt_fd((float *)&data.v[4], &data.dd, &current->thread);
+		cvt_fd((float *)&data.v[4], &data.dd);
 		preempt_enable();
 #else
 		return 0;

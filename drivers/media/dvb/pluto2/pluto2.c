@@ -26,6 +26,7 @@
 #include <linux/i2c.h>
 #include <linux/i2c-algo-bit.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -294,13 +295,13 @@ static void pluto_dma_end(struct pluto *pluto, unsigned int nbpackets)
 
 	/* Workaround for broken hardware:
 	 * [1] On startup NBPACKETS seems to contain an uninitialized value,
-	 *     but no packets have been transfered.
+	 *     but no packets have been transferred.
 	 * [2] Sometimes (actually very often) NBPACKETS stays at zero
-	 *     although one packet has been transfered.
+	 *     although one packet has been transferred.
 	 * [3] Sometimes (actually rarely), the card gets into an erroneous
 	 *     mode where it continuously generates interrupts, claiming it
-	 *     has recieved nbpackets>TS_DMA_PACKETS packets, but no packet
-	 *     has been transfered. Only a reset seems to solve this
+	 *     has received nbpackets>TS_DMA_PACKETS packets, but no packet
+	 *     has been transferred. Only a reset seems to solve this
 	 */
 	if ((nbpackets == 0) || (nbpackets > TS_DMA_PACKETS)) {
 		unsigned int i = 0;
@@ -332,7 +333,7 @@ static irqreturn_t pluto_irq(int irq, void *dev_id)
 	struct pluto *pluto = dev_id;
 	u32 tscr;
 
-	/* check whether an interrupt occured on this device */
+	/* check whether an interrupt occurred on this device */
 	tscr = pluto_readreg(pluto, REG_TSCR);
 	if (!(tscr & (TSCR_DE | TSCR_OVR)))
 		return IRQ_NONE;
@@ -444,9 +445,9 @@ static inline u32 divide(u32 numerator, u32 denominator)
 }
 
 /* LG Innotek TDTE-E001P (Infineon TUA6034) */
-static int lg_tdtpe001p_tuner_set_params(struct dvb_frontend *fe,
-					 struct dvb_frontend_parameters *p)
+static int lg_tdtpe001p_tuner_set_params(struct dvb_frontend *fe)
 {
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
 	struct pluto *pluto = frontend_to_pluto(fe);
 	struct i2c_msg msg;
 	int ret;
@@ -477,7 +478,7 @@ static int lg_tdtpe001p_tuner_set_params(struct dvb_frontend *fe,
 	else
 		buf[3] = 0x04;
 
-	if (p->u.ofdm.bandwidth == BANDWIDTH_8_MHZ)
+	if (p->bandwidth_hz == 8000000)
 		buf[3] |= 0x08;
 
 	if (sizeof(buf) == 6) {
@@ -647,7 +648,6 @@ static int __devinit pluto2_probe(struct pci_dev *pdev,
 	i2c_set_adapdata(&pluto->i2c_adap, pluto);
 	strcpy(pluto->i2c_adap.name, DRIVER_NAME);
 	pluto->i2c_adap.owner = THIS_MODULE;
-	pluto->i2c_adap.class = I2C_CLASS_TV_DIGITAL;
 	pluto->i2c_adap.dev.parent = &pdev->dev;
 	pluto->i2c_adap.algo_data = &pluto->i2c_bit;
 	pluto->i2c_bit.data = pluto;

@@ -566,9 +566,9 @@ struct phy_header {
     UCHAR hdr_3;
     UCHAR hdr_4;
 };
-struct rx_msg {
+struct ray_rx_msg {
     struct mac_header mac;
-    UCHAR  var[1];
+    UCHAR  var[0];
 };
 
 struct tx_msg {
@@ -578,7 +578,7 @@ struct tx_msg {
     UCHAR  var[1];
 };
 
-/****** ECF Receive Control Stucture (RCS) Area at Shared RAM offset 0x0800  */
+/****** ECF Receive Control Structure (RCS) Area at Shared RAM offset 0x0800  */
 /* Structures for command specific parameters (rcs.var) */
 struct rx_packet_cmd {
     UCHAR rx_data_ptr[2];

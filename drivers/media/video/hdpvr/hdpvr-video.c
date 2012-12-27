@@ -17,7 +17,6 @@
 #include <linux/uaccess.h>
 #include <linux/usb.h>
 #include <linux/mutex.h>
-#include <linux/version.h>
 #include <linux/workqueue.h>
 
 #include <linux/videodev2.h>
@@ -26,7 +25,7 @@
 #include <media/v4l2-ioctl.h>
 #include "hdpvr.h"
 
-#define BULK_URB_TIMEOUT 1250 /* 1.25 seconds */
+#define BULK_URB_TIMEOUT   90 /* 0.09 seconds */
 
 #define print_buffer_status() { \
 		v4l2_dbg(MSG_BUFFER, hdpvr_debug, &dev->v4l2_dev,	\
@@ -157,6 +156,7 @@ int hdpvr_alloc_buffers(struct hdpvr_device *dev, uint count)
 				  mem, dev->bulk_in_size,
 				  hdpvr_read_bulk_callback, buf);
 
+		buf->urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
 		buf->status = BUFSTAT_AVAILABLE;
 		list_add_tail(&buf->buff_list, &dev->free_buff_list);
 	}
@@ -283,12 +283,13 @@ static int hdpvr_start_streaming(struct hdpvr_device *dev)
 
 		hdpvr_config_call(dev, CTRL_START_STREAMING_VALUE, 0x00);
 
+		dev->status = STATUS_STREAMING;
+
 		INIT_WORK(&dev->worker, hdpvr_transmit_buffers);
 		queue_work(dev->workqueue, &dev->worker);
 
 		v4l2_dbg(MSG_BUFFER, hdpvr_debug, &dev->v4l2_dev,
 			 "streaming started\n");
-		dev->status = STATUS_STREAMING;
 
 		return 0;
 	}
@@ -337,8 +338,6 @@ static int hdpvr_stop_streaming(struct hdpvr_device *dev)
 					     dev->bulk_in_endpointAddr),
 			     buf, dev->bulk_in_size, &actual_length,
 			     BULK_URB_TIMEOUT)) {
-		/* wait */
-		msleep(5);
 		v4l2_dbg(MSG_BUFFER, hdpvr_debug, &dev->v4l2_dev,
 			 "%2d: got %d bytes\n", c, actual_length);
 	}
@@ -575,7 +574,6 @@ static int vidioc_querycap(struct file *file, void  *priv,
 	strcpy(cap->driver, "hdpvr");
 	strcpy(cap->card, "Hauppauge HD PVR");
 	usb_make_path(dev->udev, cap->bus_info, sizeof(cap->bus_info));
-	cap->version = HDPVR_VERSION;
 	cap->capabilities =     V4L2_CAP_VIDEO_CAPTURE |
 				V4L2_CAP_AUDIO         |
 				V4L2_CAP_READWRITE;
@@ -725,21 +723,39 @@ static const s32 supported_v4l2_ctrls[] = {
 };
 
 static int fill_queryctrl(struct hdpvr_options *opt, struct v4l2_queryctrl *qc,
-			  int ac3)
+			  int ac3, int fw_ver)
 {
 	int err;
 
+	if (fw_ver > 0x15) {
+		switch (qc->id) {
+		case V4L2_CID_BRIGHTNESS:
+			return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x80);
+		case V4L2_CID_CONTRAST:
+			return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x40);
+		case V4L2_CID_SATURATION:
+			return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x40);
+		case V4L2_CID_HUE:
+			return v4l2_ctrl_query_fill(qc, 0x0, 0x1e, 1, 0xf);
+		case V4L2_CID_SHARPNESS:
+			return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x80);
+		}
+	} else {
+		switch (qc->id) {
+		case V4L2_CID_BRIGHTNESS:
+			return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x86);
+		case V4L2_CID_CONTRAST:
+			return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x80);
+		case V4L2_CID_SATURATION:
+			return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x80);
+		case V4L2_CID_HUE:
+			return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x80);
+		case V4L2_CID_SHARPNESS:
+			return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x80);
+		}
+	}
+
 	switch (qc->id) {
-	case V4L2_CID_BRIGHTNESS:
-		return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x86);
-	case V4L2_CID_CONTRAST:
-		return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x80);
-	case V4L2_CID_SATURATION:
-		return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x80);
-	case V4L2_CID_HUE:
-		return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x80);
-	case V4L2_CID_SHARPNESS:
-		return v4l2_ctrl_query_fill(qc, 0x0, 0xff, 1, 0x80);
 	case V4L2_CID_MPEG_AUDIO_ENCODING:
 		return v4l2_ctrl_query_fill(
 			qc, V4L2_MPEG_AUDIO_ENCODING_AAC,
@@ -797,7 +813,8 @@ static int vidioc_queryctrl(struct file *file, void *private_data,
 
 		if (qc->id == supported_v4l2_ctrls[i])
 			return fill_queryctrl(&dev->options, qc,
-					      dev->flags & HDPVR_FLAG_AC3_CAP);
+					      dev->flags & HDPVR_FLAG_AC3_CAP,
+					      dev->fw_ver);
 
 		if (qc->id < supported_v4l2_ctrls[i])
 			break;
@@ -1221,12 +1238,9 @@ static void hdpvr_device_release(struct video_device *vdev)
 	v4l2_device_unregister(&dev->v4l2_dev);
 
 	/* deregister I2C adapter */
-#ifdef CONFIG_I2C
+#if defined(CONFIG_I2C) || (CONFIG_I2C_MODULE)
 	mutex_lock(&dev->i2c_mutex);
-	if (dev->i2c_adapter)
-		i2c_del_adapter(dev->i2c_adapter);
-	kfree(dev->i2c_adapter);
-	dev->i2c_adapter = NULL;
+	i2c_del_adapter(&dev->i2c_adapter);
 	mutex_unlock(&dev->i2c_mutex);
 #endif /* CONFIG_I2C */
 

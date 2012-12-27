@@ -67,6 +67,8 @@
 #define WM8978_OUT3_MIXER_CONTROL		0x38
 #define WM8978_OUT4_MIXER_CONTROL		0x39
 
+#define WM8978_MAX_REGISTER			0x39
+
 #define WM8978_CACHEREGNUM			58
 
 /* Clock divider Id's */
@@ -79,8 +81,5 @@ enum wm8978_sysclk_src {
 	WM8978_PLL,
 	WM8978_MCLK
 };
-
-extern struct snd_soc_dai wm8978_dai;
-extern struct snd_soc_codec_device soc_codec_dev_wm8978;
 
 #endif	/* __WM8978_H__ */

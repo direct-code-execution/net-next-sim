@@ -14,10 +14,6 @@
 #define asmlinkage CPP_ASMLINKAGE
 #endif
 
-#ifndef asmregparm
-# define asmregparm
-#endif
-
 #define __page_aligned_data	__section(.data..page_aligned) __aligned(PAGE_SIZE)
 #define __page_aligned_bss	__section(.bss..page_aligned) __aligned(PAGE_SIZE)
 
@@ -91,9 +87,5 @@
 #endif
 
 #endif
-
-#define NORET_TYPE    /**/
-#define ATTRIB_NORET  __attribute__((noreturn))
-#define NORET_AND     noreturn,
 
 #endif

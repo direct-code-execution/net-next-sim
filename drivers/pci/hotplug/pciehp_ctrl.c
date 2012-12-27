@@ -32,7 +32,6 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/pci.h>
-#include <linux/workqueue.h>
 #include "../pci.h"
 #include "pciehp.h"
 
@@ -50,7 +49,7 @@ static int queue_interrupt_event(struct slot *p_slot, u32 event_type)
 	info->p_slot = p_slot;
 	INIT_WORK(&info->work, interrupt_event_handler);
 
-	schedule_work(&info->work);
+	queue_work(pciehp_wq, &info->work);
 
 	return 0;
 }
@@ -378,7 +377,7 @@ static void handle_button_press_event(struct slot *p_slot)
 		if (ATTN_LED(ctrl))
 			pciehp_set_attention_status(p_slot, 0);
 
-		schedule_delayed_work(&p_slot->work, 5*HZ);
+		queue_delayed_work(pciehp_wq, &p_slot->work, 5*HZ);
 		break;
 	case BLINKINGOFF_STATE:
 	case BLINKINGON_STATE:

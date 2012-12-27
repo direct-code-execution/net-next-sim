@@ -115,7 +115,12 @@ Ip_0(_tlbwr);
 Ip_u3u1u2(_xor);
 Ip_u2u1u3(_xori);
 Ip_u2u1msbu3(_dins);
+Ip_u2u1msbu3(_dinsm);
 Ip_u1(_syscall);
+Ip_u1u2s3(_bbit0);
+Ip_u1u2s3(_bbit1);
+Ip_u3u1u2(_lwx);
+Ip_u3u1u2(_ldx);
 
 /* Handle labels. */
 struct uasm_label {
@@ -145,6 +150,7 @@ static inline void __uasminit uasm_l##lb(struct uasm_label **lab, u32 *addr) \
 # define UASM_i_SLL(buf, rs, rt, sh) uasm_i_dsll(buf, rs, rt, sh)
 # define UASM_i_SRA(buf, rs, rt, sh) uasm_i_dsra(buf, rs, rt, sh)
 # define UASM_i_SRL(buf, rs, rt, sh) uasm_i_dsrl(buf, rs, rt, sh)
+# define UASM_i_SRL_SAFE(buf, rs, rt, sh) uasm_i_dsrl_safe(buf, rs, rt, sh)
 # define UASM_i_ROTR(buf, rs, rt, sh) uasm_i_drotr(buf, rs, rt, sh)
 # define UASM_i_MFC0(buf, rt, rd...) uasm_i_dmfc0(buf, rt, rd)
 # define UASM_i_MTC0(buf, rt, rd...) uasm_i_dmtc0(buf, rt, rd)
@@ -153,12 +159,14 @@ static inline void __uasminit uasm_l##lb(struct uasm_label **lab, u32 *addr) \
 # define UASM_i_SUBU(buf, rs, rt, rd) uasm_i_dsubu(buf, rs, rt, rd)
 # define UASM_i_LL(buf, rs, rt, off) uasm_i_lld(buf, rs, rt, off)
 # define UASM_i_SC(buf, rs, rt, off) uasm_i_scd(buf, rs, rt, off)
+# define UASM_i_LWX(buf, rs, rt, rd) uasm_i_ldx(buf, rs, rt, rd)
 #else
 # define UASM_i_LW(buf, rs, rt, off) uasm_i_lw(buf, rs, rt, off)
 # define UASM_i_SW(buf, rs, rt, off) uasm_i_sw(buf, rs, rt, off)
 # define UASM_i_SLL(buf, rs, rt, sh) uasm_i_sll(buf, rs, rt, sh)
 # define UASM_i_SRA(buf, rs, rt, sh) uasm_i_sra(buf, rs, rt, sh)
 # define UASM_i_SRL(buf, rs, rt, sh) uasm_i_srl(buf, rs, rt, sh)
+# define UASM_i_SRL_SAFE(buf, rs, rt, sh) uasm_i_srl(buf, rs, rt, sh)
 # define UASM_i_ROTR(buf, rs, rt, sh) uasm_i_rotr(buf, rs, rt, sh)
 # define UASM_i_MFC0(buf, rt, rd...) uasm_i_mfc0(buf, rt, rd)
 # define UASM_i_MTC0(buf, rt, rd...) uasm_i_mtc0(buf, rt, rd)
@@ -167,6 +175,7 @@ static inline void __uasminit uasm_l##lb(struct uasm_label **lab, u32 *addr) \
 # define UASM_i_SUBU(buf, rs, rt, rd) uasm_i_subu(buf, rs, rt, rd)
 # define UASM_i_LL(buf, rs, rt, off) uasm_i_ll(buf, rs, rt, off)
 # define UASM_i_SC(buf, rs, rt, off) uasm_i_sc(buf, rs, rt, off)
+# define UASM_i_LWX(buf, rs, rt, rd) uasm_i_lwx(buf, rs, rt, rd)
 #endif
 
 #define uasm_i_b(buf, off) uasm_i_beq(buf, 0, 0, off)

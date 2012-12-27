@@ -7,6 +7,7 @@
 
 #include <linux/types.h>
 #include <asm/compiler.h>
+#include <asm/mce.h>
 
 /*
  * MCPCIA is the internal name for a core logic chipset which provides
@@ -247,7 +248,7 @@ struct el_MCPCIA_uncorrected_frame_mcheck {
 #define vip	volatile int __force *
 #define vuip	volatile unsigned int __force *
 
-#ifdef MCPCIA_ONE_HAE_WINDOW
+#ifndef MCPCIA_ONE_HAE_WINDOW
 #define MCPCIA_FROB_MMIO						\
 	if (__mcpcia_is_mmio(hose)) {					\
 		set_hae(hose & 0xffffffff);				\

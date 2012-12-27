@@ -3,8 +3,8 @@
  *
  * Copyright (C) 2008 Nokia Corporation
  *
- * Contact: Jarkko Nikula <jhnikula@gmail.com>
- *          Peter Ujfalusi <peter.ujfalusi@nokia.com>
+ * Contact: Jarkko Nikula <jarkko.nikula@bitmer.com>
+ *          Peter Ujfalusi <peter.ujfalusi@ti.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -25,6 +25,8 @@
 #ifndef __OMAP_PCM_H__
 #define __OMAP_PCM_H__
 
+struct snd_pcm_substream;
+
 struct omap_pcm_dma_data {
 	char		*name;		/* stream identifier */
 	int		dma_req;	/* DMA request line */
@@ -34,7 +36,5 @@ struct omap_pcm_dma_data {
 	int		sync_mode;	/* DMA sync mode */
 	int		packet_size;	/* packet size only in PACKET mode */
 };
-
-extern struct snd_soc_platform omap_soc_platform;
 
 #endif

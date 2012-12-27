@@ -18,7 +18,6 @@
 #include <linux/init.h>
 #include <linux/irq.h>
 #include <linux/seq_file.h>
-#include <linux/kexec.h>
 #include <linux/of_platform.h>
 #include <linux/memblock.h>
 #include <mm/mmu_decl.h>
@@ -65,7 +64,7 @@ static int __init page_aligned(unsigned long x)
 
 void __init wii_memory_fixups(void)
 {
-	struct memblock_property *p = memblock.memory.region;
+	struct memblock_region *p = memblock.memory.regions;
 
 	/*
 	 * This is part of a workaround to allow the use of two
@@ -80,23 +79,18 @@ void __init wii_memory_fixups(void)
 	BUG_ON(memblock.memory.cnt != 2);
 	BUG_ON(!page_aligned(p[0].base) || !page_aligned(p[1].base));
 
-	p[0].size = _ALIGN_DOWN(p[0].size, PAGE_SIZE);
-	p[1].size = _ALIGN_DOWN(p[1].size, PAGE_SIZE);
+	/* trim unaligned tail */
+	memblock_remove(ALIGN(p[1].base + p[1].size, PAGE_SIZE),
+			(phys_addr_t)ULLONG_MAX);
 
-	wii_hole_start = p[0].base + p[0].size;
+	/* determine hole, add & reserve them */
+	wii_hole_start = ALIGN(p[0].base + p[0].size, PAGE_SIZE);
 	wii_hole_size = p[1].base - wii_hole_start;
-
-	pr_info("MEM1: <%08llx %08llx>\n", p[0].base, p[0].size);
-	pr_info("HOLE: <%08lx %08lx>\n", wii_hole_start, wii_hole_size);
-	pr_info("MEM2: <%08llx %08llx>\n", p[1].base, p[1].size);
-
-	p[0].size += wii_hole_size + p[1].size;
-
-	memblock.memory.cnt = 1;
-	memblock_analyze();
-
-	/* reserve the hole */
+	memblock_add(wii_hole_start, wii_hole_size);
 	memblock_reserve(wii_hole_start, wii_hole_size);
+
+	BUG_ON(memblock.memory.cnt != 1);
+	__memblock_dump_all();
 
 	/* allow ioremapping the address space in the hole */
 	__allow_ioremap_reserved = 1;
@@ -226,13 +220,6 @@ static void wii_shutdown(void)
 	flipper_quiesce();
 }
 
-#ifdef CONFIG_KEXEC
-static int wii_machine_kexec_prepare(struct kimage *image)
-{
-	return 0;
-}
-#endif /* CONFIG_KEXEC */
-
 define_machine(wii) {
 	.name			= "wii",
 	.probe			= wii_probe,
@@ -246,9 +233,6 @@ define_machine(wii) {
 	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= udbg_progress,
 	.machine_shutdown	= wii_shutdown,
-#ifdef CONFIG_KEXEC
-	.machine_kexec_prepare	= wii_machine_kexec_prepare,
-#endif
 };
 
 static struct of_device_id wii_of_bus[] = {

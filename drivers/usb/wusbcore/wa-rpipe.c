@@ -24,7 +24,7 @@
  *
  * RPIPE
  *
- *   Targetted at different downstream endpoints
+ *   Targeted at different downstream endpoints
  *
  *   Descriptor: use to config the remote pipe.
  *
@@ -49,7 +49,7 @@
  *
  *  USB Stack port number    4 (1 based)
  *  WUSB code port index     3 (0 based)
- *  USB Addresss             5 (2 based -- 0 is for default, 1 for root hub)
+ *  USB Address             5 (2 based -- 0 is for default, 1 for root hub)
  *
  *  Now, because we don't use the concept as default address exactly
  *  like the (wired) USB code does, we need to kind of skip it. So we
@@ -58,9 +58,10 @@
  *  destination address.
  */
 #include <linux/init.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <linux/bitmap.h>
 #include <linux/slab.h>
+#include <linux/export.h>
 
 #include "wusbhc.h"
 #include "wa-hc.h"

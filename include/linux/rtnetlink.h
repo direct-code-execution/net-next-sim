@@ -585,6 +585,8 @@ enum rtnetlink_groups {
 #define RTNLGRP_PHONET_IFADDR	RTNLGRP_PHONET_IFADDR
 	RTNLGRP_PHONET_ROUTE,
 #define RTNLGRP_PHONET_ROUTE	RTNLGRP_PHONET_ROUTE
+	RTNLGRP_DCB,
+#define RTNLGRP_DCB		RTNLGRP_DCB
 	__RTNLGRP_MAX
 };
 #define RTNLGRP_MAX	(__RTNLGRP_MAX - 1)
@@ -600,11 +602,15 @@ struct tcamsg {
 #define TCA_ACT_TAB 1 /* attr type must be >=1 */	
 #define TCAA_MAX 1
 
+/* New extended info filters for IFLA_EXT_MASK */
+#define RTEXT_FILTER_VF		(1 << 0)
+
 /* End of information exported to user level */
 
 #ifdef __KERNEL__
 
 #include <linux/mutex.h>
+#include <linux/netdevice.h>
 
 static __inline__ int rtattr_strcmp(const struct rtattr *rta, const char *str)
 {
@@ -748,6 +754,34 @@ extern int rtnl_is_locked(void);
 #ifdef CONFIG_PROVE_LOCKING
 extern int lockdep_rtnl_is_held(void);
 #endif /* #ifdef CONFIG_PROVE_LOCKING */
+
+/**
+ * rcu_dereference_rtnl - rcu_dereference with debug checking
+ * @p: The pointer to read, prior to dereferencing
+ *
+ * Do an rcu_dereference(p), but check caller either holds rcu_read_lock()
+ * or RTNL. Note : Please prefer rtnl_dereference() or rcu_dereference()
+ */
+#define rcu_dereference_rtnl(p)					\
+	rcu_dereference_check(p, lockdep_rtnl_is_held())
+
+/**
+ * rtnl_dereference - fetch RCU pointer when updates are prevented by RTNL
+ * @p: The pointer to read, prior to dereferencing
+ *
+ * Return the value of the specified RCU-protected pointer, but omit
+ * both the smp_read_barrier_depends() and the ACCESS_ONCE(), because
+ * caller holds RTNL.
+ */
+#define rtnl_dereference(p)					\
+	rcu_dereference_protected(p, lockdep_rtnl_is_held())
+
+static inline struct netdev_queue *dev_ingress_queue(struct net_device *dev)
+{
+	return rtnl_dereference(dev->ingress_queue);
+}
+
+extern struct netdev_queue *dev_ingress_queue_create(struct net_device *dev);
 
 extern void rtnetlink_init(void);
 extern void __rtnl_unlock(void);

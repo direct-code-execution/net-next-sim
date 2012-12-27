@@ -101,7 +101,7 @@ static int wm831x_isink_set_current(struct regulator_dev *rdev,
 
 	for (i = 0; i < ARRAY_SIZE(wm831x_isinkv_values); i++) {
 		int val = wm831x_isinkv_values[i];
-		if (min_uA >= val && val <= max_uA) {
+		if (min_uA <= val && val <= max_uA) {
 			ret = wm831x_set_bits(wm831x, isink->reg,
 					      WM831X_CS1_ISEL_MASK, i);
 			return ret;
@@ -162,7 +162,8 @@ static __devinit int wm831x_isink_probe(struct platform_device *pdev)
 	if (pdata == NULL || pdata->isink[id] == NULL)
 		return -ENODEV;
 
-	isink = kzalloc(sizeof(struct wm831x_isink), GFP_KERNEL);
+	isink = devm_kzalloc(&pdev->dev, sizeof(struct wm831x_isink),
+			     GFP_KERNEL);
 	if (isink == NULL) {
 		dev_err(&pdev->dev, "Unable to allocate private data\n");
 		return -ENOMEM;
@@ -189,7 +190,7 @@ static __devinit int wm831x_isink_probe(struct platform_device *pdev)
 	isink->desc.owner = THIS_MODULE;
 
 	isink->regulator = regulator_register(&isink->desc, &pdev->dev,
-					     pdata->isink[id], isink);
+					     pdata->isink[id], isink, NULL);
 	if (IS_ERR(isink->regulator)) {
 		ret = PTR_ERR(isink->regulator);
 		dev_err(wm831x->dev, "Failed to register ISINK%d: %d\n",
@@ -198,9 +199,8 @@ static __devinit int wm831x_isink_probe(struct platform_device *pdev)
 	}
 
 	irq = platform_get_irq(pdev, 0);
-	ret = wm831x_request_irq(wm831x, irq, wm831x_isink_irq,
-				 IRQF_TRIGGER_RISING, isink->name,
-				 isink);
+	ret = request_threaded_irq(irq, NULL, wm831x_isink_irq,
+				   IRQF_TRIGGER_RISING, isink->name, isink);
 	if (ret != 0) {
 		dev_err(&pdev->dev, "Failed to request ISINK IRQ %d: %d\n",
 			irq, ret);
@@ -214,21 +214,18 @@ static __devinit int wm831x_isink_probe(struct platform_device *pdev)
 err_regulator:
 	regulator_unregister(isink->regulator);
 err:
-	kfree(isink);
 	return ret;
 }
 
 static __devexit int wm831x_isink_remove(struct platform_device *pdev)
 {
 	struct wm831x_isink *isink = platform_get_drvdata(pdev);
-	struct wm831x *wm831x = isink->wm831x;
 
 	platform_set_drvdata(pdev, NULL);
 
-	wm831x_free_irq(wm831x, platform_get_irq(pdev, 0), isink);
+	free_irq(platform_get_irq(pdev, 0), isink);
 
 	regulator_unregister(isink->regulator);
-	kfree(isink);
 
 	return 0;
 }

@@ -234,7 +234,7 @@ static void ttusb_dec_handle_irq( struct urb *urb)
 		 * (with buffer[3] == 0x40) in an intervall of ~100ms.
 		 * But to handle this correctly we had to imlemenent some
 		 * kind of timer which signals a 'key up' event if no
-		 * keyrepeat signal is recieved for lets say 200ms.
+		 * keyrepeat signal is received for lets say 200ms.
 		 * this should/could be added later ...
 		 * for now lets report each signal as a key down and up*/
 		dprintk("%s:rc signal:%d\n", __func__, buffer[4]);
@@ -1756,26 +1756,7 @@ static struct usb_driver ttusb_dec_driver = {
 	.id_table	= ttusb_dec_table,
 };
 
-static int __init ttusb_dec_init(void)
-{
-	int result;
-
-	if ((result = usb_register(&ttusb_dec_driver)) < 0) {
-		printk("%s: initialisation failed: error %d.\n", __func__,
-		       result);
-		return result;
-	}
-
-	return 0;
-}
-
-static void __exit ttusb_dec_exit(void)
-{
-	usb_deregister(&ttusb_dec_driver);
-}
-
-module_init(ttusb_dec_init);
-module_exit(ttusb_dec_exit);
+module_usb_driver(ttusb_dec_driver);
 
 MODULE_AUTHOR("Alex Woods <linux-dvb@giblets.org>");
 MODULE_DESCRIPTION(DRIVER_NAME);

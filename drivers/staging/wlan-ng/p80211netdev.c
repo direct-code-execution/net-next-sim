@@ -150,7 +150,7 @@ static int p80211knetdev_init(netdevice_t *netdev)
 * Returns:
 *	the address of the statistics structure
 ----------------------------------------------------------------*/
-static struct net_device_stats *p80211knetdev_get_stats(netdevice_t * netdev)
+static struct net_device_stats *p80211knetdev_get_stats(netdevice_t *netdev)
 {
 	wlandevice_t *wlandev = netdev->ml_priv;
 
@@ -301,7 +301,8 @@ static void p80211netdev_rx_bh(unsigned long arg)
 					if (memcmp
 					    (hdr->a1, wlandev->netdev->dev_addr,
 					     ETH_ALEN) != 0) {
-						/* but reject anything else that isn't multicast */
+						/* but reject anything else that
+						   isn't multicast */
 						if (!(hdr->a1[0] & 0x01)) {
 							dev_kfree_skb(skb);
 							continue;
@@ -522,8 +523,8 @@ static int p80211netdev_ethtool(wlandevice_t *wlandev, void __user *useraddr)
 		if (copy_to_user(useraddr, &edata, sizeof(edata)))
 			return -EFAULT;
 		return 0;
-	}
 #endif
+	}
 
 	return -EOPNOTSUPP;
 }
@@ -714,7 +715,7 @@ static const struct net_device_ops p80211_netdev_ops = {
 	.ndo_stop = p80211knetdev_stop,
 	.ndo_get_stats = p80211knetdev_get_stats,
 	.ndo_start_xmit = p80211knetdev_hard_start_xmit,
-	.ndo_set_multicast_list = p80211knetdev_set_multicast_list,
+	.ndo_set_rx_mode = p80211knetdev_set_multicast_list,
 	.ndo_do_ioctl = p80211knetdev_do_ioctl,
 	.ndo_set_mac_address = p80211knetdev_set_mac_address,
 	.ndo_tx_timeout = p80211knetdev_tx_timeout,
@@ -770,7 +771,8 @@ int wlan_setup(wlandevice_t *wlandev, struct device *physdev)
 	}
 
 	/* Allocate and initialize the struct device */
-	netdev = alloc_netdev(sizeof(struct wireless_dev), "wlan%d", ether_setup);
+	netdev = alloc_netdev(sizeof(struct wireless_dev), "wlan%d",
+				ether_setup);
 	if (netdev == NULL) {
 		printk(KERN_ERR "Failed to alloc netdev.\n");
 		wlan_free_wiphy(wiphy);

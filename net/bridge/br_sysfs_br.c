@@ -43,9 +43,7 @@ static ssize_t store_bridge_parm(struct device *d,
 	if (endp == buf)
 		return -EINVAL;
 
-	spin_lock_bh(&br->lock);
 	err = (*set)(br, val);
-	spin_unlock_bh(&br->lock);
 	return err ? err : len;
 }
 
@@ -57,20 +55,11 @@ static ssize_t show_forward_delay(struct device *d,
 	return sprintf(buf, "%lu\n", jiffies_to_clock_t(br->forward_delay));
 }
 
-static int set_forward_delay(struct net_bridge *br, unsigned long val)
-{
-	unsigned long delay = clock_t_to_jiffies(val);
-	br->forward_delay = delay;
-	if (br_is_root_bridge(br))
-		br->bridge_forward_delay = delay;
-	return 0;
-}
-
 static ssize_t store_forward_delay(struct device *d,
 				   struct device_attribute *attr,
 				   const char *buf, size_t len)
 {
-	return store_bridge_parm(d, buf, len, set_forward_delay);
+	return store_bridge_parm(d, buf, len, br_set_forward_delay);
 }
 static DEVICE_ATTR(forward_delay, S_IRUGO | S_IWUSR,
 		   show_forward_delay, store_forward_delay);
@@ -82,24 +71,11 @@ static ssize_t show_hello_time(struct device *d, struct device_attribute *attr,
 		       jiffies_to_clock_t(to_bridge(d)->hello_time));
 }
 
-static int set_hello_time(struct net_bridge *br, unsigned long val)
-{
-	unsigned long t = clock_t_to_jiffies(val);
-
-	if (t < HZ)
-		return -EINVAL;
-
-	br->hello_time = t;
-	if (br_is_root_bridge(br))
-		br->bridge_hello_time = t;
-	return 0;
-}
-
 static ssize_t store_hello_time(struct device *d,
 				struct device_attribute *attr, const char *buf,
 				size_t len)
 {
-	return store_bridge_parm(d, buf, len, set_hello_time);
+	return store_bridge_parm(d, buf, len, br_set_hello_time);
 }
 static DEVICE_ATTR(hello_time, S_IRUGO | S_IWUSR, show_hello_time,
 		   store_hello_time);
@@ -111,19 +87,10 @@ static ssize_t show_max_age(struct device *d, struct device_attribute *attr,
 		       jiffies_to_clock_t(to_bridge(d)->max_age));
 }
 
-static int set_max_age(struct net_bridge *br, unsigned long val)
-{
-	unsigned long t = clock_t_to_jiffies(val);
-	br->max_age = t;
-	if (br_is_root_bridge(br))
-		br->bridge_max_age = t;
-	return 0;
-}
-
 static ssize_t store_max_age(struct device *d, struct device_attribute *attr,
 			     const char *buf, size_t len)
 {
-	return store_bridge_parm(d, buf, len, set_max_age);
+	return store_bridge_parm(d, buf, len, br_set_max_age);
 }
 static DEVICE_ATTR(max_age, S_IRUGO | S_IWUSR, show_max_age, store_max_age);
 
@@ -181,6 +148,39 @@ static ssize_t store_stp_state(struct device *d,
 }
 static DEVICE_ATTR(stp_state, S_IRUGO | S_IWUSR, show_stp_state,
 		   store_stp_state);
+
+static ssize_t show_group_fwd_mask(struct device *d,
+			      struct device_attribute *attr, char *buf)
+{
+	struct net_bridge *br = to_bridge(d);
+	return sprintf(buf, "%#x\n", br->group_fwd_mask);
+}
+
+
+static ssize_t store_group_fwd_mask(struct device *d,
+			       struct device_attribute *attr, const char *buf,
+			       size_t len)
+{
+	struct net_bridge *br = to_bridge(d);
+	char *endp;
+	unsigned long val;
+
+	if (!capable(CAP_NET_ADMIN))
+		return -EPERM;
+
+	val = simple_strtoul(buf, &endp, 0);
+	if (endp == buf)
+		return -EINVAL;
+
+	if (val & BR_GROUPFWD_RESTRICTED)
+		return -EINVAL;
+
+	br->group_fwd_mask = val;
+
+	return len;
+}
+static DEVICE_ATTR(group_fwd_mask, S_IRUGO | S_IWUSR, show_group_fwd_mask,
+		   store_group_fwd_mask);
 
 static ssize_t show_priority(struct device *d, struct device_attribute *attr,
 			     char *buf)
@@ -685,6 +685,7 @@ static struct attribute *bridge_attrs[] = {
 	&dev_attr_max_age.attr,
 	&dev_attr_ageing_time.attr,
 	&dev_attr_stp_state.attr,
+	&dev_attr_group_fwd_mask.attr,
 	&dev_attr_priority.attr,
 	&dev_attr_bridge_id.attr,
 	&dev_attr_root_id.attr,

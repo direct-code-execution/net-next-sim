@@ -37,12 +37,14 @@
  */
 
 #include <linux/init.h>
+#include <linux/export.h>
 #include <linux/console.h>
 #include <linux/kobject.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
 #include <linux/of.h>
 #include <linux/slab.h>
+#include <linux/stat.h>
 #include <linux/of_platform.h>
 #include <asm/ibmebus.h>
 #include <asm/abs_addr.h>
@@ -63,7 +65,8 @@ static struct of_device_id __initdata ibmebus_matches[] = {
 static void *ibmebus_alloc_coherent(struct device *dev,
 				    size_t size,
 				    dma_addr_t *dma_handle,
-				    gfp_t flag)
+				    gfp_t flag,
+				    struct dma_attrs *attrs)
 {
 	void *mem;
 
@@ -75,7 +78,8 @@ static void *ibmebus_alloc_coherent(struct device *dev,
 
 static void ibmebus_free_coherent(struct device *dev,
 				  size_t size, void *vaddr,
-				  dma_addr_t dma_handle)
+				  dma_addr_t dma_handle,
+				  struct dma_attrs *attrs)
 {
 	kfree(vaddr);
 }
@@ -125,17 +129,23 @@ static void ibmebus_unmap_sg(struct device *dev,
 
 static int ibmebus_dma_supported(struct device *dev, u64 mask)
 {
-	return 1;
+	return mask == DMA_BIT_MASK(64);
+}
+
+static u64 ibmebus_dma_get_required_mask(struct device *dev)
+{
+	return DMA_BIT_MASK(64);
 }
 
 static struct dma_map_ops ibmebus_dma_ops = {
-	.alloc_coherent = ibmebus_alloc_coherent,
-	.free_coherent  = ibmebus_free_coherent,
-	.map_sg         = ibmebus_map_sg,
-	.unmap_sg       = ibmebus_unmap_sg,
-	.dma_supported  = ibmebus_dma_supported,
-	.map_page       = ibmebus_map_page,
-	.unmap_page     = ibmebus_unmap_page,
+	.alloc              = ibmebus_alloc_coherent,
+	.free               = ibmebus_free_coherent,
+	.map_sg             = ibmebus_map_sg,
+	.unmap_sg           = ibmebus_unmap_sg,
+	.dma_supported      = ibmebus_dma_supported,
+	.get_required_mask  = ibmebus_dma_get_required_mask,
+	.map_page           = ibmebus_map_page,
+	.unmap_page         = ibmebus_unmap_page,
 };
 
 static int ibmebus_match_path(struct device *dev, void *data)
@@ -162,13 +172,10 @@ static int ibmebus_create_device(struct device_node *dn)
 	dev->dev.bus = &ibmebus_bus_type;
 	dev->dev.archdata.dma_ops = &ibmebus_dma_ops;
 
-	ret = of_device_register(dev);
-	if (ret) {
-		of_device_free(dev);
-		return ret;
-	}
-
-	return 0;
+	ret = of_device_add(dev);
+	if (ret)
+		platform_device_put(dev);
+	return ret;
 }
 
 static int ibmebus_create_devices(const struct of_device_id *matches)
@@ -204,13 +211,14 @@ int ibmebus_register_driver(struct of_platform_driver *drv)
 	/* If the driver uses devices that ibmebus doesn't know, add them */
 	ibmebus_create_devices(drv->driver.of_match_table);
 
-	return of_register_driver(drv, &ibmebus_bus_type);
+	drv->driver.bus = &ibmebus_bus_type;
+	return driver_register(&drv->driver);
 }
 EXPORT_SYMBOL(ibmebus_register_driver);
 
 void ibmebus_unregister_driver(struct of_platform_driver *drv)
 {
-	of_unregister_driver(drv);
+	driver_unregister(&drv->driver);
 }
 EXPORT_SYMBOL(ibmebus_unregister_driver);
 
@@ -311,15 +319,410 @@ static ssize_t ibmebus_store_remove(struct bus_type *bus,
 	}
 }
 
+
 static struct bus_attribute ibmebus_bus_attrs[] = {
 	__ATTR(probe, S_IWUSR, NULL, ibmebus_store_probe),
 	__ATTR(remove, S_IWUSR, NULL, ibmebus_store_remove),
 	__ATTR_NULL
 };
 
+static int ibmebus_bus_bus_match(struct device *dev, struct device_driver *drv)
+{
+	const struct of_device_id *matches = drv->of_match_table;
+
+	if (!matches)
+		return 0;
+
+	return of_match_device(matches, dev) != NULL;
+}
+
+static int ibmebus_bus_device_probe(struct device *dev)
+{
+	int error = -ENODEV;
+	struct of_platform_driver *drv;
+	struct platform_device *of_dev;
+	const struct of_device_id *match;
+
+	drv = to_of_platform_driver(dev->driver);
+	of_dev = to_platform_device(dev);
+
+	if (!drv->probe)
+		return error;
+
+	of_dev_get(of_dev);
+
+	match = of_match_device(drv->driver.of_match_table, dev);
+	if (match)
+		error = drv->probe(of_dev, match);
+	if (error)
+		of_dev_put(of_dev);
+
+	return error;
+}
+
+static int ibmebus_bus_device_remove(struct device *dev)
+{
+	struct platform_device *of_dev = to_platform_device(dev);
+	struct of_platform_driver *drv = to_of_platform_driver(dev->driver);
+
+	if (dev->driver && drv->remove)
+		drv->remove(of_dev);
+	return 0;
+}
+
+static void ibmebus_bus_device_shutdown(struct device *dev)
+{
+	struct platform_device *of_dev = to_platform_device(dev);
+	struct of_platform_driver *drv = to_of_platform_driver(dev->driver);
+
+	if (dev->driver && drv->shutdown)
+		drv->shutdown(of_dev);
+}
+
+/*
+ * ibmebus_bus_device_attrs
+ */
+static ssize_t devspec_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct platform_device *ofdev;
+
+	ofdev = to_platform_device(dev);
+	return sprintf(buf, "%s\n", ofdev->dev.of_node->full_name);
+}
+
+static ssize_t name_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct platform_device *ofdev;
+
+	ofdev = to_platform_device(dev);
+	return sprintf(buf, "%s\n", ofdev->dev.of_node->name);
+}
+
+static ssize_t modalias_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	ssize_t len = of_device_get_modalias(dev, buf, PAGE_SIZE - 2);
+	buf[len] = '\n';
+	buf[len+1] = 0;
+	return len+1;
+}
+
+struct device_attribute ibmebus_bus_device_attrs[] = {
+	__ATTR_RO(devspec),
+	__ATTR_RO(name),
+	__ATTR_RO(modalias),
+	__ATTR_NULL
+};
+
+#ifdef CONFIG_PM_SLEEP
+static int ibmebus_bus_legacy_suspend(struct device *dev, pm_message_t mesg)
+{
+	struct platform_device *of_dev = to_platform_device(dev);
+	struct of_platform_driver *drv = to_of_platform_driver(dev->driver);
+	int ret = 0;
+
+	if (dev->driver && drv->suspend)
+		ret = drv->suspend(of_dev, mesg);
+	return ret;
+}
+
+static int ibmebus_bus_legacy_resume(struct device *dev)
+{
+	struct platform_device *of_dev = to_platform_device(dev);
+	struct of_platform_driver *drv = to_of_platform_driver(dev->driver);
+	int ret = 0;
+
+	if (dev->driver && drv->resume)
+		ret = drv->resume(of_dev);
+	return ret;
+}
+
+static int ibmebus_bus_pm_prepare(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (drv && drv->pm && drv->pm->prepare)
+		ret = drv->pm->prepare(dev);
+
+	return ret;
+}
+
+static void ibmebus_bus_pm_complete(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+
+	if (drv && drv->pm && drv->pm->complete)
+		drv->pm->complete(dev);
+}
+
+#ifdef CONFIG_SUSPEND
+
+static int ibmebus_bus_pm_suspend(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (!drv)
+		return 0;
+
+	if (drv->pm) {
+		if (drv->pm->suspend)
+			ret = drv->pm->suspend(dev);
+	} else {
+		ret = ibmebus_bus_legacy_suspend(dev, PMSG_SUSPEND);
+	}
+
+	return ret;
+}
+
+static int ibmebus_bus_pm_suspend_noirq(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (!drv)
+		return 0;
+
+	if (drv->pm) {
+		if (drv->pm->suspend_noirq)
+			ret = drv->pm->suspend_noirq(dev);
+	}
+
+	return ret;
+}
+
+static int ibmebus_bus_pm_resume(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (!drv)
+		return 0;
+
+	if (drv->pm) {
+		if (drv->pm->resume)
+			ret = drv->pm->resume(dev);
+	} else {
+		ret = ibmebus_bus_legacy_resume(dev);
+	}
+
+	return ret;
+}
+
+static int ibmebus_bus_pm_resume_noirq(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (!drv)
+		return 0;
+
+	if (drv->pm) {
+		if (drv->pm->resume_noirq)
+			ret = drv->pm->resume_noirq(dev);
+	}
+
+	return ret;
+}
+
+#else /* !CONFIG_SUSPEND */
+
+#define ibmebus_bus_pm_suspend		NULL
+#define ibmebus_bus_pm_resume		NULL
+#define ibmebus_bus_pm_suspend_noirq	NULL
+#define ibmebus_bus_pm_resume_noirq	NULL
+
+#endif /* !CONFIG_SUSPEND */
+
+#ifdef CONFIG_HIBERNATE_CALLBACKS
+
+static int ibmebus_bus_pm_freeze(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (!drv)
+		return 0;
+
+	if (drv->pm) {
+		if (drv->pm->freeze)
+			ret = drv->pm->freeze(dev);
+	} else {
+		ret = ibmebus_bus_legacy_suspend(dev, PMSG_FREEZE);
+	}
+
+	return ret;
+}
+
+static int ibmebus_bus_pm_freeze_noirq(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (!drv)
+		return 0;
+
+	if (drv->pm) {
+		if (drv->pm->freeze_noirq)
+			ret = drv->pm->freeze_noirq(dev);
+	}
+
+	return ret;
+}
+
+static int ibmebus_bus_pm_thaw(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (!drv)
+		return 0;
+
+	if (drv->pm) {
+		if (drv->pm->thaw)
+			ret = drv->pm->thaw(dev);
+	} else {
+		ret = ibmebus_bus_legacy_resume(dev);
+	}
+
+	return ret;
+}
+
+static int ibmebus_bus_pm_thaw_noirq(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (!drv)
+		return 0;
+
+	if (drv->pm) {
+		if (drv->pm->thaw_noirq)
+			ret = drv->pm->thaw_noirq(dev);
+	}
+
+	return ret;
+}
+
+static int ibmebus_bus_pm_poweroff(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (!drv)
+		return 0;
+
+	if (drv->pm) {
+		if (drv->pm->poweroff)
+			ret = drv->pm->poweroff(dev);
+	} else {
+		ret = ibmebus_bus_legacy_suspend(dev, PMSG_HIBERNATE);
+	}
+
+	return ret;
+}
+
+static int ibmebus_bus_pm_poweroff_noirq(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (!drv)
+		return 0;
+
+	if (drv->pm) {
+		if (drv->pm->poweroff_noirq)
+			ret = drv->pm->poweroff_noirq(dev);
+	}
+
+	return ret;
+}
+
+static int ibmebus_bus_pm_restore(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (!drv)
+		return 0;
+
+	if (drv->pm) {
+		if (drv->pm->restore)
+			ret = drv->pm->restore(dev);
+	} else {
+		ret = ibmebus_bus_legacy_resume(dev);
+	}
+
+	return ret;
+}
+
+static int ibmebus_bus_pm_restore_noirq(struct device *dev)
+{
+	struct device_driver *drv = dev->driver;
+	int ret = 0;
+
+	if (!drv)
+		return 0;
+
+	if (drv->pm) {
+		if (drv->pm->restore_noirq)
+			ret = drv->pm->restore_noirq(dev);
+	}
+
+	return ret;
+}
+
+#else /* !CONFIG_HIBERNATE_CALLBACKS */
+
+#define ibmebus_bus_pm_freeze		NULL
+#define ibmebus_bus_pm_thaw		NULL
+#define ibmebus_bus_pm_poweroff		NULL
+#define ibmebus_bus_pm_restore		NULL
+#define ibmebus_bus_pm_freeze_noirq	NULL
+#define ibmebus_bus_pm_thaw_noirq		NULL
+#define ibmebus_bus_pm_poweroff_noirq	NULL
+#define ibmebus_bus_pm_restore_noirq	NULL
+
+#endif /* !CONFIG_HIBERNATE_CALLBACKS */
+
+static struct dev_pm_ops ibmebus_bus_dev_pm_ops = {
+	.prepare = ibmebus_bus_pm_prepare,
+	.complete = ibmebus_bus_pm_complete,
+	.suspend = ibmebus_bus_pm_suspend,
+	.resume = ibmebus_bus_pm_resume,
+	.freeze = ibmebus_bus_pm_freeze,
+	.thaw = ibmebus_bus_pm_thaw,
+	.poweroff = ibmebus_bus_pm_poweroff,
+	.restore = ibmebus_bus_pm_restore,
+	.suspend_noirq = ibmebus_bus_pm_suspend_noirq,
+	.resume_noirq = ibmebus_bus_pm_resume_noirq,
+	.freeze_noirq = ibmebus_bus_pm_freeze_noirq,
+	.thaw_noirq = ibmebus_bus_pm_thaw_noirq,
+	.poweroff_noirq = ibmebus_bus_pm_poweroff_noirq,
+	.restore_noirq = ibmebus_bus_pm_restore_noirq,
+};
+
+#define IBMEBUS_BUS_PM_OPS_PTR	(&ibmebus_bus_dev_pm_ops)
+
+#else /* !CONFIG_PM_SLEEP */
+
+#define IBMEBUS_BUS_PM_OPS_PTR	NULL
+
+#endif /* !CONFIG_PM_SLEEP */
+
 struct bus_type ibmebus_bus_type = {
-	.uevent    = of_device_uevent,
-	.bus_attrs = ibmebus_bus_attrs
+	.name      = "ibmebus",
+	.uevent    = of_device_uevent_modalias,
+	.bus_attrs = ibmebus_bus_attrs,
+	.match     = ibmebus_bus_bus_match,
+	.probe     = ibmebus_bus_device_probe,
+	.remove    = ibmebus_bus_device_remove,
+	.shutdown  = ibmebus_bus_device_shutdown,
+	.dev_attrs = ibmebus_bus_device_attrs,
+	.pm        = IBMEBUS_BUS_PM_OPS_PTR,
 };
 EXPORT_SYMBOL(ibmebus_bus_type);
 
@@ -329,7 +732,7 @@ static int __init ibmebus_bus_init(void)
 
 	printk(KERN_INFO "IBM eBus Device Driver\n");
 
-	err = of_bus_type_init(&ibmebus_bus_type, "ibmebus");
+	err = bus_register(&ibmebus_bus_type);
 	if (err) {
 		printk(KERN_ERR "%s: failed to register IBM eBus.\n",
 		       __func__);

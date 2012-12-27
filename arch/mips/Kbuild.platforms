@@ -2,6 +2,7 @@
 
 platforms += alchemy
 platforms += ar7
+platforms += ath79
 platforms += bcm47xx
 platforms += bcm63xx
 platforms += cavium-octeon
@@ -10,10 +11,12 @@ platforms += dec
 platforms += emma
 platforms += jazz
 platforms += jz4740
+platforms += lantiq
 platforms += lasat
 platforms += loongson
 platforms += mipssim
 platforms += mti-malta
+platforms += netlogic
 platforms += pmc-sierra
 platforms += pnx833x
 platforms += pnx8550

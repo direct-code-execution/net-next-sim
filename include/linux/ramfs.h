@@ -2,9 +2,9 @@
 #define _LINUX_RAMFS_H
 
 struct inode *ramfs_get_inode(struct super_block *sb, const struct inode *dir,
-	 int mode, dev_t dev);
-extern int ramfs_get_sb(struct file_system_type *fs_type,
-	 int flags, const char *dev_name, void *data, struct vfsmount *mnt);
+	 umode_t mode, dev_t dev);
+extern struct dentry *ramfs_mount(struct file_system_type *fs_type,
+	 int flags, const char *dev_name, void *data);
 
 #ifndef CONFIG_MMU
 extern int ramfs_nommu_expand_for_mapping(struct inode *inode, size_t newsize);

@@ -13,7 +13,7 @@
 #include <linux/freezer.h>
 #include <linux/kthread.h>
 #include <linux/lockdep.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/sysctl.h>
 
 /*
@@ -33,7 +33,7 @@ unsigned long __read_mostly sysctl_hung_task_check_count = PID_MAX_LIMIT;
 /*
  * Zero means infinite timeout - no checking done:
  */
-unsigned long __read_mostly sysctl_hung_task_timeout_secs = 120;
+unsigned long __read_mostly sysctl_hung_task_timeout_secs = CONFIG_DEFAULT_HUNG_TASK_TIMEOUT;
 
 unsigned long __read_mostly sysctl_hung_task_warnings = 10;
 
@@ -74,11 +74,17 @@ static void check_hung_task(struct task_struct *t, unsigned long timeout)
 
 	/*
 	 * Ensure the task is not frozen.
-	 * Also, when a freshly created task is scheduled once, changes
-	 * its state to TASK_UNINTERRUPTIBLE without having ever been
-	 * switched out once, it musn't be checked.
+	 * Also, skip vfork and any other user process that freezer should skip.
 	 */
-	if (unlikely(t->flags & PF_FROZEN || !switch_count))
+	if (unlikely(t->flags & (PF_FROZEN | PF_FREEZER_SKIP)))
+	    return;
+
+	/*
+	 * When a freshly created task is scheduled once, changes its state to
+	 * TASK_UNINTERRUPTIBLE without having ever been switched out once, it
+	 * musn't be checked.
+	 */
+	if (unlikely(!switch_count))
 		return;
 
 	if (switch_count != t->last_switch_count) {
@@ -98,7 +104,7 @@ static void check_hung_task(struct task_struct *t, unsigned long timeout)
 	printk(KERN_ERR "\"echo 0 > /proc/sys/kernel/hung_task_timeout_secs\""
 			" disables this message.\n");
 	sched_show_task(t);
-	__debug_show_held_locks(t);
+	debug_show_held_locks(t);
 
 	touch_nmi_watchdog();
 
@@ -111,17 +117,22 @@ static void check_hung_task(struct task_struct *t, unsigned long timeout)
  * periodically exit the critical section and enter a new one.
  *
  * For preemptible RCU it is sufficient to call rcu_read_unlock in order
- * exit the grace period. For classic RCU, a reschedule is required.
+ * to exit the grace period. For classic RCU, a reschedule is required.
  */
-static void rcu_lock_break(struct task_struct *g, struct task_struct *t)
+static bool rcu_lock_break(struct task_struct *g, struct task_struct *t)
 {
+	bool can_cont;
+
 	get_task_struct(g);
 	get_task_struct(t);
 	rcu_read_unlock();
 	cond_resched();
 	rcu_read_lock();
+	can_cont = pid_alive(g) && pid_alive(t);
 	put_task_struct(t);
 	put_task_struct(g);
+
+	return can_cont;
 }
 
 /*
@@ -148,9 +159,7 @@ static void check_hung_uninterruptible_tasks(unsigned long timeout)
 			goto unlock;
 		if (!--batch_count) {
 			batch_count = HUNG_TASK_BATCHING;
-			rcu_lock_break(g, t);
-			/* Exit if t or g was unhashed during refresh. */
-			if (t->state == TASK_DEAD || g->state == TASK_DEAD)
+			if (!rcu_lock_break(g, t))
 				goto unlock;
 		}
 		/* use "==" to skip the TASK_KILLABLE tasks waiting on NFS */

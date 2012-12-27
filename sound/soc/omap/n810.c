@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2008 Nokia Corporation
  *
- * Contact: Jarkko Nikula <jhnikula@gmail.com>
+ * Contact: Jarkko Nikula <jarkko.nikula@bitmer.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -27,16 +27,15 @@
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/soc.h>
-#include <sound/soc-dapm.h>
 
 #include <asm/mach-types.h>
 #include <mach/hardware.h>
 #include <linux/gpio.h>
+#include <linux/module.h>
 #include <plat/mcbsp.h>
 
 #include "omap-mcbsp.h"
 #include "omap-pcm.h"
-#include "../codecs/tlv320aic3x.h"
 
 #define N810_HEADSET_AMP_GPIO	10
 #define N810_SPEAKER_AMP_GPIO	101
@@ -56,7 +55,7 @@ static int n810_spk_func;
 static int n810_jack_func;
 static int n810_dmic_func;
 
-static void n810_ext_control(struct snd_soc_codec *codec)
+static void n810_ext_control(struct snd_soc_dapm_context *dapm)
 {
 	int hp = 0, line1l = 0;
 
@@ -72,37 +71,37 @@ static void n810_ext_control(struct snd_soc_codec *codec)
 	}
 
 	if (n810_spk_func)
-		snd_soc_dapm_enable_pin(codec, "Ext Spk");
+		snd_soc_dapm_enable_pin(dapm, "Ext Spk");
 	else
-		snd_soc_dapm_disable_pin(codec, "Ext Spk");
+		snd_soc_dapm_disable_pin(dapm, "Ext Spk");
 
 	if (hp)
-		snd_soc_dapm_enable_pin(codec, "Headphone Jack");
+		snd_soc_dapm_enable_pin(dapm, "Headphone Jack");
 	else
-		snd_soc_dapm_disable_pin(codec, "Headphone Jack");
+		snd_soc_dapm_disable_pin(dapm, "Headphone Jack");
 	if (line1l)
-		snd_soc_dapm_enable_pin(codec, "LINE1L");
+		snd_soc_dapm_enable_pin(dapm, "LINE1L");
 	else
-		snd_soc_dapm_disable_pin(codec, "LINE1L");
+		snd_soc_dapm_disable_pin(dapm, "LINE1L");
 
 	if (n810_dmic_func)
-		snd_soc_dapm_enable_pin(codec, "DMic");
+		snd_soc_dapm_enable_pin(dapm, "DMic");
 	else
-		snd_soc_dapm_disable_pin(codec, "DMic");
+		snd_soc_dapm_disable_pin(dapm, "DMic");
 
-	snd_soc_dapm_sync(codec);
+	snd_soc_dapm_sync(dapm);
 }
 
 static int n810_startup(struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_codec *codec = rtd->socdev->card->codec;
+	struct snd_soc_codec *codec = rtd->codec;
 
 	snd_pcm_hw_constraint_minmax(runtime,
 				     SNDRV_PCM_HW_PARAM_CHANNELS, 2, 2);
 
-	n810_ext_control(codec);
+	n810_ext_control(&codec->dapm);
 	return clk_enable(sys_clkout2);
 }
 
@@ -115,25 +114,8 @@ static int n810_hw_params(struct snd_pcm_substream *substream,
 	struct snd_pcm_hw_params *params)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *codec_dai = rtd->dai->codec_dai;
-	struct snd_soc_dai *cpu_dai = rtd->dai->cpu_dai;
+	struct snd_soc_dai *codec_dai = rtd->codec_dai;
 	int err;
-
-	/* Set codec DAI configuration */
-	err = snd_soc_dai_set_fmt(codec_dai,
-					 SND_SOC_DAIFMT_I2S |
-					 SND_SOC_DAIFMT_NB_NF |
-					 SND_SOC_DAIFMT_CBM_CFM);
-	if (err < 0)
-		return err;
-
-	/* Set cpu DAI configuration */
-	err = snd_soc_dai_set_fmt(cpu_dai,
-				       SND_SOC_DAIFMT_I2S |
-				       SND_SOC_DAIFMT_NB_NF |
-				       SND_SOC_DAIFMT_CBM_CFM);
-	if (err < 0)
-		return err;
 
 	/* Set the codec system clock for DAC and ADC */
 	err = snd_soc_dai_set_sysclk(codec_dai, 0, 12000000,
@@ -159,13 +141,13 @@ static int n810_get_spk(struct snd_kcontrol *kcontrol,
 static int n810_set_spk(struct snd_kcontrol *kcontrol,
 			struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec =  snd_kcontrol_chip(kcontrol);
+	struct snd_soc_card *card =  snd_kcontrol_chip(kcontrol);
 
 	if (n810_spk_func == ucontrol->value.integer.value[0])
 		return 0;
 
 	n810_spk_func = ucontrol->value.integer.value[0];
-	n810_ext_control(codec);
+	n810_ext_control(&card->dapm);
 
 	return 1;
 }
@@ -181,13 +163,13 @@ static int n810_get_jack(struct snd_kcontrol *kcontrol,
 static int n810_set_jack(struct snd_kcontrol *kcontrol,
 			 struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec =  snd_kcontrol_chip(kcontrol);
+	struct snd_soc_card *card =  snd_kcontrol_chip(kcontrol);
 
 	if (n810_jack_func == ucontrol->value.integer.value[0])
 		return 0;
 
 	n810_jack_func = ucontrol->value.integer.value[0];
-	n810_ext_control(codec);
+	n810_ext_control(&card->dapm);
 
 	return 1;
 }
@@ -203,13 +185,13 @@ static int n810_get_input(struct snd_kcontrol *kcontrol,
 static int n810_set_input(struct snd_kcontrol *kcontrol,
 			  struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec =  snd_kcontrol_chip(kcontrol);
+	struct snd_soc_card *card =  snd_kcontrol_chip(kcontrol);
 
 	if (n810_dmic_func == ucontrol->value.integer.value[0])
 		return 0;
 
 	n810_dmic_func = ucontrol->value.integer.value[0];
-	n810_ext_control(codec);
+	n810_ext_control(&card->dapm);
 
 	return 1;
 }
@@ -271,34 +253,20 @@ static const struct snd_kcontrol_new aic33_n810_controls[] = {
 		     n810_get_input, n810_set_input),
 };
 
-static int n810_aic33_init(struct snd_soc_codec *codec)
+static int n810_aic33_init(struct snd_soc_pcm_runtime *rtd)
 {
-	int err;
+	struct snd_soc_codec *codec = rtd->codec;
+	struct snd_soc_dapm_context *dapm = &codec->dapm;
 
 	/* Not connected */
-	snd_soc_dapm_nc_pin(codec, "MONO_LOUT");
-	snd_soc_dapm_nc_pin(codec, "HPLCOM");
-	snd_soc_dapm_nc_pin(codec, "HPRCOM");
-	snd_soc_dapm_nc_pin(codec, "MIC3L");
-	snd_soc_dapm_nc_pin(codec, "MIC3R");
-	snd_soc_dapm_nc_pin(codec, "LINE1R");
-	snd_soc_dapm_nc_pin(codec, "LINE2L");
-	snd_soc_dapm_nc_pin(codec, "LINE2R");
-
-	/* Add N810 specific controls */
-	err = snd_soc_add_controls(codec, aic33_n810_controls,
-				ARRAY_SIZE(aic33_n810_controls));
-	if (err < 0)
-		return err;
-
-	/* Add N810 specific widgets */
-	snd_soc_dapm_new_controls(codec, aic33_dapm_widgets,
-				  ARRAY_SIZE(aic33_dapm_widgets));
-
-	/* Set up N810 specific audio path audio_map */
-	snd_soc_dapm_add_routes(codec, audio_map, ARRAY_SIZE(audio_map));
-
-	snd_soc_dapm_sync(codec);
+	snd_soc_dapm_nc_pin(dapm, "MONO_LOUT");
+	snd_soc_dapm_nc_pin(dapm, "HPLCOM");
+	snd_soc_dapm_nc_pin(dapm, "HPRCOM");
+	snd_soc_dapm_nc_pin(dapm, "MIC3L");
+	snd_soc_dapm_nc_pin(dapm, "MIC3R");
+	snd_soc_dapm_nc_pin(dapm, "LINE1R");
+	snd_soc_dapm_nc_pin(dapm, "LINE2L");
+	snd_soc_dapm_nc_pin(dapm, "LINE2R");
 
 	return 0;
 }
@@ -307,8 +275,12 @@ static int n810_aic33_init(struct snd_soc_codec *codec)
 static struct snd_soc_dai_link n810_dai = {
 	.name = "TLV320AIC33",
 	.stream_name = "AIC33",
-	.cpu_dai = &omap_mcbsp_dai[0],
-	.codec_dai = &aic3x_dai,
+	.cpu_dai_name = "omap-mcbsp.2",
+	.platform_name = "omap-pcm-audio",
+	.codec_name = "tlv320aic3x-codec.2-0018",
+	.codec_dai_name = "tlv320aic3x-hifi",
+	.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
+		   SND_SOC_DAIFMT_CBM_CFM,
 	.init = n810_aic33_init,
 	.ops = &n810_ops,
 };
@@ -316,32 +288,19 @@ static struct snd_soc_dai_link n810_dai = {
 /* Audio machine driver */
 static struct snd_soc_card snd_soc_n810 = {
 	.name = "N810",
-	.platform = &omap_soc_platform,
+	.owner = THIS_MODULE,
 	.dai_link = &n810_dai,
 	.num_links = 1,
-};
 
-/* Audio private data */
-static struct aic3x_setup_data n810_aic33_setup = {
-	.gpio_func[0] = AIC3X_GPIO1_FUNC_DISABLED,
-	.gpio_func[1] = AIC3X_GPIO2_FUNC_DIGITAL_MIC_INPUT,
-};
-
-/* Audio subsystem */
-static struct snd_soc_device n810_snd_devdata = {
-	.card = &snd_soc_n810,
-	.codec_dev = &soc_codec_dev_aic3x,
-	.codec_data = &n810_aic33_setup,
+	.controls = aic33_n810_controls,
+	.num_controls = ARRAY_SIZE(aic33_n810_controls),
+	.dapm_widgets = aic33_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(aic33_dapm_widgets),
+	.dapm_routes = audio_map,
+	.num_dapm_routes = ARRAY_SIZE(audio_map),
 };
 
 static struct platform_device *n810_snd_device;
-
-/* temporary i2c device creation until this can be moved into the machine
- * support file.
-*/
-static struct i2c_board_info i2c_device[] = {
-	{ I2C_BOARD_INFO("tlv320aic3x", 0x1b), }
-};
 
 static int __init n810_soc_init(void)
 {
@@ -351,15 +310,11 @@ static int __init n810_soc_init(void)
 	if (!(machine_is_nokia_n810() || machine_is_nokia_n810_wimax()))
 		return -ENODEV;
 
-	i2c_register_board_info(1, i2c_device, ARRAY_SIZE(i2c_device));
-
 	n810_snd_device = platform_device_alloc("soc-audio", -1);
 	if (!n810_snd_device)
 		return -ENOMEM;
 
-	platform_set_drvdata(n810_snd_device, &n810_snd_devdata);
-	n810_snd_devdata.dev = &n810_snd_device->dev;
-	*(unsigned int *)n810_dai.cpu_dai->private_data = 1; /* McBSP2 */
+	platform_set_drvdata(n810_snd_device, &snd_soc_n810);
 	err = platform_device_add(n810_snd_device);
 	if (err)
 		goto err1;
@@ -424,6 +379,6 @@ static void __exit n810_soc_exit(void)
 module_init(n810_soc_init);
 module_exit(n810_soc_exit);
 
-MODULE_AUTHOR("Jarkko Nikula <jhnikula@gmail.com>");
+MODULE_AUTHOR("Jarkko Nikula <jarkko.nikula@bitmer.com>");
 MODULE_DESCRIPTION("ALSA SoC Nokia N810");
 MODULE_LICENSE("GPL");

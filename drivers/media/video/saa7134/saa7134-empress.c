@@ -21,7 +21,6 @@
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/smp_lock.h>
 #include <linux/delay.h>
 
 #include "saa7134-reg.h"
@@ -173,7 +172,6 @@ static int empress_querycap(struct file *file, void  *priv,
 	strlcpy(cap->card, saa7134_boards[dev->board].name,
 		sizeof(cap->card));
 	sprintf(cap->bus_info, "PCI:%s", pci_name(dev->pci));
-	cap->version = SAA7134_VERSION_CODE;
 	cap->capabilities =
 		V4L2_CAP_VIDEO_CAPTURE |
 		V4L2_CAP_READWRITE |
@@ -374,6 +372,10 @@ static int empress_queryctrl(struct file *file, void *priv,
 	static const u32 mpeg_ctrls[] = {
 		V4L2_CID_MPEG_CLASS,
 		V4L2_CID_MPEG_STREAM_TYPE,
+		V4L2_CID_MPEG_STREAM_PID_PMT,
+		V4L2_CID_MPEG_STREAM_PID_AUDIO,
+		V4L2_CID_MPEG_STREAM_PID_VIDEO,
+		V4L2_CID_MPEG_STREAM_PID_PCR,
 		V4L2_CID_MPEG_AUDIO_SAMPLING_FREQ,
 		V4L2_CID_MPEG_AUDIO_ENCODING,
 		V4L2_CID_MPEG_AUDIO_L2_BITRATE,
@@ -542,7 +544,7 @@ static int empress_init(struct saa7134_dev *dev)
 			    V4L2_BUF_TYPE_VIDEO_CAPTURE,
 			    V4L2_FIELD_ALTERNATE,
 			    sizeof(struct saa7134_buf),
-			    dev);
+			    dev, NULL);
 
 	empress_signal_update(&dev->empress_workqueue);
 	return 0;
@@ -554,7 +556,7 @@ static int empress_fini(struct saa7134_dev *dev)
 
 	if (NULL == dev->empress_dev)
 		return 0;
-	flush_scheduled_work();
+	flush_work_sync(&dev->empress_workqueue);
 	video_unregister_device(dev->empress_dev);
 	dev->empress_dev = NULL;
 	return 0;

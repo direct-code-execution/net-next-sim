@@ -16,7 +16,7 @@
 #include <linux/usb/serial.h>
 #include <linux/uaccess.h>
 
-static int debug;
+static bool debug;
 
 /* Version Information */
 #define DRIVER_VERSION "v2.00"
@@ -135,7 +135,6 @@ static struct usb_driver quausb2_usb_driver = {
 	.probe = usb_serial_probe,
 	.disconnect = usb_serial_disconnect,
 	.id_table = quausb2_id_table,
-	.no_dynamic_id = 1,
 };
 
 /**
@@ -148,7 +147,7 @@ static struct usb_driver quausb2_usb_driver = {
  * value of the line status flags from the port
  * @shadowMSR: Last received state of the modem status register, holds
  * the value of the modem status received from the port
- * @rcv_flush: Flag indicating that a receive flush has occured on
+ * @rcv_flush: Flag indicating that a receive flush has occurred on
  * the hardware.
  * @xmit_flush: Flag indicating that a transmit flush has been processed by
  * the hardware.
@@ -156,7 +155,7 @@ static struct usb_driver quausb2_usb_driver = {
  * includes the size (excluding header) of URBs that have been submitted but
  * have not yet been sent to to the device, and bytes that have been sent out
  * of the port but not yet reported sent by the "xmit_empty" messages (which
- * indicate the number of bytes sent each time they are recieved, despite the
+ * indicate the number of bytes sent each time they are received, despite the
  * misleading name).
  * - Starts at zero when port is initialised.
  * - is incremented by the size of the data to be written (no headers)
@@ -577,7 +576,7 @@ int qt2_open(struct tty_struct *tty, struct usb_serial_port *port)
 			port0->bulk_in_buffer,
 			port0->bulk_in_size,
 			qt2_read_bulk_callback, serial);
-		dbg("port0 bulk in URB intialised");
+		dbg("port0 bulk in URB initialised");
 
 		/* submit URB, i.e. start reading from device (async) */
 		dev_extra->ReadBulkStopped = false;
@@ -649,7 +648,7 @@ static void qt2_close(struct usb_serial_port *port)
 	/* although the USB side is now empty, the UART itself may
 	 * still be pushing characters out over the line, so we have to
 	 * wait testing the actual line status until the lines change
-	 * indicating that the data is done transfering. */
+	 * indicating that the data is done transferring. */
 	/* FIXME: slow this polling down so it doesn't run the USB bus flat out
 	 * if it actually has to spend any time in this loop (which it normally
 	 * doesn't because the buffer is nearly empty) */
@@ -726,7 +725,7 @@ static int qt2_write(struct tty_struct *tty, struct usb_serial_port *port,
 		return 0;
 	} else if (port_extra->tx_pending_bytes >= QT2_FIFO_DEPTH) {
 		/* buffer is full (==). > should not occur, but would indicate
-		 * that an overflow had occured */
+		 * that an overflow had occurred */
 		dbg("%s(): port transmit buffer is full!", __func__);
 		/* schedule_work(&port->work); commented in vendor driver */
 		return 0;
@@ -823,7 +822,7 @@ static int qt2_write_room(struct tty_struct *tty)
 	 * reduce the free space count by the size of the dispatched write.
 	 * When a "transmit empty" message comes back up the USB read stream,
 	 * we decrement the count by the number of bytes reported sent, thus
-	 * keeping track of the difference between sent and recieved bytes.
+	 * keeping track of the difference between sent and received bytes.
 	 */
 
 	room = (QT2_FIFO_DEPTH - port_extra->tx_pending_bytes);
@@ -852,7 +851,7 @@ static int qt2_chars_in_buffer(struct tty_struct *tty)
  * TIOCMGET and TIOCMSET are filtered off to their own methods before they get
  * here, so we don't have to handle them.
  */
-static int qt2_ioctl(struct tty_struct *tty, struct file *file,
+static int qt2_ioctl(struct tty_struct *tty,
 		     unsigned int cmd, unsigned long arg)
 {
 	struct usb_serial_port *port = tty->driver_data;
@@ -916,9 +915,10 @@ static int qt2_ioctl(struct tty_struct *tty, struct file *file,
 		dbg("%s() port %d, cmd == TIOCMIWAIT enter",
 			__func__, port->number);
 		prev_msr_value = port_extra->shadowMSR  & QT2_SERIAL_MSR_MASK;
+		barrier();
+		__set_current_state(TASK_INTERRUPTIBLE);
 		while (1) {
 			add_wait_queue(&port_extra->wait, &wait);
-			set_current_state(TASK_INTERRUPTIBLE);
 			schedule();
 			dbg("%s(): port %d, cmd == TIOCMIWAIT here\n",
 				__func__, port->number);
@@ -926,9 +926,12 @@ static int qt2_ioctl(struct tty_struct *tty, struct file *file,
 			/* see if a signal woke us up */
 			if (signal_pending(current))
 				return -ERESTARTSYS;
+			set_current_state(TASK_INTERRUPTIBLE);
 			msr_value = port_extra->shadowMSR & QT2_SERIAL_MSR_MASK;
-			if (msr_value == prev_msr_value)
+			if (msr_value == prev_msr_value) {
+				__set_current_state(TASK_RUNNING);
 				return -EIO;  /* no change - error */
+			}
 			if ((arg & TIOCM_RNG &&
 				((prev_msr_value & QT2_SERIAL_MSR_RI) ==
 					(msr_value & QT2_SERIAL_MSR_RI))) ||
@@ -941,6 +944,7 @@ static int qt2_ioctl(struct tty_struct *tty, struct file *file,
 				(arg & TIOCM_CTS &&
 				((prev_msr_value & QT2_SERIAL_MSR_CTS) ==
 					(msr_value & QT2_SERIAL_MSR_CTS)))) {
+				__set_current_state(TASK_RUNNING);
 				return 0;
 			}
 		} /* end inifinite while */
@@ -1078,7 +1082,7 @@ static void qt2_set_termios(struct tty_struct *tty,
 	}
 }
 
-static int qt2_tiocmget(struct tty_struct *tty, struct file *file)
+static int qt2_tiocmget(struct tty_struct *tty)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	struct usb_serial *serial = port->serial;
@@ -1121,7 +1125,7 @@ static int qt2_tiocmget(struct tty_struct *tty, struct file *file)
 	}
 }
 
-static int qt2_tiocmset(struct tty_struct *tty, struct file *file,
+static int qt2_tiocmset(struct tty_struct *tty,
 		       unsigned int set, unsigned int clear)
 {
 	struct usb_serial_port *port = tty->driver_data;
@@ -1221,7 +1225,7 @@ static void qt2_throttle(struct tty_struct *tty)
 	}
 	/* Send command to box to stop receiving stuff. This will stop this
 	 * particular UART from filling the endpoint - in the multiport case the
-	 * FPGA UART will handle any flow control implmented, but for the single
+	 * FPGA UART will handle any flow control implemented, but for the single
 	 * port it's handed differently and we just quit submitting urbs
 	 */
 	if (serial->dev->descriptor.idProduct != QUATECH_SSU2_100)
@@ -1795,7 +1799,7 @@ static void qt2_process_rx_char(struct usb_serial_port *port,
 	}
 }
 
-/** @brief Retreive the value of a register from the device
+/** @brief Retrieve the value of a register from the device
  *
  * Issues a GET_REGISTER vendor-spcific request over the USB control
  * pipe to obtain a value back from a specific register on a specific
@@ -1937,7 +1941,6 @@ static struct usb_serial_driver quatech2_device = {
 		.name = "quatech_usb2",
 	},
 	.description = DRIVER_DESC,
-	.usb_driver = &quausb2_usb_driver,
 	.id_table = quausb2_id_table,
 	.num_ports = 8,
 	.open = qt2_open,
@@ -1959,41 +1962,11 @@ static struct usb_serial_driver quatech2_device = {
 	.write_bulk_callback = qt2_write_bulk_callback,
 };
 
-static int __init quausb2_usb_init(void)
-{
-	int retval;
+static struct usb_serial_driver * const serial_drivers[] = {
+	&quatech2_device, NULL
+};
 
-	dbg("%s\n", __func__);
-
-	/* register with usb-serial */
-	retval = usb_serial_register(&quatech2_device);
-
-	if (retval)
-		goto failed_usb_serial_register;
-
-	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_VERSION ":"
-			DRIVER_DESC "\n");
-
-	/* register with usb */
-
-	retval = usb_register(&quausb2_usb_driver);
-	if (retval == 0)
-		return 0;
-
-	/* if we're here, usb_register() failed */
-	usb_serial_deregister(&quatech2_device);
-failed_usb_serial_register:
-		return retval;
-}
-
-static void __exit quausb2_usb_exit(void)
-{
-	usb_deregister(&quausb2_usb_driver);
-	usb_serial_deregister(&quatech2_device);
-}
-
-module_init(quausb2_usb_init);
-module_exit(quausb2_usb_exit);
+module_usb_serial_driver(quausb2_usb_driver, serial_drivers);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

@@ -20,7 +20,6 @@
 /* Keep includes the same across arches.  */
 #include <linux/mm.h>
 #include <linux/cache.h>
-#include <asm/system.h>
 #include <arch/icache.h>
 
 /* Caches are physically-indexed and so don't need special treatment */
@@ -116,25 +115,50 @@ static inline void __finv_buffer(void *buffer, size_t size)
 }
 
 
-/* Invalidate a VA range, then memory fence. */
+/* Invalidate a VA range and wait for it to be complete. */
 static inline void inv_buffer(void *buffer, size_t size)
 {
 	__inv_buffer(buffer, size);
-	mb_incoherent();
+	mb();
 }
 
-/* Flush a VA range, then memory fence. */
-static inline void flush_buffer(void *buffer, size_t size)
+/*
+ * Flush a locally-homecached VA range and wait for the evicted
+ * cachelines to hit memory.
+ */
+static inline void flush_buffer_local(void *buffer, size_t size)
 {
 	__flush_buffer(buffer, size);
 	mb_incoherent();
 }
 
-/* Flush & invalidate a VA range, then memory fence. */
-static inline void finv_buffer(void *buffer, size_t size)
+/*
+ * Flush and invalidate a locally-homecached VA range and wait for the
+ * evicted cachelines to hit memory.
+ */
+static inline void finv_buffer_local(void *buffer, size_t size)
 {
 	__finv_buffer(buffer, size);
 	mb_incoherent();
+}
+
+/*
+ * Flush and invalidate a VA range that is homed remotely, waiting
+ * until the memory controller holds the flushed values.  If "hfh" is
+ * true, we will do a more expensive flush involving additional loads
+ * to make sure we have touched all the possible home cpus of a buffer
+ * that is homed with "hash for home".
+ */
+void finv_buffer_remote(void *buffer, size_t size, int hfh);
+
+/*
+ * On SMP systems, when the scheduler does migration-cost autodetection,
+ * it needs a way to flush as much of the CPU's caches as possible:
+ *
+ * TODO: fill this in!
+ */
+static inline void sched_cacheflush(void)
+{
 }
 
 #endif /* _ASM_TILE_CACHEFLUSH_H */

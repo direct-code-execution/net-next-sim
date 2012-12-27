@@ -15,12 +15,11 @@
 #ifndef __AA_FILE_H
 #define __AA_FILE_H
 
-#include <linux/path.h>
-
 #include "domain.h"
 #include "match.h"
 
 struct aa_profile;
+struct path;
 
 /*
  * We use MAY_EXEC, MAY_WRITE, MAY_READ, MAY_APPEND and the following flags
@@ -118,7 +117,7 @@ static inline u16 dfa_map_xindex(u16 mask)
 		index |= AA_X_NAME;
 	} else if (old_index == 3) {
 		index |= AA_X_NAME | AA_X_CHILD;
-	} else {
+	} else if (old_index) {
 		index |= AA_X_TABLE;
 		index |= old_index - 4;
 	}

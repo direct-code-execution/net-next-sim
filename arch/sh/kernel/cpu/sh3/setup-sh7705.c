@@ -15,6 +15,7 @@
 #include <linux/serial_sci.h>
 #include <linux/sh_timer.h>
 #include <asm/rtc.h>
+#include <cpu/serial.h>
 
 enum {
 	UNUSED = 0,
@@ -70,8 +71,13 @@ static DECLARE_INTC_DESC(intc_desc, "sh7705", vectors, NULL,
 static struct plat_sci_port scif0_platform_data = {
 	.mapbase	= 0xa4410000,
 	.flags		= UPF_BOOT_AUTOCONF,
+	.scscr		= SCSCR_TIE | SCSCR_RIE  | SCSCR_TE |
+			  SCSCR_RE  | SCSCR_CKE1 | SCSCR_CKE0,
+	.scbrr_algo_id	= SCBRR_ALGO_4,
 	.type		= PORT_SCIF,
 	.irqs		= { 56, 56, 56 },
+	.ops		= &sh770x_sci_port_ops,
+	.regtype	= SCIx_SH7705_SCIF_REGTYPE,
 };
 
 static struct platform_device scif0_device = {
@@ -85,8 +91,12 @@ static struct platform_device scif0_device = {
 static struct plat_sci_port scif1_platform_data = {
 	.mapbase	= 0xa4400000,
 	.flags		= UPF_BOOT_AUTOCONF,
+	.scscr		= SCSCR_TIE | SCSCR_RIE | SCSCR_TE | SCSCR_RE,
+	.scbrr_algo_id	= SCBRR_ALGO_4,
 	.type		= PORT_SCIF,
 	.irqs		= { 52, 52, 52 },
+	.ops		= &sh770x_sci_port_ops,
+	.regtype	= SCIx_SH7705_SCIF_REGTYPE,
 };
 
 static struct platform_device scif1_device = {

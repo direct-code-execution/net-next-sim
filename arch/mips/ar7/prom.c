@@ -69,7 +69,7 @@ struct psbl_rec {
 	u32	ffs_size;
 };
 
-static __initdata char psp_env_version[] = "TIENV0.8";
+static const char psp_env_version[] __initconst = "TIENV0.8";
 
 struct psp_env_chunk {
 	u8	num;
@@ -77,14 +77,14 @@ struct psp_env_chunk {
 	u16	csum;
 	u8	len;
 	char	data[11];
-} __attribute__ ((packed));
+} __packed;
 
 struct psp_var_map_entry {
 	u8	num;
 	char	*value;
 };
 
-static struct psp_var_map_entry psp_var_map[] = {
+static const struct psp_var_map_entry psp_var_map[] = {
 	{  1,	"cpufrequency" },
 	{  2,	"memsize" },
 	{  3,	"flashsize" },
@@ -246,6 +246,8 @@ void __init prom_init(void)
 	ar7_init_cmdline(fw_arg0, (char **)fw_arg1);
 	ar7_init_env((struct env_var *)fw_arg2);
 	console_config();
+
+	ar7_gpio_init();
 }
 
 #define PORT(offset) (KSEG1ADDR(AR7_REGS_UART0 + (offset * 4)))

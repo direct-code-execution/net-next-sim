@@ -259,12 +259,10 @@ static void nfs_fscache_disable_inode_cookie(struct inode *inode)
 		dfprintk(FSCACHE,
 			 "NFS: nfsi 0x%p turning cache off\n", NFS_I(inode));
 
-		/* Need to invalidate any mapped pages that were read in before
-		 * turning off the cache.
+		/* Need to uncache any pages attached to this inode that
+		 * fscache knows about before turning off the cache.
 		 */
-		if (inode->i_mapping && inode->i_mapping->nrpages)
-			invalidate_inode_pages2(inode->i_mapping);
-
+		fscache_uncache_all_inode_pages(NFS_I(inode)->fscache, inode);
 		nfs_fscache_zap_inode_cookie(inode);
 	}
 }
@@ -329,7 +327,7 @@ void nfs_fscache_reset_inode_cookie(struct inode *inode)
 {
 	struct nfs_inode *nfsi = NFS_I(inode);
 	struct nfs_server *nfss = NFS_SERVER(inode);
-	struct fscache_cookie *old = nfsi->fscache;
+	NFS_IFDEBUG(struct fscache_cookie *old = nfsi->fscache);
 
 	nfs_fscache_inode_lock(inode);
 	if (nfsi->fscache) {

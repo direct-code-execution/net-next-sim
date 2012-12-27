@@ -27,7 +27,8 @@ static int add_nondir(struct dentry *dentry, struct inode *inode)
 	return err;
 }
 
-static int sysv_hash(struct dentry *dentry, struct qstr *qstr)
+static int sysv_hash(const struct dentry *dentry, const struct inode *inode,
+		struct qstr *qstr)
 {
 	/* Truncate the name in place, avoids having to define a compare
 	   function. */
@@ -47,7 +48,6 @@ static struct dentry *sysv_lookup(struct inode * dir, struct dentry * dentry, st
 	struct inode * inode = NULL;
 	ino_t ino;
 
-	dentry->d_op = dir->i_sb->s_root->d_op;
 	if (dentry->d_name.len > SYSV_NAMELEN)
 		return ERR_PTR(-ENAMETOOLONG);
 	ino = sysv_inode_by_name(dentry);
@@ -61,7 +61,7 @@ static struct dentry *sysv_lookup(struct inode * dir, struct dentry * dentry, st
 	return NULL;
 }
 
-static int sysv_mknod(struct inode * dir, struct dentry * dentry, int mode, dev_t rdev)
+static int sysv_mknod(struct inode * dir, struct dentry * dentry, umode_t mode, dev_t rdev)
 {
 	struct inode * inode;
 	int err;
@@ -80,7 +80,7 @@ static int sysv_mknod(struct inode * dir, struct dentry * dentry, int mode, dev_
 	return err;
 }
 
-static int sysv_create(struct inode * dir, struct dentry * dentry, int mode, struct nameidata *nd)
+static int sysv_create(struct inode * dir, struct dentry * dentry, umode_t mode, struct nameidata *nd)
 {
 	return sysv_mknod(dir, dentry, mode, 0);
 }
@@ -121,23 +121,18 @@ static int sysv_link(struct dentry * old_dentry, struct inode * dir,
 {
 	struct inode *inode = old_dentry->d_inode;
 
-	if (inode->i_nlink >= SYSV_SB(inode->i_sb)->s_link_max)
-		return -EMLINK;
-
 	inode->i_ctime = CURRENT_TIME_SEC;
 	inode_inc_link_count(inode);
-	atomic_inc(&inode->i_count);
+	ihold(inode);
 
 	return add_nondir(dentry, inode);
 }
 
-static int sysv_mkdir(struct inode * dir, struct dentry *dentry, int mode)
+static int sysv_mkdir(struct inode * dir, struct dentry *dentry, umode_t mode)
 {
 	struct inode * inode;
-	int err = -EMLINK;
+	int err;
 
-	if (dir->i_nlink >= SYSV_SB(dir->i_sb)->s_link_max) 
-		goto out;
 	inode_inc_link_count(dir);
 
 	inode = sysv_new_inode(dir, S_IFDIR|mode);
@@ -245,30 +240,21 @@ static int sysv_rename(struct inode * old_dir, struct dentry * old_dentry,
 		new_de = sysv_find_entry(new_dentry, &new_page);
 		if (!new_de)
 			goto out_dir;
-		inode_inc_link_count(old_inode);
 		sysv_set_link(new_de, new_page, old_inode);
 		new_inode->i_ctime = CURRENT_TIME_SEC;
 		if (dir_de)
 			drop_nlink(new_inode);
 		inode_dec_link_count(new_inode);
 	} else {
-		if (dir_de) {
-			err = -EMLINK;
-			if (new_dir->i_nlink >= SYSV_SB(new_dir->i_sb)->s_link_max)
-				goto out_dir;
-		}
-		inode_inc_link_count(old_inode);
 		err = sysv_add_link(new_dentry, old_inode);
-		if (err) {
-			inode_dec_link_count(old_inode);
+		if (err)
 			goto out_dir;
-		}
 		if (dir_de)
 			inode_inc_link_count(new_dir);
 	}
 
 	sysv_delete_entry(old_de, old_page);
-	inode_dec_link_count(old_inode);
+	mark_inode_dirty(old_inode);
 
 	if (dir_de) {
 		sysv_set_link(dir_de, dir_page, new_dir);

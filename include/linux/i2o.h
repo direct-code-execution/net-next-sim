@@ -24,6 +24,7 @@
 #define I2O_MAX_DRIVERS		8
 
 #include <linux/pci.h>
+#include <linux/bug.h>
 #include <linux/dma-mapping.h>
 #include <linux/string.h>
 #include <linux/slab.h>
@@ -826,7 +827,7 @@ static inline struct i2o_message __iomem *i2o_msg_in_to_virt(struct
  *	@c: I2O controller
  *
  *	This function tries to get a message frame. If no message frame is
- *	available do not wait until one is availabe (see also i2o_msg_get_wait).
+ *	available do not wait until one is available (see also i2o_msg_get_wait).
  *	The returned pointer to the message frame is not in I/O memory, it is
  *	allocated from a mempool. But because a MFA is allocated from the
  *	controller too it is guaranteed that i2o_msg_post() will never fail.

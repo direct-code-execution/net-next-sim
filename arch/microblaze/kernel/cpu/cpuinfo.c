@@ -30,6 +30,13 @@ const struct cpu_ver_key cpu_ver_lookup[] = {
 	{"7.20.c", 0x0e},
 	{"7.20.d", 0x0f},
 	{"7.30.a", 0x10},
+	{"7.30.b", 0x11},
+	{"8.00.a", 0x12},
+	{"8.00.b", 0x13},
+	{"8.10.a", 0x14},
+	{"8.20.a", 0x15},
+	{"8.20.b", 0x16},
+	{"8.30.a", 0x17},
 	{NULL, 0},
 };
 
@@ -84,4 +91,8 @@ void __init setup_cpuinfo(void)
 		printk(KERN_WARNING "%s: Unsupported PVR setting\n", __func__);
 		set_cpuinfo_static(&cpuinfo, cpu);
 	}
+
+	if (cpuinfo.mmu_privins)
+		printk(KERN_WARNING "%s: Stream instructions enabled"
+			" - USERSPACE CAN LOCK THIS KERNEL!\n", __func__);
 }

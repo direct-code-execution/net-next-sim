@@ -89,7 +89,7 @@ static void op_top_message(struct iwmct_priv *priv, struct top_msg *msg)
 	switch (msg->hdr.opcode) {
 	case OP_OPR_ALIVE:
 		LOG_INFO(priv, FW_MSG, "Got ALIVE from device, wake rescan\n");
-		queue_work(priv->bus_rescan_wq, &priv->bus_rescan_worker);
+		schedule_work(&priv->bus_rescan_worker);
 		break;
 	default:
 		LOG_INFO(priv, FW_MSG, "Received msg opcode 0x%X\n",
@@ -268,7 +268,7 @@ static void iwmct_irq_read_worker(struct work_struct *ws)
 		LOG_INFO(priv, IRQ, "ACK barker arrived "
 				"- starting FW download\n");
 	} else { /* REBOOT barker */
-		LOG_INFO(priv, IRQ, "Recieved reboot barker: %x\n", barker);
+		LOG_INFO(priv, IRQ, "Received reboot barker: %x\n", barker);
 		priv->barker = barker;
 
 		if (barker & BARKER_DNLOAD_SYNC_MSK) {
@@ -360,7 +360,7 @@ static void iwmct_irq(struct sdio_func *func)
 	/* clear the function's interrupt request bit (write 1 to clear) */
 	sdio_writeb(func, 1, IWMC_SDIO_INTR_CLEAR_ADDR, &ret);
 
-	queue_work(priv->wq, &priv->isr_worker);
+	schedule_work(&priv->isr_worker);
 
 	LOG_TRACE(priv, IRQ, "exit iwmct_irq\n");
 
@@ -376,20 +376,20 @@ static int blocks;
 module_param(blocks, int, 0604);
 MODULE_PARM_DESC(blocks, "max_blocks_to_send");
 
-static int dump;
+static bool dump;
 module_param(dump, bool, 0604);
 MODULE_PARM_DESC(dump, "dump_hex_content");
 
-static int jump = 1;
+static bool jump = 1;
 module_param(jump, bool, 0604);
 
-static int direct = 1;
+static bool direct = 1;
 module_param(direct, bool, 0604);
 
-static int checksum = 1;
+static bool checksum = 1;
 module_param(checksum, bool, 0604);
 
-static int fw_download = 1;
+static bool fw_download = 1;
 module_param(fw_download, bool, 0604);
 
 static int block_size = IWMC_SDIO_BLK_SIZE;
@@ -398,7 +398,7 @@ module_param(block_size, int, 0404);
 static int download_trans_blks = IWMC_DEFAULT_TR_BLK;
 module_param(download_trans_blks, int, 0604);
 
-static int rubbish_barker;
+static bool rubbish_barker;
 module_param(rubbish_barker, bool, 0604);
 
 #ifdef CONFIG_IWMC3200TOP_DEBUG
@@ -506,10 +506,6 @@ static int iwmct_probe(struct sdio_func *func,
 	priv->func = func;
 	sdio_set_drvdata(func, priv);
 
-
-	/* create drivers work queue */
-	priv->wq = create_workqueue(DRV_NAME "_wq");
-	priv->bus_rescan_wq = create_workqueue(DRV_NAME "_rescan_wq");
 	INIT_WORK(&priv->bus_rescan_worker, iwmct_rescan_worker);
 	INIT_WORK(&priv->isr_worker, iwmct_irq_read_worker);
 
@@ -604,9 +600,9 @@ static void iwmct_remove(struct sdio_func *func)
 	sdio_release_irq(func);
 	sdio_release_host(func);
 
-	/* Safely destroy osc workqueue */
-	destroy_workqueue(priv->bus_rescan_wq);
-	destroy_workqueue(priv->wq);
+	/* Make sure works are finished */
+	flush_work_sync(&priv->bus_rescan_worker);
+	flush_work_sync(&priv->isr_worker);
 
 	sdio_claim_host(func);
 	sdio_disable_func(func);

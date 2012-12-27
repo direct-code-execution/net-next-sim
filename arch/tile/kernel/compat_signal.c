@@ -15,7 +15,6 @@
 #include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/kernel.h>
 #include <linux/signal.h>
 #include <linux/errno.h>
@@ -256,9 +255,9 @@ int copy_siginfo_from_user32(siginfo_t *to, struct compat_siginfo __user *from)
 	return err;
 }
 
-long _compat_sys_sigaltstack(const struct compat_sigaltstack __user *uss_ptr,
-			     struct compat_sigaltstack __user *uoss_ptr,
-			     struct pt_regs *regs)
+long compat_sys_sigaltstack(const struct compat_sigaltstack __user *uss_ptr,
+			    struct compat_sigaltstack __user *uoss_ptr,
+			    struct pt_regs *regs)
 {
 	stack_t uss, uoss;
 	int ret;
@@ -291,12 +290,12 @@ long _compat_sys_sigaltstack(const struct compat_sigaltstack __user *uss_ptr,
 	return ret;
 }
 
-long _compat_sys_rt_sigreturn(struct pt_regs *regs)
+/* The assembly shim for this function arranges to ignore the return value. */
+long compat_sys_rt_sigreturn(struct pt_regs *regs)
 {
 	struct compat_rt_sigframe __user *frame =
 		(struct compat_rt_sigframe __user *) compat_ptr(regs->sp);
 	sigset_t set;
-	long r0;
 
 	if (!access_ok(VERIFY_READ, frame, sizeof(*frame)))
 		goto badframe;
@@ -304,21 +303,18 @@ long _compat_sys_rt_sigreturn(struct pt_regs *regs)
 		goto badframe;
 
 	sigdelsetmask(&set, ~_BLOCKABLE);
-	spin_lock_irq(&current->sighand->siglock);
-	current->blocked = set;
-	recalc_sigpending();
-	spin_unlock_irq(&current->sighand->siglock);
+	set_current_blocked(&set);
 
-	if (restore_sigcontext(regs, &frame->uc.uc_mcontext, &r0))
+	if (restore_sigcontext(regs, &frame->uc.uc_mcontext))
 		goto badframe;
 
-	if (_compat_sys_sigaltstack(&frame->uc.uc_stack, NULL, regs) != 0)
+	if (compat_sys_sigaltstack(&frame->uc.uc_stack, NULL, regs) != 0)
 		goto badframe;
 
-	return r0;
+	return 0;
 
 badframe:
-	force_sig(SIGSEGV, current);
+	signal_fault("bad sigreturn frame", regs, frame, 0);
 	return 0;
 }
 
@@ -407,19 +403,17 @@ int compat_setup_rt_frame(int sig, struct k_sigaction *ka, siginfo_t *info,
 	 * Set up registers for signal handler.
 	 * Registers that we don't modify keep the value they had from
 	 * user-space at the time we took the signal.
+	 * We always pass siginfo and mcontext, regardless of SA_SIGINFO,
+	 * since some things rely on this (e.g. glibc's debug/segfault.c).
 	 */
 	regs->pc = ptr_to_compat_reg(ka->sa.sa_handler);
 	regs->ex1 = PL_ICS_EX1(USER_PL, 1); /* set crit sec in handler */
 	regs->sp = ptr_to_compat_reg(frame);
 	regs->lr = restorer;
 	regs->regs[0] = (unsigned long) usig;
-
-	if (ka->sa.sa_flags & SA_SIGINFO) {
-		/* Need extra arguments, so mark to restore caller-saves. */
-		regs->regs[1] = ptr_to_compat_reg(&frame->info);
-		regs->regs[2] = ptr_to_compat_reg(&frame->uc);
-		regs->flags |= PT_FLAGS_CALLER_SAVES;
-	}
+	regs->regs[1] = ptr_to_compat_reg(&frame->info);
+	regs->regs[2] = ptr_to_compat_reg(&frame->uc);
+	regs->flags |= PT_FLAGS_CALLER_SAVES;
 
 	/*
 	 * Notify any tracer that was single-stepping it.
@@ -432,6 +426,6 @@ int compat_setup_rt_frame(int sig, struct k_sigaction *ka, siginfo_t *info,
 	return 0;
 
 give_sigsegv:
-	force_sigsegv(sig, current);
+	signal_fault("bad setup frame", regs, frame, sig);
 	return -EFAULT;
 }

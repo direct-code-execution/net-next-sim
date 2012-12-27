@@ -10,6 +10,10 @@
 #ifndef __ASM_PROC_DOMAIN_H
 #define __ASM_PROC_DOMAIN_H
 
+#ifndef __ASSEMBLY__
+#include <asm/barrier.h>
+#endif
+
 /*
  * Domain numbers
  *
@@ -45,13 +49,17 @@
  */
 #define DOMAIN_NOACCESS	0
 #define DOMAIN_CLIENT	1
+#ifdef CONFIG_CPU_USE_DOMAINS
 #define DOMAIN_MANAGER	3
+#else
+#define DOMAIN_MANAGER	1
+#endif
 
 #define domain_val(dom,type)	((type) << (2*(dom)))
 
 #ifndef __ASSEMBLY__
 
-#ifdef CONFIG_MMU
+#ifdef CONFIG_CPU_USE_DOMAINS
 #define set_domain(x)					\
 	do {						\
 	__asm__ __volatile__(				\
@@ -74,5 +82,28 @@
 #define modify_domain(dom,type)	do { } while (0)
 #endif
 
+/*
+ * Generate the T (user) versions of the LDR/STR and related
+ * instructions (inline assembly)
+ */
+#ifdef CONFIG_CPU_USE_DOMAINS
+#define TUSER(instr)	#instr "t"
+#else
+#define TUSER(instr)	#instr
 #endif
-#endif /* !__ASSEMBLY__ */
+
+#else /* __ASSEMBLY__ */
+
+/*
+ * Generate the T (user) versions of the LDR/STR and related
+ * instructions
+ */
+#ifdef CONFIG_CPU_USE_DOMAINS
+#define TUSER(instr)	instr ## t
+#else
+#define TUSER(instr)	instr
+#endif
+
+#endif /* __ASSEMBLY__ */
+
+#endif /* !__ASM_PROC_DOMAIN_H */

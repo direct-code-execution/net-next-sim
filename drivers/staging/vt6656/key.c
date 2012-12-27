@@ -559,7 +559,7 @@ BOOL KeybGetTransmitKey(PSKeyManagement pTable, PBYTE pbyBSSID, DWORD dwKeyType,
     int i, ii;
 
     *pKey = NULL;
-    for (i=0;i<MAX_KEY_TABLE;i++) {
+    for (i = 0; i < MAX_KEY_TABLE; i++) {
         if ((pTable->KeyTable[i].bInUse == TRUE) &&
 	    !compare_ether_addr(pTable->KeyTable[i].abyBSSID, pbyBSSID)) {
 
@@ -683,6 +683,9 @@ BOOL KeybSetDefaultKey(
     } else if ((dwKeyIndex & 0x000000FF) >= MAX_GROUP_KEY) {
         return (FALSE);
     }
+
+    if (uKeyLength > MAX_KEY_LEN)
+	    return false;
 
     pTable->KeyTable[MAX_KEY_TABLE-1].bInUse = TRUE;
     for (ii = 0; ii < ETH_ALEN; ii++)

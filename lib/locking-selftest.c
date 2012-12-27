@@ -14,7 +14,6 @@
 #include <linux/mutex.h>
 #include <linux/sched.h>
 #include <linux/delay.h>
-#include <linux/module.h>
 #include <linux/lockdep.h>
 #include <linux/spinlock.h>
 #include <linux/kallsyms.h>
@@ -144,7 +143,7 @@ static void init_shared_classes(void)
 
 #define HARDIRQ_ENTER()				\
 	local_irq_disable();			\
-	irq_enter();				\
+	__irq_enter();				\
 	WARN_ON(!in_irq());
 
 #define HARDIRQ_EXIT()				\

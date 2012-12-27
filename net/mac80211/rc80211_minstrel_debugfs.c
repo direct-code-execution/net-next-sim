@@ -50,6 +50,7 @@
 #include <linux/debugfs.h>
 #include <linux/ieee80211.h>
 #include <linux/slab.h>
+#include <linux/export.h>
 #include <net/mac80211.h>
 #include "rc80211_minstrel.h"
 
@@ -122,6 +123,7 @@ static const struct file_operations minstrel_stat_fops = {
 	.open = minstrel_stats_open,
 	.read = minstrel_stats_read,
 	.release = minstrel_stats_release,
+	.llseek = default_llseek,
 };
 
 void

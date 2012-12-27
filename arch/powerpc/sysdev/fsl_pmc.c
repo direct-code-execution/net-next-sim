@@ -14,6 +14,7 @@
 #include <linux/init.h>
 #include <linux/types.h>
 #include <linux/errno.h>
+#include <linux/export.h>
 #include <linux/suspend.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -53,13 +54,12 @@ static int pmc_suspend_valid(suspend_state_t state)
 	return 1;
 }
 
-static struct platform_suspend_ops pmc_suspend_ops = {
+static const struct platform_suspend_ops pmc_suspend_ops = {
 	.valid = pmc_suspend_valid,
 	.enter = pmc_suspend_enter,
 };
 
-static int pmc_probe(struct platform_device *ofdev,
-		     const struct of_device_id *id)
+static int pmc_probe(struct platform_device *ofdev)
 {
 	pmc_regs = of_iomap(ofdev->dev.of_node, 0);
 	if (!pmc_regs)
@@ -76,7 +76,7 @@ static const struct of_device_id pmc_ids[] = {
 	{ },
 };
 
-static struct of_platform_driver pmc_driver = {
+static struct platform_driver pmc_driver = {
 	.driver = {
 		.name = "fsl-pmc",
 		.owner = THIS_MODULE,
@@ -87,6 +87,6 @@ static struct of_platform_driver pmc_driver = {
 
 static int __init pmc_init(void)
 {
-	return of_register_platform_driver(&pmc_driver);
+	return platform_driver_register(&pmc_driver);
 }
 device_initcall(pmc_init);

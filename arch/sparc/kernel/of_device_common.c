@@ -2,7 +2,7 @@
 #include <linux/kernel.h>
 #include <linux/of.h>
 #include <linux/init.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/mod_devicetable.h>
 #include <linux/errno.h>
 #include <linux/irq.h>
@@ -21,6 +21,33 @@ unsigned int irq_of_parse_and_map(struct device_node *node, int index)
 	return op->archdata.irqs[index];
 }
 EXPORT_SYMBOL(irq_of_parse_and_map);
+
+int of_address_to_resource(struct device_node *node, int index,
+			   struct resource *r)
+{
+	struct platform_device *op = of_find_device_by_node(node);
+
+	if (!op || index >= op->num_resources)
+		return -EINVAL;
+
+	memcpy(r, &op->archdata.resource[index], sizeof(*r));
+	return 0;
+}
+EXPORT_SYMBOL_GPL(of_address_to_resource);
+
+void __iomem *of_iomap(struct device_node *node, int index)
+{
+	struct platform_device *op = of_find_device_by_node(node);
+	struct resource *r;
+
+	if (!op || index >= op->num_resources)
+		return NULL;
+
+	r = &op->archdata.resource[index];
+
+	return of_ioremap(r, 0, resource_size(r), (char *) r->name);
+}
+EXPORT_SYMBOL(of_iomap);
 
 /* Take the archdata values for IOMMU, STC, and HOSTDATA found in
  * BUS and propagate to all child platform_device objects.

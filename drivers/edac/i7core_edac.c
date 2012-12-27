@@ -1,6 +1,6 @@
 /* Intel i7 core/Nehalem Memory Controller kernel module
  *
- * This driver supports yhe memory controllers found on the Intel
+ * This driver supports the memory controllers found on the Intel
  * processor families i7core, i7core 7xx/8xx, i5core, Xeon 35xx,
  * Xeon 55xx and Xeon 56xx also known as Nehalem, Nehalem-EP, Lynnfield
  * and Westmere-EP.
@@ -31,14 +31,24 @@
 #include <linux/pci_ids.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
+#include <linux/dmi.h>
 #include <linux/edac.h>
 #include <linux/mmzone.h>
-#include <linux/edac_mce.h>
 #include <linux/smp.h>
+#include <asm/mce.h>
 #include <asm/processor.h>
+#include <asm/div64.h>
 
 #include "edac_core.h"
 
+/* Static vars */
+static LIST_HEAD(i7core_edac_list);
+static DEFINE_MUTEX(i7core_edac_lock);
+static int probed;
+
+static int use_pci_fixup;
+module_param(use_pci_fixup, int, 0444);
+MODULE_PARM_DESC(use_pci_fixup, "Enable PCI fixup to seek for hidden devices");
 /*
  * This is used for Nehalem-EP and Nehalem-EX devices, where the non-core
  * registers start at bus 255, and are not reported by BIOS.
@@ -51,7 +61,7 @@
 /*
  * Alter this version for the module when modifications are made
  */
-#define I7CORE_REVISION    " Ver: 1.0.0 " __DATE__
+#define I7CORE_REVISION    " Ver: 1.0.0"
 #define EDAC_MOD_STR      "i7core_edac"
 
 /*
@@ -70,6 +80,8 @@
 	/* OFFSETS for Device 0 Function 0 */
 
 #define MC_CFG_CONTROL	0x90
+  #define MC_CFG_UNLOCK		0x02
+  #define MC_CFG_LOCK		0x00
 
 	/* OFFSETS for Device 3 Function 0 */
 
@@ -90,6 +102,15 @@
   #define DIMM0_COR_ERR(r)			((r) & 0x7fff)
 
 /* OFFSETS for Device 3 Function 2, as inicated on Xeon 5500 datasheet */
+#define MC_SSRCONTROL		0x48
+  #define SSR_MODE_DISABLE	0x00
+  #define SSR_MODE_ENABLE	0x01
+  #define SSR_MODE_MASK		0x03
+
+#define MC_SCRUB_CONTROL	0x4c
+  #define STARTSCRUB		(1 << 24)
+  #define SCRUBINTERVAL_MASK    0xffffff
+
 #define MC_COR_ECC_CNT_0	0x80
 #define MC_COR_ECC_CNT_1	0x84
 #define MC_COR_ECC_CNT_2	0x88
@@ -212,8 +233,8 @@ struct pci_id_descr {
 };
 
 struct pci_id_table {
-	struct pci_id_descr	*descr;
-	int			n_devs;
+	const struct pci_id_descr	*descr;
+	int				n_devs;
 };
 
 struct i7core_dev {
@@ -235,8 +256,6 @@ struct i7core_pvt {
 	struct i7core_inject	inject;
 	struct i7core_channel	channel[NUM_CHANS];
 
-	int		channels; /* Number of active channels */
-
 	int		ce_count_available;
 	int 		csrow_map[NUM_CHANS][MAX_DIMMS];
 
@@ -247,10 +266,7 @@ struct i7core_pvt {
 	unsigned long	rdimm_ce_count[NUM_CHANS][MAX_DIMMS];
 	int		rdimm_last_ce_count[NUM_CHANS][MAX_DIMMS];
 
-	unsigned int	is_registered;
-
-	/* mcelog glue */
-	struct edac_mce		edac_mce;
+	bool		is_registered, enable_scrub;
 
 	/* Fifo double buffers */
 	struct mce		mce_entry[MCE_LOG_LEN];
@@ -261,18 +277,20 @@ struct i7core_pvt {
 
 	/* Count indicator to show errors not got */
 	unsigned		mce_overrun;
-};
 
-/* Static vars */
-static LIST_HEAD(i7core_edac_list);
-static DEFINE_MUTEX(i7core_edac_lock);
+	/* DCLK Frequency used for computing scrub rate */
+	int			dclk_freq;
+
+	/* Struct to control EDAC polling */
+	struct edac_pci_ctl_info *i7core_pci;
+};
 
 #define PCI_DESCR(device, function, device_id)	\
 	.dev = (device),			\
 	.func = (function),			\
 	.dev_id = (device_id)
 
-struct pci_id_descr pci_dev_descr_i7core_nehalem[] = {
+static const struct pci_id_descr pci_dev_descr_i7core_nehalem[] = {
 		/* Memory controller */
 	{ PCI_DESCR(3, 0, PCI_DEVICE_ID_INTEL_I7_MCR)     },
 	{ PCI_DESCR(3, 1, PCI_DEVICE_ID_INTEL_I7_MC_TAD)  },
@@ -309,7 +327,7 @@ struct pci_id_descr pci_dev_descr_i7core_nehalem[] = {
 
 };
 
-struct pci_id_descr pci_dev_descr_lynnfield[] = {
+static const struct pci_id_descr pci_dev_descr_lynnfield[] = {
 	{ PCI_DESCR( 3, 0, PCI_DEVICE_ID_INTEL_LYNNFIELD_MCR)         },
 	{ PCI_DESCR( 3, 1, PCI_DEVICE_ID_INTEL_LYNNFIELD_MC_TAD)      },
 	{ PCI_DESCR( 3, 4, PCI_DEVICE_ID_INTEL_LYNNFIELD_MC_TEST)     },
@@ -331,7 +349,7 @@ struct pci_id_descr pci_dev_descr_lynnfield[] = {
 	{ PCI_DESCR( 0, 0, PCI_DEVICE_ID_INTEL_LYNNFIELD_NONCORE)     },
 };
 
-struct pci_id_descr pci_dev_descr_i7core_westmere[] = {
+static const struct pci_id_descr pci_dev_descr_i7core_westmere[] = {
 		/* Memory controller */
 	{ PCI_DESCR(3, 0, PCI_DEVICE_ID_INTEL_LYNNFIELD_MCR_REV2)     },
 	{ PCI_DESCR(3, 1, PCI_DEVICE_ID_INTEL_LYNNFIELD_MC_TAD_REV2)  },
@@ -362,23 +380,22 @@ struct pci_id_descr pci_dev_descr_i7core_westmere[] = {
 
 };
 
-#define PCI_ID_TABLE_ENTRY(A) { A, ARRAY_SIZE(A) }
-struct pci_id_table pci_dev_table[] = {
+#define PCI_ID_TABLE_ENTRY(A) { .descr=A, .n_devs = ARRAY_SIZE(A) }
+static const struct pci_id_table pci_dev_table[] = {
 	PCI_ID_TABLE_ENTRY(pci_dev_descr_i7core_nehalem),
 	PCI_ID_TABLE_ENTRY(pci_dev_descr_lynnfield),
 	PCI_ID_TABLE_ENTRY(pci_dev_descr_i7core_westmere),
+	{0,}			/* 0 terminated list. */
 };
 
 /*
  *	pci_device_id	table for which devices we are looking for
  */
-static const struct pci_device_id i7core_pci_tbl[] __devinitdata = {
+static DEFINE_PCI_DEVICE_TABLE(i7core_pci_tbl) = {
 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_X58_HUB_MGMT)},
 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_LYNNFIELD_QPI_LINK0)},
 	{0,}			/* 0 terminated list. */
 };
-
-static struct edac_pci_ctl_info *i7core_pci;
 
 /****************************************************************************
 			Anciliary status routines
@@ -442,6 +459,36 @@ static struct i7core_dev *get_i7core_dev(u8 socket)
 	return NULL;
 }
 
+static struct i7core_dev *alloc_i7core_dev(u8 socket,
+					   const struct pci_id_table *table)
+{
+	struct i7core_dev *i7core_dev;
+
+	i7core_dev = kzalloc(sizeof(*i7core_dev), GFP_KERNEL);
+	if (!i7core_dev)
+		return NULL;
+
+	i7core_dev->pdev = kzalloc(sizeof(*i7core_dev->pdev) * table->n_devs,
+				   GFP_KERNEL);
+	if (!i7core_dev->pdev) {
+		kfree(i7core_dev);
+		return NULL;
+	}
+
+	i7core_dev->socket = socket;
+	i7core_dev->n_devs = table->n_devs;
+	list_add_tail(&i7core_dev->list, &i7core_edac_list);
+
+	return i7core_dev;
+}
+
+static void free_i7core_dev(struct i7core_dev *i7core_dev)
+{
+	list_del(&i7core_dev->list);
+	kfree(i7core_dev->pdev);
+	kfree(i7core_dev);
+}
+
 /****************************************************************************
 			Memory check routines
  ****************************************************************************/
@@ -484,7 +531,7 @@ static struct pci_dev *get_pdev_slot_func(u8 socket, unsigned slot,
  * to add a fake description for csrows.
  * So, this driver is attributing one DIMM memory for one csrow.
  */
-static int i7core_get_active_channels(u8 socket, unsigned *channels,
+static int i7core_get_active_channels(const u8 socket, unsigned *channels,
 				      unsigned *csrows)
 {
 	struct pci_dev *pdev = NULL;
@@ -545,12 +592,13 @@ static int i7core_get_active_channels(u8 socket, unsigned *channels,
 	return 0;
 }
 
-static int get_dimm_config(struct mem_ctl_info *mci, int *csrow)
+static int get_dimm_config(const struct mem_ctl_info *mci)
 {
 	struct i7core_pvt *pvt = mci->pvt_info;
 	struct csrow_info *csr;
 	struct pci_dev *pdev;
 	int i, j;
+	int csrow = 0;
 	unsigned long last_page = 0;
 	enum edac_type mode;
 	enum mem_type mtype;
@@ -664,13 +712,9 @@ static int get_dimm_config(struct mem_ctl_info *mci, int *csrow)
 				RANKOFFSET(dimm_dod[j]),
 				banks, ranks, rows, cols);
 
-#if PAGE_SHIFT > 20
-			npages = size >> (PAGE_SHIFT - 20);
-#else
-			npages = size << (20 - PAGE_SHIFT);
-#endif
+			npages = MiB_TO_PAGES(size);
 
-			csr = &mci->csrows[*csrow];
+			csr = &mci->csrows[csrow];
 			csr->first_page = last_page + 1;
 			last_page += npages;
 			csr->last_page = last_page;
@@ -678,13 +722,13 @@ static int get_dimm_config(struct mem_ctl_info *mci, int *csrow)
 
 			csr->page_mask = 0;
 			csr->grain = 8;
-			csr->csrow_idx = *csrow;
+			csr->csrow_idx = csrow;
 			csr->nr_channels = 1;
 
 			csr->channels[0].chan_idx = i;
 			csr->channels[0].ce_count = 0;
 
-			pvt->csrow_map[i][j] = *csrow;
+			pvt->csrow_map[i][j] = csrow;
 
 			switch (banks) {
 			case 4:
@@ -702,8 +746,12 @@ static int get_dimm_config(struct mem_ctl_info *mci, int *csrow)
 
 			csr->edac_mode = mode;
 			csr->mtype = mtype;
+			snprintf(csr->channels[0].label,
+					sizeof(csr->channels[0].label),
+					"CPU#%uChannel#%u_DIMM#%u",
+					pvt->i7core_dev->socket, i, j);
 
-			(*csrow)++;
+			csrow++;
 		}
 
 		pci_read_config_dword(pdev, MC_SAG_CH_0, &value[0]);
@@ -719,7 +767,7 @@ static int get_dimm_config(struct mem_ctl_info *mci, int *csrow)
 			debugf1("\t\t%#x\t%#x\t%#x\n",
 				(value[j] >> 27) & 0x1,
 				(value[j] >> 24) & 0x7,
-				(value[j] && ((1 << 24) - 1)));
+				(value[j] & ((1 << 24) - 1)));
 	}
 
 	return 0;
@@ -736,7 +784,7 @@ static int get_dimm_config(struct mem_ctl_info *mci, int *csrow)
    we're disabling error injection on all write calls to the sysfs nodes that
    controls the error code injection.
  */
-static int disable_inject(struct mem_ctl_info *mci)
+static int disable_inject(const struct mem_ctl_info *mci)
 {
 	struct i7core_pvt *pvt = mci->pvt_info;
 
@@ -921,7 +969,7 @@ DECLARE_ADDR_MATCH(bank, 32);
 DECLARE_ADDR_MATCH(page, 0x10000);
 DECLARE_ADDR_MATCH(col, 0x4000);
 
-static int write_and_test(struct pci_dev *dev, int where, u32 val)
+static int write_and_test(struct pci_dev *dev, const int where, const u32 val)
 {
 	u32 read;
 	int count;
@@ -1120,35 +1168,34 @@ DECLARE_COUNTER(2);
  * Sysfs struct
  */
 
-
-static struct mcidev_sysfs_attribute i7core_addrmatch_attrs[] = {
+static const struct mcidev_sysfs_attribute i7core_addrmatch_attrs[] = {
 	ATTR_ADDR_MATCH(channel),
 	ATTR_ADDR_MATCH(dimm),
 	ATTR_ADDR_MATCH(rank),
 	ATTR_ADDR_MATCH(bank),
 	ATTR_ADDR_MATCH(page),
 	ATTR_ADDR_MATCH(col),
-	{ .attr = { .name = NULL } }
+	{ } /* End of list */
 };
 
-static struct mcidev_sysfs_group i7core_inject_addrmatch = {
+static const struct mcidev_sysfs_group i7core_inject_addrmatch = {
 	.name  = "inject_addrmatch",
 	.mcidev_attr = i7core_addrmatch_attrs,
 };
 
-static struct mcidev_sysfs_attribute i7core_udimm_counters_attrs[] = {
+static const struct mcidev_sysfs_attribute i7core_udimm_counters_attrs[] = {
 	ATTR_COUNTER(0),
 	ATTR_COUNTER(1),
 	ATTR_COUNTER(2),
 	{ .attr = { .name = NULL } }
 };
 
-static struct mcidev_sysfs_group i7core_udimm_counters = {
+static const struct mcidev_sysfs_group i7core_udimm_counters = {
 	.name  = "all_channel_counts",
 	.mcidev_attr = i7core_udimm_counters_attrs,
 };
 
-static struct mcidev_sysfs_attribute i7core_sysfs_attrs[] = {
+static const struct mcidev_sysfs_attribute i7core_sysfs_rdimm_attrs[] = {
 	{
 		.attr = {
 			.name = "inject_section",
@@ -1180,8 +1227,44 @@ static struct mcidev_sysfs_attribute i7core_sysfs_attrs[] = {
 		.show  = i7core_inject_enable_show,
 		.store = i7core_inject_enable_store,
 	},
-	{ .attr = { .name = NULL } },	/* Reserved for udimm counters */
-	{ .attr = { .name = NULL } }
+	{ }	/* End of list */
+};
+
+static const struct mcidev_sysfs_attribute i7core_sysfs_udimm_attrs[] = {
+	{
+		.attr = {
+			.name = "inject_section",
+			.mode = (S_IRUGO | S_IWUSR)
+		},
+		.show  = i7core_inject_section_show,
+		.store = i7core_inject_section_store,
+	}, {
+		.attr = {
+			.name = "inject_type",
+			.mode = (S_IRUGO | S_IWUSR)
+		},
+		.show  = i7core_inject_type_show,
+		.store = i7core_inject_type_store,
+	}, {
+		.attr = {
+			.name = "inject_eccmask",
+			.mode = (S_IRUGO | S_IWUSR)
+		},
+		.show  = i7core_inject_eccmask_show,
+		.store = i7core_inject_eccmask_store,
+	}, {
+		.grp = &i7core_inject_addrmatch,
+	}, {
+		.attr = {
+			.name = "inject_enable",
+			.mode = (S_IRUGO | S_IWUSR)
+		},
+		.show  = i7core_inject_enable_show,
+		.store = i7core_inject_enable_store,
+	}, {
+		.grp = &i7core_udimm_counters,
+	},
+	{ }	/* End of list */
 };
 
 /****************************************************************************
@@ -1189,7 +1272,7 @@ static struct mcidev_sysfs_attribute i7core_sysfs_attrs[] = {
  ****************************************************************************/
 
 /*
- *	i7core_put_devices	'put' all the devices that we have
+ *	i7core_put_all_devices	'put' all the devices that we have
  *				reserved via 'get'
  */
 static void i7core_put_devices(struct i7core_dev *i7core_dev)
@@ -1206,25 +1289,25 @@ static void i7core_put_devices(struct i7core_dev *i7core_dev)
 			PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn));
 		pci_dev_put(pdev);
 	}
-	kfree(i7core_dev->pdev);
-	list_del(&i7core_dev->list);
-	kfree(i7core_dev);
 }
 
 static void i7core_put_all_devices(void)
 {
 	struct i7core_dev *i7core_dev, *tmp;
 
-	list_for_each_entry_safe(i7core_dev, tmp, &i7core_edac_list, list)
+	list_for_each_entry_safe(i7core_dev, tmp, &i7core_edac_list, list) {
 		i7core_put_devices(i7core_dev);
+		free_i7core_dev(i7core_dev);
+	}
 }
 
-static void __init i7core_xeon_pci_fixup(struct pci_id_table *table)
+static void __init i7core_xeon_pci_fixup(const struct pci_id_table *table)
 {
 	struct pci_dev *pdev = NULL;
 	int i;
+
 	/*
-	 * On Xeon 55xx, the Intel Quckpath Arch Generic Non-core pci buses
+	 * On Xeon 55xx, the Intel Quick Path Arch Generic Non-core pci buses
 	 * aren't announced by acpi. So, we need to use a legacy scan probing
 	 * to detect them
 	 */
@@ -1257,16 +1340,18 @@ static unsigned i7core_pci_lastbus(void)
 }
 
 /*
- *	i7core_get_devices	Find and perform 'get' operation on the MCH's
+ *	i7core_get_all_devices	Find and perform 'get' operation on the MCH's
  *			device/functions we want to reference for this driver
  *
  *			Need to 'get' device 16 func 1 and func 2
  */
-int i7core_get_onedevice(struct pci_dev **prev, int devno,
-			 struct pci_id_descr *dev_descr, unsigned n_devs,
-			 unsigned last_bus)
+static int i7core_get_onedevice(struct pci_dev **prev,
+				const struct pci_id_table *table,
+				const unsigned devno,
+				const unsigned last_bus)
 {
 	struct i7core_dev *i7core_dev;
+	const struct pci_id_descr *dev_descr = &table->descr[devno];
 
 	struct pci_dev *pdev = NULL;
 	u8 bus = 0;
@@ -1315,18 +1400,11 @@ int i7core_get_onedevice(struct pci_dev **prev, int devno,
 
 	i7core_dev = get_i7core_dev(socket);
 	if (!i7core_dev) {
-		i7core_dev = kzalloc(sizeof(*i7core_dev), GFP_KERNEL);
-		if (!i7core_dev)
-			return -ENOMEM;
-		i7core_dev->pdev = kzalloc(sizeof(*i7core_dev->pdev) * n_devs,
-					   GFP_KERNEL);
-		if (!i7core_dev->pdev) {
-			kfree(i7core_dev);
+		i7core_dev = alloc_i7core_dev(socket, table);
+		if (!i7core_dev) {
+			pci_dev_put(pdev);
 			return -ENOMEM;
 		}
-		i7core_dev->socket = socket;
-		i7core_dev->n_devs = n_devs;
-		list_add_tail(&i7core_dev->list, &i7core_edac_list);
 	}
 
 	if (i7core_dev->pdev[devno]) {
@@ -1368,27 +1446,31 @@ int i7core_get_onedevice(struct pci_dev **prev, int devno,
 		dev_descr->func,
 		PCI_VENDOR_ID_INTEL, dev_descr->dev_id);
 
+	/*
+	 * As stated on drivers/pci/search.c, the reference count for
+	 * @from is always decremented if it is not %NULL. So, as we need
+	 * to get all devices up to null, we need to do a get for the device
+	 */
+	pci_dev_get(pdev);
+
 	*prev = pdev;
 
 	return 0;
 }
 
-static int i7core_get_devices(struct pci_id_table *table)
+static int i7core_get_all_devices(void)
 {
 	int i, rc, last_bus;
 	struct pci_dev *pdev = NULL;
-	struct pci_id_descr *dev_descr;
+	const struct pci_id_table *table = pci_dev_table;
 
 	last_bus = i7core_pci_lastbus();
 
 	while (table && table->descr) {
-		dev_descr = table->descr;
 		for (i = 0; i < table->n_devs; i++) {
 			pdev = NULL;
 			do {
-				rc = i7core_get_onedevice(&pdev, i,
-							  &dev_descr[i],
-							  table->n_devs,
+				rc = i7core_get_onedevice(&pdev, table, i,
 							  last_bus);
 				if (rc < 0) {
 					if (i == 0) {
@@ -1404,7 +1486,6 @@ static int i7core_get_devices(struct pci_id_table *table)
 	}
 
 	return 0;
-	return 0;
 }
 
 static int mci_bind_devs(struct mem_ctl_info *mci,
@@ -1413,12 +1494,10 @@ static int mci_bind_devs(struct mem_ctl_info *mci,
 	struct i7core_pvt *pvt = mci->pvt_info;
 	struct pci_dev *pdev;
 	int i, func, slot;
+	char *family;
 
-	/* Associates i7core_dev and mci for future usage */
-	pvt->i7core_dev = i7core_dev;
-	i7core_dev->mci = mci;
-
-	pvt->is_registered = 0;
+	pvt->is_registered = false;
+	pvt->enable_scrub  = false;
 	for (i = 0; i < i7core_dev->n_devs; i++) {
 		pdev = i7core_dev->pdev[i];
 		if (!pdev)
@@ -1434,9 +1513,37 @@ static int mci_bind_devs(struct mem_ctl_info *mci,
 			if (unlikely(func > MAX_CHAN_FUNC))
 				goto error;
 			pvt->pci_ch[slot - 4][func] = pdev;
-		} else if (!slot && !func)
+		} else if (!slot && !func) {
 			pvt->pci_noncore = pdev;
-		else
+
+			/* Detect the processor family */
+			switch (pdev->device) {
+			case PCI_DEVICE_ID_INTEL_I7_NONCORE:
+				family = "Xeon 35xx/ i7core";
+				pvt->enable_scrub = false;
+				break;
+			case PCI_DEVICE_ID_INTEL_LYNNFIELD_NONCORE_ALT:
+				family = "i7-800/i5-700";
+				pvt->enable_scrub = false;
+				break;
+			case PCI_DEVICE_ID_INTEL_LYNNFIELD_NONCORE:
+				family = "Xeon 34xx";
+				pvt->enable_scrub = false;
+				break;
+			case PCI_DEVICE_ID_INTEL_I7_NONCORE_ALT:
+				family = "Xeon 55xx";
+				pvt->enable_scrub = true;
+				break;
+			case PCI_DEVICE_ID_INTEL_LYNNFIELD_NONCORE_REV2:
+				family = "Xeon 56xx / i7-900";
+				pvt->enable_scrub = true;
+				break;
+			default:
+				family = "unknown";
+				pvt->enable_scrub = false;
+			}
+			debugf0("Detected a processor type %s\n", family);
+		} else
 			goto error;
 
 		debugf0("Associated fn %d.%d, dev = %p, socket %d\n",
@@ -1445,17 +1552,8 @@ static int mci_bind_devs(struct mem_ctl_info *mci,
 
 		if (PCI_SLOT(pdev->devfn) == 3 &&
 			PCI_FUNC(pdev->devfn) == 2)
-			pvt->is_registered = 1;
+			pvt->is_registered = true;
 	}
-
-	/*
-	 * Add extra nodes to count errors on udimm
-	 * For registered memory, this is not needed, since the counters
-	 * are already displayed at the standard locations
-	 */
-	if (!pvt->is_registered)
-		i7core_sysfs_attrs[ARRAY_SIZE(i7core_sysfs_attrs)-2].grp =
-			&i7core_udimm_counters;
 
 	return 0;
 
@@ -1470,7 +1568,9 @@ error:
 			Error check routines
  ****************************************************************************/
 static void i7core_rdimm_update_csrow(struct mem_ctl_info *mci,
-					 int chan, int dimm, int add)
+				      const int chan,
+				      const int dimm,
+				      const int add)
 {
 	char *msg;
 	struct i7core_pvt *pvt = mci->pvt_info;
@@ -1487,7 +1587,10 @@ static void i7core_rdimm_update_csrow(struct mem_ctl_info *mci,
 }
 
 static void i7core_rdimm_update_ce_count(struct mem_ctl_info *mci,
-			int chan, int new0, int new1, int new2)
+					 const int chan,
+					 const int new0,
+					 const int new1,
+					 const int new2)
 {
 	struct i7core_pvt *pvt = mci->pvt_info;
 	int add0 = 0, add1 = 0, add2 = 0;
@@ -1641,13 +1744,13 @@ static void i7core_udimm_check_mc_ecc_err(struct mem_ctl_info *mci)
  * fields
  */
 static void i7core_mce_output_error(struct mem_ctl_info *mci,
-				    struct mce *m)
+				    const struct mce *m)
 {
 	struct i7core_pvt *pvt = mci->pvt_info;
 	char *type, *optype, *err, *msg;
 	unsigned long error = m->status & 0x1ff0000l;
 	u32 optypenum = (m->status >> 4) & 0x07;
-	u32 core_err_cnt = (m->status >> 38) && 0x7fff;
+	u32 core_err_cnt = (m->status >> 38) & 0x7fff;
 	u32 dimm = (m->misc >> 16) & 0x3;
 	u32 channel = (m->misc >> 18) & 0x3;
 	u32 syndrome = m->misc >> 32;
@@ -1749,7 +1852,7 @@ static void i7core_check_error(struct mem_ctl_info *mci)
 	/*
 	 * MCE first step: Copy all mce errors into a temporary buffer
 	 * We use a double buffering here, to reduce the risk of
-	 * loosing an error.
+	 * losing an error.
 	 */
 	smp_rmb();
 	count = (pvt->mce_out + MCE_LOG_LEN - pvt->mce_in)
@@ -1803,33 +1906,43 @@ check_ce_error:
  * WARNING: As this routine should be called at NMI time, extra care should
  * be taken to avoid deadlocks, and to be as fast as possible.
  */
-static int i7core_mce_check_error(void *priv, struct mce *mce)
+static int i7core_mce_check_error(struct notifier_block *nb, unsigned long val,
+				  void *data)
 {
-	struct mem_ctl_info *mci = priv;
-	struct i7core_pvt *pvt = mci->pvt_info;
+	struct mce *mce = (struct mce *)data;
+	struct i7core_dev *i7_dev;
+	struct mem_ctl_info *mci;
+	struct i7core_pvt *pvt;
+
+	i7_dev = get_i7core_dev(mce->socketid);
+	if (!i7_dev)
+		return NOTIFY_BAD;
+
+	mci = i7_dev->mci;
+	pvt = mci->pvt_info;
 
 	/*
 	 * Just let mcelog handle it if the error is
 	 * outside the memory controller
 	 */
 	if (((mce->status & 0xffff) >> 7) != 1)
-		return 0;
+		return NOTIFY_DONE;
 
 	/* Bank 8 registers are the only ones that we know how to handle */
 	if (mce->bank != 8)
-		return 0;
+		return NOTIFY_DONE;
 
 #ifdef CONFIG_SMP
 	/* Only handle if it is the right mc controller */
-	if (cpu_data(mce->cpu).phys_proc_id != pvt->i7core_dev->socket)
-		return 0;
+	if (mce->socketid != pvt->i7core_dev->socket)
+		return NOTIFY_DONE;
 #endif
 
 	smp_rmb();
 	if ((pvt->mce_out + 1) % MCE_LOG_LEN == pvt->mce_in) {
 		smp_wmb();
 		pvt->mce_overrun++;
-		return 0;
+		return NOTIFY_DONE;
 	}
 
 	/* Copy memory error at the ringbuffer */
@@ -1841,31 +1954,325 @@ static int i7core_mce_check_error(void *priv, struct mce *mce)
 	if (mce->mcgstatus & 1)
 		i7core_check_error(mci);
 
-	/* Advice mcelog that the error were handled */
-	return 1;
+	/* Advise mcelog that the errors were handled */
+	return NOTIFY_STOP;
 }
 
-static int i7core_register_mci(struct i7core_dev *i7core_dev,
-			       int num_channels, int num_csrows)
+static struct notifier_block i7_mce_dec = {
+	.notifier_call	= i7core_mce_check_error,
+};
+
+struct memdev_dmi_entry {
+	u8 type;
+	u8 length;
+	u16 handle;
+	u16 phys_mem_array_handle;
+	u16 mem_err_info_handle;
+	u16 total_width;
+	u16 data_width;
+	u16 size;
+	u8 form;
+	u8 device_set;
+	u8 device_locator;
+	u8 bank_locator;
+	u8 memory_type;
+	u16 type_detail;
+	u16 speed;
+	u8 manufacturer;
+	u8 serial_number;
+	u8 asset_tag;
+	u8 part_number;
+	u8 attributes;
+	u32 extended_size;
+	u16 conf_mem_clk_speed;
+} __attribute__((__packed__));
+
+
+/*
+ * Decode the DRAM Clock Frequency, be paranoid, make sure that all
+ * memory devices show the same speed, and if they don't then consider
+ * all speeds to be invalid.
+ */
+static void decode_dclk(const struct dmi_header *dh, void *_dclk_freq)
+{
+	int *dclk_freq = _dclk_freq;
+	u16 dmi_mem_clk_speed;
+
+	if (*dclk_freq == -1)
+		return;
+
+	if (dh->type == DMI_ENTRY_MEM_DEVICE) {
+		struct memdev_dmi_entry *memdev_dmi_entry =
+			(struct memdev_dmi_entry *)dh;
+		unsigned long conf_mem_clk_speed_offset =
+			(unsigned long)&memdev_dmi_entry->conf_mem_clk_speed -
+			(unsigned long)&memdev_dmi_entry->type;
+		unsigned long speed_offset =
+			(unsigned long)&memdev_dmi_entry->speed -
+			(unsigned long)&memdev_dmi_entry->type;
+
+		/* Check that a DIMM is present */
+		if (memdev_dmi_entry->size == 0)
+			return;
+
+		/*
+		 * Pick the configured speed if it's available, otherwise
+		 * pick the DIMM speed, or we don't have a speed.
+		 */
+		if (memdev_dmi_entry->length > conf_mem_clk_speed_offset) {
+			dmi_mem_clk_speed =
+				memdev_dmi_entry->conf_mem_clk_speed;
+		} else if (memdev_dmi_entry->length > speed_offset) {
+			dmi_mem_clk_speed = memdev_dmi_entry->speed;
+		} else {
+			*dclk_freq = -1;
+			return;
+		}
+
+		if (*dclk_freq == 0) {
+			/* First pass, speed was 0 */
+			if (dmi_mem_clk_speed > 0) {
+				/* Set speed if a valid speed is read */
+				*dclk_freq = dmi_mem_clk_speed;
+			} else {
+				/* Otherwise we don't have a valid speed */
+				*dclk_freq = -1;
+			}
+		} else if (*dclk_freq > 0 &&
+			   *dclk_freq != dmi_mem_clk_speed) {
+			/*
+			 * If we have a speed, check that all DIMMS are the same
+			 * speed, otherwise set the speed as invalid.
+			 */
+			*dclk_freq = -1;
+		}
+	}
+}
+
+/*
+ * The default DCLK frequency is used as a fallback if we
+ * fail to find anything reliable in the DMI. The value
+ * is taken straight from the datasheet.
+ */
+#define DEFAULT_DCLK_FREQ 800
+
+static int get_dclk_freq(void)
+{
+	int dclk_freq = 0;
+
+	dmi_walk(decode_dclk, (void *)&dclk_freq);
+
+	if (dclk_freq < 1)
+		return DEFAULT_DCLK_FREQ;
+
+	return dclk_freq;
+}
+
+/*
+ * set_sdram_scrub_rate		This routine sets byte/sec bandwidth scrub rate
+ *				to hardware according to SCRUBINTERVAL formula
+ *				found in datasheet.
+ */
+static int set_sdram_scrub_rate(struct mem_ctl_info *mci, u32 new_bw)
+{
+	struct i7core_pvt *pvt = mci->pvt_info;
+	struct pci_dev *pdev;
+	u32 dw_scrub;
+	u32 dw_ssr;
+
+	/* Get data from the MC register, function 2 */
+	pdev = pvt->pci_mcr[2];
+	if (!pdev)
+		return -ENODEV;
+
+	pci_read_config_dword(pdev, MC_SCRUB_CONTROL, &dw_scrub);
+
+	if (new_bw == 0) {
+		/* Prepare to disable petrol scrub */
+		dw_scrub &= ~STARTSCRUB;
+		/* Stop the patrol scrub engine */
+		write_and_test(pdev, MC_SCRUB_CONTROL,
+			       dw_scrub & ~SCRUBINTERVAL_MASK);
+
+		/* Get current status of scrub rate and set bit to disable */
+		pci_read_config_dword(pdev, MC_SSRCONTROL, &dw_ssr);
+		dw_ssr &= ~SSR_MODE_MASK;
+		dw_ssr |= SSR_MODE_DISABLE;
+	} else {
+		const int cache_line_size = 64;
+		const u32 freq_dclk_mhz = pvt->dclk_freq;
+		unsigned long long scrub_interval;
+		/*
+		 * Translate the desired scrub rate to a register value and
+		 * program the corresponding register value.
+		 */
+		scrub_interval = (unsigned long long)freq_dclk_mhz *
+			cache_line_size * 1000000;
+		do_div(scrub_interval, new_bw);
+
+		if (!scrub_interval || scrub_interval > SCRUBINTERVAL_MASK)
+			return -EINVAL;
+
+		dw_scrub = SCRUBINTERVAL_MASK & scrub_interval;
+
+		/* Start the patrol scrub engine */
+		pci_write_config_dword(pdev, MC_SCRUB_CONTROL,
+				       STARTSCRUB | dw_scrub);
+
+		/* Get current status of scrub rate and set bit to enable */
+		pci_read_config_dword(pdev, MC_SSRCONTROL, &dw_ssr);
+		dw_ssr &= ~SSR_MODE_MASK;
+		dw_ssr |= SSR_MODE_ENABLE;
+	}
+	/* Disable or enable scrubbing */
+	pci_write_config_dword(pdev, MC_SSRCONTROL, dw_ssr);
+
+	return new_bw;
+}
+
+/*
+ * get_sdram_scrub_rate		This routine convert current scrub rate value
+ *				into byte/sec bandwidth accourding to
+ *				SCRUBINTERVAL formula found in datasheet.
+ */
+static int get_sdram_scrub_rate(struct mem_ctl_info *mci)
+{
+	struct i7core_pvt *pvt = mci->pvt_info;
+	struct pci_dev *pdev;
+	const u32 cache_line_size = 64;
+	const u32 freq_dclk_mhz = pvt->dclk_freq;
+	unsigned long long scrub_rate;
+	u32 scrubval;
+
+	/* Get data from the MC register, function 2 */
+	pdev = pvt->pci_mcr[2];
+	if (!pdev)
+		return -ENODEV;
+
+	/* Get current scrub control data */
+	pci_read_config_dword(pdev, MC_SCRUB_CONTROL, &scrubval);
+
+	/* Mask highest 8-bits to 0 */
+	scrubval &=  SCRUBINTERVAL_MASK;
+	if (!scrubval)
+		return 0;
+
+	/* Calculate scrub rate value into byte/sec bandwidth */
+	scrub_rate =  (unsigned long long)freq_dclk_mhz *
+		1000000 * cache_line_size;
+	do_div(scrub_rate, scrubval);
+	return (int)scrub_rate;
+}
+
+static void enable_sdram_scrub_setting(struct mem_ctl_info *mci)
+{
+	struct i7core_pvt *pvt = mci->pvt_info;
+	u32 pci_lock;
+
+	/* Unlock writes to pci registers */
+	pci_read_config_dword(pvt->pci_noncore, MC_CFG_CONTROL, &pci_lock);
+	pci_lock &= ~0x3;
+	pci_write_config_dword(pvt->pci_noncore, MC_CFG_CONTROL,
+			       pci_lock | MC_CFG_UNLOCK);
+
+	mci->set_sdram_scrub_rate = set_sdram_scrub_rate;
+	mci->get_sdram_scrub_rate = get_sdram_scrub_rate;
+}
+
+static void disable_sdram_scrub_setting(struct mem_ctl_info *mci)
+{
+	struct i7core_pvt *pvt = mci->pvt_info;
+	u32 pci_lock;
+
+	/* Lock writes to pci registers */
+	pci_read_config_dword(pvt->pci_noncore, MC_CFG_CONTROL, &pci_lock);
+	pci_lock &= ~0x3;
+	pci_write_config_dword(pvt->pci_noncore, MC_CFG_CONTROL,
+			       pci_lock | MC_CFG_LOCK);
+}
+
+static void i7core_pci_ctl_create(struct i7core_pvt *pvt)
+{
+	pvt->i7core_pci = edac_pci_create_generic_ctl(
+						&pvt->i7core_dev->pdev[0]->dev,
+						EDAC_MOD_STR);
+	if (unlikely(!pvt->i7core_pci))
+		i7core_printk(KERN_WARNING,
+			      "Unable to setup PCI error report via EDAC\n");
+}
+
+static void i7core_pci_ctl_release(struct i7core_pvt *pvt)
+{
+	if (likely(pvt->i7core_pci))
+		edac_pci_release_generic_ctl(pvt->i7core_pci);
+	else
+		i7core_printk(KERN_ERR,
+				"Couldn't find mem_ctl_info for socket %d\n",
+				pvt->i7core_dev->socket);
+	pvt->i7core_pci = NULL;
+}
+
+static void i7core_unregister_mci(struct i7core_dev *i7core_dev)
+{
+	struct mem_ctl_info *mci = i7core_dev->mci;
+	struct i7core_pvt *pvt;
+
+	if (unlikely(!mci || !mci->pvt_info)) {
+		debugf0("MC: " __FILE__ ": %s(): dev = %p\n",
+			__func__, &i7core_dev->pdev[0]->dev);
+
+		i7core_printk(KERN_ERR, "Couldn't find mci handler\n");
+		return;
+	}
+
+	pvt = mci->pvt_info;
+
+	debugf0("MC: " __FILE__ ": %s(): mci = %p, dev = %p\n",
+		__func__, mci, &i7core_dev->pdev[0]->dev);
+
+	/* Disable scrubrate setting */
+	if (pvt->enable_scrub)
+		disable_sdram_scrub_setting(mci);
+
+	mce_unregister_decode_chain(&i7_mce_dec);
+
+	/* Disable EDAC polling */
+	i7core_pci_ctl_release(pvt);
+
+	/* Remove MC sysfs nodes */
+	edac_mc_del_mc(mci->dev);
+
+	debugf1("%s: free mci struct\n", mci->ctl_name);
+	kfree(mci->ctl_name);
+	edac_mc_free(mci);
+	i7core_dev->mci = NULL;
+}
+
+static int i7core_register_mci(struct i7core_dev *i7core_dev)
 {
 	struct mem_ctl_info *mci;
 	struct i7core_pvt *pvt;
-	int csrow = 0;
-	int rc;
+	int rc, channels, csrows;
+
+	/* Check the number of active and not disabled channels */
+	rc = i7core_get_active_channels(i7core_dev->socket, &channels, &csrows);
+	if (unlikely(rc < 0))
+		return rc;
 
 	/* allocate a new MC control structure */
-	mci = edac_mc_alloc(sizeof(*pvt), num_csrows, num_channels,
-			    i7core_dev->socket);
+	mci = edac_mc_alloc(sizeof(*pvt), csrows, channels, i7core_dev->socket);
 	if (unlikely(!mci))
 		return -ENOMEM;
 
-	debugf0("MC: " __FILE__ ": %s(): mci = %p\n", __func__, mci);
-
-	/* record ptr to the generic device */
-	mci->dev = &i7core_dev->pdev[0]->dev;
+	debugf0("MC: " __FILE__ ": %s(): mci = %p, dev = %p\n",
+		__func__, mci, &i7core_dev->pdev[0]->dev);
 
 	pvt = mci->pvt_info;
 	memset(pvt, 0, sizeof(*pvt));
+
+	/* Associates i7core_dev and mci for future usage */
+	pvt->i7core_dev = i7core_dev;
+	i7core_dev->mci = mci;
 
 	/*
 	 * FIXME: how to handle RDDR3 at MCI level? It is possible to have
@@ -1881,17 +2288,27 @@ static int i7core_register_mci(struct i7core_dev *i7core_dev,
 				  i7core_dev->socket);
 	mci->dev_name = pci_name(i7core_dev->pdev[0]);
 	mci->ctl_page_to_phys = NULL;
-	mci->mc_driver_sysfs_attributes = i7core_sysfs_attrs;
-	/* Set the function pointer to an actual operation function */
-	mci->edac_check = i7core_check_error;
 
 	/* Store pci devices at mci for faster access */
 	rc = mci_bind_devs(mci, i7core_dev);
 	if (unlikely(rc < 0))
-		goto fail;
+		goto fail0;
+
+	if (pvt->is_registered)
+		mci->mc_driver_sysfs_attributes = i7core_sysfs_rdimm_attrs;
+	else
+		mci->mc_driver_sysfs_attributes = i7core_sysfs_udimm_attrs;
 
 	/* Get dimm basic config */
-	get_dimm_config(mci, &csrow);
+	get_dimm_config(mci);
+	/* record ptr to the generic device */
+	mci->dev = &i7core_dev->pdev[0]->dev;
+	/* Set the function pointer to an actual operation function */
+	mci->edac_check = i7core_check_error;
+
+	/* Enable scrubrate setting */
+	if (pvt->enable_scrub)
+		enable_sdram_scrub_setting(mci);
 
 	/* add this new MC control structure to EDAC's list of MCs */
 	if (unlikely(edac_mc_add_mc(mci))) {
@@ -1902,19 +2319,7 @@ static int i7core_register_mci(struct i7core_dev *i7core_dev,
 		 */
 
 		rc = -EINVAL;
-		goto fail;
-	}
-
-	/* allocating generic PCI control info */
-	i7core_pci = edac_pci_create_generic_ctl(&i7core_dev->pdev[0]->dev,
-						 EDAC_MOD_STR);
-	if (unlikely(!i7core_pci)) {
-		printk(KERN_WARNING
-			"%s(): Unable to create PCI control\n",
-			__func__);
-		printk(KERN_WARNING
-			"%s(): PCI error report via EDAC not setup\n",
-			__func__);
+		goto fail0;
 	}
 
 	/* Default error mask is any memory */
@@ -1925,19 +2330,20 @@ static int i7core_register_mci(struct i7core_dev *i7core_dev,
 	pvt->inject.page = -1;
 	pvt->inject.col = -1;
 
-	/* Registers on edac_mce in order to receive memory errors */
-	pvt->edac_mce.priv = mci;
-	pvt->edac_mce.check_error = i7core_mce_check_error;
+	/* allocating generic PCI control info */
+	i7core_pci_ctl_create(pvt);
 
-	rc = edac_mce_register(&pvt->edac_mce);
-	if (unlikely(rc < 0)) {
-		debugf0("MC: " __FILE__
-			": %s(): failed edac_mce_register()\n", __func__);
-	}
+	/* DCLK for scrub rate setting */
+	pvt->dclk_freq = get_dclk_freq();
 
-fail:
-	if (rc < 0)
-		edac_mc_free(mci);
+	mce_register_decode_chain(&i7_mce_dec);
+
+	return 0;
+
+fail0:
+	kfree(mci->ctl_name);
+	edac_mc_free(mci);
+	i7core_dev->mci = NULL;
 	return rc;
 }
 
@@ -1949,12 +2355,10 @@ fail:
  *		< 0 for error code
  */
 
-static int probed = 0;
-
 static int __devinit i7core_probe(struct pci_dev *pdev,
 				  const struct pci_device_id *id)
 {
-	int rc;
+	int rc, count = 0;
 	struct i7core_dev *i7core_dev;
 
 	/* get the pci devices we want to reserve for our use */
@@ -1965,35 +2369,45 @@ static int __devinit i7core_probe(struct pci_dev *pdev,
 	 */
 	if (unlikely(probed >= 1)) {
 		mutex_unlock(&i7core_edac_lock);
-		return -EINVAL;
+		return -ENODEV;
 	}
 	probed++;
 
-	rc = i7core_get_devices(pci_dev_table);
+	rc = i7core_get_all_devices();
 	if (unlikely(rc < 0))
 		goto fail0;
 
 	list_for_each_entry(i7core_dev, &i7core_edac_list, list) {
-		int channels;
-		int csrows;
-
-		/* Check the number of active and not disabled channels */
-		rc = i7core_get_active_channels(i7core_dev->socket,
-						&channels, &csrows);
-		if (unlikely(rc < 0))
-			goto fail1;
-
-		rc = i7core_register_mci(i7core_dev, channels, csrows);
+		count++;
+		rc = i7core_register_mci(i7core_dev);
 		if (unlikely(rc < 0))
 			goto fail1;
 	}
 
-	i7core_printk(KERN_INFO, "Driver loaded.\n");
+	/*
+	 * Nehalem-EX uses a different memory controller. However, as the
+	 * memory controller is not visible on some Nehalem/Nehalem-EP, we
+	 * need to indirectly probe via a X58 PCI device. The same devices
+	 * are found on (some) Nehalem-EX. So, on those machines, the
+	 * probe routine needs to return -ENODEV, as the actual Memory
+	 * Controller registers won't be detected.
+	 */
+	if (!count) {
+		rc = -ENODEV;
+		goto fail1;
+	}
+
+	i7core_printk(KERN_INFO,
+		      "Driver loaded, %d memory controller(s) found.\n",
+		      count);
 
 	mutex_unlock(&i7core_edac_lock);
 	return 0;
 
 fail1:
+	list_for_each_entry(i7core_dev, &i7core_edac_list, list)
+		i7core_unregister_mci(i7core_dev);
+
 	i7core_put_all_devices();
 fail0:
 	mutex_unlock(&i7core_edac_lock);
@@ -2006,13 +2420,9 @@ fail0:
  */
 static void __devexit i7core_remove(struct pci_dev *pdev)
 {
-	struct mem_ctl_info *mci;
-	struct i7core_dev *i7core_dev, *tmp;
+	struct i7core_dev *i7core_dev;
 
 	debugf0(__FILE__ ": %s()\n", __func__);
-
-	if (i7core_pci)
-		edac_pci_release_generic_ctl(i7core_pci);
 
 	/*
 	 * we have a trouble here: pdev value for removal will be wrong, since
@@ -2023,22 +2433,18 @@ static void __devexit i7core_remove(struct pci_dev *pdev)
 	 */
 
 	mutex_lock(&i7core_edac_lock);
-	list_for_each_entry_safe(i7core_dev, tmp, &i7core_edac_list, list) {
-		mci = edac_mc_del_mc(&i7core_dev->pdev[0]->dev);
-		if (mci) {
-			struct i7core_pvt *pvt = mci->pvt_info;
 
-			i7core_dev = pvt->i7core_dev;
-			edac_mce_unregister(&pvt->edac_mce);
-			kfree(mci->ctl_name);
-			edac_mc_free(mci);
-			i7core_put_devices(i7core_dev);
-		} else {
-			i7core_printk(KERN_ERR,
-				      "Couldn't find mci for socket %d\n",
-				      i7core_dev->socket);
-		}
+	if (unlikely(!probed)) {
+		mutex_unlock(&i7core_edac_lock);
+		return;
 	}
+
+	list_for_each_entry(i7core_dev, &i7core_edac_list, list)
+		i7core_unregister_mci(i7core_dev);
+
+	/* Release PCI resources */
+	i7core_put_all_devices();
+
 	probed--;
 
 	mutex_unlock(&i7core_edac_lock);
@@ -2070,7 +2476,8 @@ static int __init i7core_init(void)
 	/* Ensure that the OPSTATE is set correctly for POLL or NMI */
 	opstate_init();
 
-	i7core_xeon_pci_fixup(pci_dev_table);
+	if (use_pci_fixup)
+		i7core_xeon_pci_fixup(pci_dev_table);
 
 	pci_rc = pci_register_driver(&i7core_driver);
 

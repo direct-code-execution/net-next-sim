@@ -93,7 +93,6 @@
 #include <linux/mca-legacy.h>
 
 #include <asm/io.h>
-#include <asm/system.h>
 
 #include "scsi.h"
 #include <scsi/scsi_host.h>
@@ -1072,7 +1071,7 @@ static int fd_mcs_release(struct Scsi_Host *shpnt)
 	return 0;
 }
 
-static int fd_mcs_queue(Scsi_Cmnd * SCpnt, void (*done) (Scsi_Cmnd *))
+static int fd_mcs_queue_lck(Scsi_Cmnd * SCpnt, void (*done) (Scsi_Cmnd *))
 {
 	struct Scsi_Host *shpnt = SCpnt->device->host;
 
@@ -1121,6 +1120,8 @@ static int fd_mcs_queue(Scsi_Cmnd * SCpnt, void (*done) (Scsi_Cmnd *))
 
 	return 0;
 }
+
+static DEF_SCSI_QCMD(fd_mcs_queue)
 
 #if DEBUG_ABORT || DEBUG_RESET
 static void fd_mcs_print_info(Scsi_Cmnd * SCpnt)

@@ -13,8 +13,10 @@
 #ifndef __IOMMU_MMAP_H
 #define __IOMMU_MMAP_H
 
+#include <linux/iommu.h>
+
 struct iovm_struct {
-	struct iommu		*iommu;	/* iommu object which this belongs to */
+	struct omap_iommu	*iommu;	/* iommu object which this belongs to */
 	u32			da_start; /* area definition */
 	u32			da_end;
 	u32			flags; /* IOVMF_: see below */
@@ -29,9 +31,6 @@ struct iovm_struct {
  * lower 16 bit is used for h/w and upper 16 bit is for s/w.
  */
 #define IOVMF_SW_SHIFT		16
-#define IOVMF_HW_SIZE		(1 << IOVMF_SW_SHIFT)
-#define IOVMF_HW_MASK		(IOVMF_HW_SIZE - 1)
-#define IOVMF_SW_MASK		(~IOVMF_HW_MASK)UL
 
 /*
  * iovma: h/w flags derived from cam and ram attribute
@@ -71,24 +70,20 @@ struct iovm_struct {
 #define IOVMF_LINEAR_MASK	(3 << (2 + IOVMF_SW_SHIFT))
 
 #define IOVMF_DA_FIXED		(1 << (4 + IOVMF_SW_SHIFT))
-#define IOVMF_DA_ANON		(2 << (4 + IOVMF_SW_SHIFT))
-#define IOVMF_DA_MASK		(3 << (4 + IOVMF_SW_SHIFT))
 
 
-extern struct iovm_struct *find_iovm_area(struct iommu *obj, u32 da);
-extern u32 iommu_vmap(struct iommu *obj, u32 da,
+extern struct iovm_struct *omap_find_iovm_area(struct device *dev, u32 da);
+extern u32
+omap_iommu_vmap(struct iommu_domain *domain, struct device *dev, u32 da,
 			const struct sg_table *sgt, u32 flags);
-extern struct sg_table *iommu_vunmap(struct iommu *obj, u32 da);
-extern u32 iommu_vmalloc(struct iommu *obj, u32 da, size_t bytes,
-			   u32 flags);
-extern void iommu_vfree(struct iommu *obj, const u32 da);
-extern u32 iommu_kmap(struct iommu *obj, u32 da, u32 pa, size_t bytes,
-			u32 flags);
-extern void iommu_kunmap(struct iommu *obj, u32 da);
-extern u32 iommu_kmalloc(struct iommu *obj, u32 da, size_t bytes,
-			   u32 flags);
-extern void iommu_kfree(struct iommu *obj, u32 da);
-
-extern void *da_to_va(struct iommu *obj, u32 da);
+extern struct sg_table *omap_iommu_vunmap(struct iommu_domain *domain,
+				struct device *dev, u32 da);
+extern u32
+omap_iommu_vmalloc(struct iommu_domain *domain, struct device *dev,
+				u32 da, size_t bytes, u32 flags);
+extern void
+omap_iommu_vfree(struct iommu_domain *domain, struct device *dev,
+				const u32 da);
+extern void *omap_da_to_va(struct device *dev, u32 da);
 
 #endif /* __IOMMU_MMAP_H */

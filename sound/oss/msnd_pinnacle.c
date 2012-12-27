@@ -39,7 +39,7 @@
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
-#include <linux/smp_lock.h>
+#include <linux/mutex.h>
 #include <linux/gfp.h>
 #include <asm/irq.h>
 #include <asm/io.h>
@@ -79,6 +79,7 @@
 					 dev.rec_sample_rate /		\
 					 dev.rec_channels)
 
+static DEFINE_MUTEX(msnd_pinnacle_mutex);
 static multisound_dev_t			dev;
 
 #ifndef HAVE_DSPCODEH
@@ -651,12 +652,12 @@ static long dev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	ret = -EINVAL;
 
-	lock_kernel();
+	mutex_lock(&msnd_pinnacle_mutex);
 	if (minor == dev.dsp_minor)
 		ret = dsp_ioctl(file, cmd, arg);
 	else if (minor == dev.mixer_minor)
 		ret = mixer_ioctl(cmd, arg);
-	unlock_kernel();
+	mutex_unlock(&msnd_pinnacle_mutex);
 
 	return ret;
 }
@@ -761,7 +762,7 @@ static int dev_open(struct inode *inode, struct file *file)
 	int minor = iminor(inode);
 	int err = 0;
 
-	lock_kernel();
+	mutex_lock(&msnd_pinnacle_mutex);
 	if (minor == dev.dsp_minor) {
 		if ((file->f_mode & FMODE_WRITE &&
 		     test_bit(F_AUDIO_WRITE_INUSE, &dev.flags)) ||
@@ -791,7 +792,7 @@ static int dev_open(struct inode *inode, struct file *file)
 	} else
 		err = -EINVAL;
 out:
-	unlock_kernel();
+	mutex_unlock(&msnd_pinnacle_mutex);
 	return err;
 }
 
@@ -800,14 +801,14 @@ static int dev_release(struct inode *inode, struct file *file)
 	int minor = iminor(inode);
 	int err = 0;
 
-	lock_kernel();
+	mutex_lock(&msnd_pinnacle_mutex);
 	if (minor == dev.dsp_minor)
 		err = dsp_release(file);
 	else if (minor == dev.mixer_minor) {
 		/* nothing */
 	} else
 		err = -EINVAL;
-	unlock_kernel();
+	mutex_unlock(&msnd_pinnacle_mutex);
 	return err;
 }
 
@@ -1117,6 +1118,7 @@ static const struct file_operations dev_fileops = {
 	.unlocked_ioctl	= dev_ioctl,
 	.open		= dev_open,
 	.release	= dev_release,
+	.llseek		= noop_llseek,
 };
 
 static int reset_dsp(void)
@@ -1292,6 +1294,8 @@ static int __init calibrate_adc(WORD srate)
 
 static int upload_dsp_code(void)
 {
+	int ret = 0;
+
 	msnd_outb(HPBLKSEL_0, dev.io + HP_BLKS);
 #ifndef HAVE_DSPCODEH
 	INITCODESIZE = mod_firmware_load(INITCODEFILE, &INITCODE);
@@ -1310,7 +1314,8 @@ static int upload_dsp_code(void)
 	memcpy_toio(dev.base, PERMCODE, PERMCODESIZE);
 	if (msnd_upload_host(&dev, INITCODE, INITCODESIZE) < 0) {
 		printk(KERN_WARNING LOGNAME ": Error uploading to DSP\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto out;
 	}
 #ifdef HAVE_DSPCODEH
 	printk(KERN_INFO LOGNAME ": DSP firmware uploaded (resident)\n");
@@ -1318,12 +1323,13 @@ static int upload_dsp_code(void)
 	printk(KERN_INFO LOGNAME ": DSP firmware uploaded\n");
 #endif
 
+out:
 #ifndef HAVE_DSPCODEH
 	vfree(INITCODE);
 	vfree(PERMCODE);
 #endif
 
-	return 0;
+	return ret;
 }
 
 #ifdef MSND_CLASSIC
@@ -1629,7 +1635,7 @@ static int ide_irq __initdata = 0;
 static int joystick_io __initdata = 0;
 
 /* If we have the digital daugherboard... */
-static int digital __initdata = 0;
+static bool digital __initdata = false;
 #endif
 
 static int fifosize __initdata =	DEFFIFOSIZE;
@@ -1699,7 +1705,7 @@ static int joystick_io __initdata =	CONFIG_MSNDPIN_JOYSTICK_IO;
 #ifndef CONFIG_MSNDPIN_DIGITAL
 #  define CONFIG_MSNDPIN_DIGITAL	0
 #endif
-static int digital __initdata =		CONFIG_MSNDPIN_DIGITAL;
+static bool digital __initdata =	CONFIG_MSNDPIN_DIGITAL;
 
 #endif /* MSND_CLASSIC */
 

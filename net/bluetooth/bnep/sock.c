@@ -39,10 +39,9 @@
 #include <linux/init.h>
 #include <linux/compat.h>
 #include <linux/gfp.h>
+#include <linux/uaccess.h>
 #include <net/sock.h>
 
-#include <asm/system.h>
-#include <asm/uaccess.h>
 
 #include "bnep.h"
 
@@ -88,6 +87,7 @@ static int bnep_sock_ioctl(struct socket *sock, unsigned int cmd, unsigned long 
 			sockfd_put(nsock);
 			return -EBADFD;
 		}
+		ca.device[sizeof(ca.device)-1] = 0;
 
 		err = bnep_add_connection(&ca, nsock);
 		if (!err) {
@@ -142,10 +142,10 @@ static int bnep_sock_compat_ioctl(struct socket *sock, unsigned int cmd, unsigne
 {
 	if (cmd == BNEPGETCONNLIST) {
 		struct bnep_connlist_req cl;
-		uint32_t uci;
+		u32 uci;
 		int err;
 
-		if (get_user(cl.cnum, (uint32_t __user *) arg) ||
+		if (get_user(cl.cnum, (u32 __user *) arg) ||
 				get_user(uci, (u32 __user *) (arg + 4)))
 			return -EFAULT;
 
@@ -156,7 +156,7 @@ static int bnep_sock_compat_ioctl(struct socket *sock, unsigned int cmd, unsigne
 
 		err = bnep_get_connlist(&cl);
 
-		if (!err && put_user(cl.cnum, (uint32_t __user *) arg))
+		if (!err && put_user(cl.cnum, (u32 __user *) arg))
 			err = -EFAULT;
 
 		return err;

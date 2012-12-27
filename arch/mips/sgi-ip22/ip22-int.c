@@ -2,7 +2,7 @@
  * ip22-int.c: Routines for generic manipulation of the INT[23] ASIC
  *             found on INDY and Indigo2 workstations.
  *
- * Copyright (C) 1996 David S. Miller (dm@engr.sgi.com)
+ * Copyright (C) 1996 David S. Miller (davem@davemloft.net)
  * Copyright (C) 1997, 1998 Ralf Baechle (ralf@gnu.org)
  * Copyright (C) 1999 Andrew R. Baker (andrewb@uab.edu)
  *                    - Indigo2 changes
@@ -31,88 +31,80 @@ static char lc3msk_to_irqnr[256];
 
 extern int ip22_eisa_init(void);
 
-static void enable_local0_irq(unsigned int irq)
+static void enable_local0_irq(struct irq_data *d)
 {
 	/* don't allow mappable interrupt to be enabled from setup_irq,
 	 * we have our own way to do so */
-	if (irq != SGI_MAP_0_IRQ)
-		sgint->imask0 |= (1 << (irq - SGINT_LOCAL0));
+	if (d->irq != SGI_MAP_0_IRQ)
+		sgint->imask0 |= (1 << (d->irq - SGINT_LOCAL0));
 }
 
-static void disable_local0_irq(unsigned int irq)
+static void disable_local0_irq(struct irq_data *d)
 {
-	sgint->imask0 &= ~(1 << (irq - SGINT_LOCAL0));
+	sgint->imask0 &= ~(1 << (d->irq - SGINT_LOCAL0));
 }
 
 static struct irq_chip ip22_local0_irq_type = {
 	.name		= "IP22 local 0",
-	.ack		= disable_local0_irq,
-	.mask		= disable_local0_irq,
-	.mask_ack	= disable_local0_irq,
-	.unmask		= enable_local0_irq,
+	.irq_mask	= disable_local0_irq,
+	.irq_unmask	= enable_local0_irq,
 };
 
-static void enable_local1_irq(unsigned int irq)
+static void enable_local1_irq(struct irq_data *d)
 {
 	/* don't allow mappable interrupt to be enabled from setup_irq,
 	 * we have our own way to do so */
-	if (irq != SGI_MAP_1_IRQ)
-		sgint->imask1 |= (1 << (irq - SGINT_LOCAL1));
+	if (d->irq != SGI_MAP_1_IRQ)
+		sgint->imask1 |= (1 << (d->irq - SGINT_LOCAL1));
 }
 
-static void disable_local1_irq(unsigned int irq)
+static void disable_local1_irq(struct irq_data *d)
 {
-	sgint->imask1 &= ~(1 << (irq - SGINT_LOCAL1));
+	sgint->imask1 &= ~(1 << (d->irq - SGINT_LOCAL1));
 }
 
 static struct irq_chip ip22_local1_irq_type = {
 	.name		= "IP22 local 1",
-	.ack		= disable_local1_irq,
-	.mask		= disable_local1_irq,
-	.mask_ack	= disable_local1_irq,
-	.unmask		= enable_local1_irq,
+	.irq_mask	= disable_local1_irq,
+	.irq_unmask	= enable_local1_irq,
 };
 
-static void enable_local2_irq(unsigned int irq)
+static void enable_local2_irq(struct irq_data *d)
 {
 	sgint->imask0 |= (1 << (SGI_MAP_0_IRQ - SGINT_LOCAL0));
-	sgint->cmeimask0 |= (1 << (irq - SGINT_LOCAL2));
+	sgint->cmeimask0 |= (1 << (d->irq - SGINT_LOCAL2));
 }
 
-static void disable_local2_irq(unsigned int irq)
+static void disable_local2_irq(struct irq_data *d)
 {
-	sgint->cmeimask0 &= ~(1 << (irq - SGINT_LOCAL2));
+	sgint->cmeimask0 &= ~(1 << (d->irq - SGINT_LOCAL2));
 	if (!sgint->cmeimask0)
 		sgint->imask0 &= ~(1 << (SGI_MAP_0_IRQ - SGINT_LOCAL0));
 }
 
 static struct irq_chip ip22_local2_irq_type = {
 	.name		= "IP22 local 2",
-	.ack		= disable_local2_irq,
-	.mask		= disable_local2_irq,
-	.mask_ack	= disable_local2_irq,
-	.unmask		= enable_local2_irq,
+	.irq_mask	= disable_local2_irq,
+	.irq_unmask	= enable_local2_irq,
 };
 
-static void enable_local3_irq(unsigned int irq)
+static void enable_local3_irq(struct irq_data *d)
 {
 	sgint->imask1 |= (1 << (SGI_MAP_1_IRQ - SGINT_LOCAL1));
-	sgint->cmeimask1 |= (1 << (irq - SGINT_LOCAL3));
+	sgint->cmeimask1 |= (1 << (d->irq - SGINT_LOCAL3));
 }
 
-static void disable_local3_irq(unsigned int irq)
+static void disable_local3_irq(struct irq_data *d)
 {
-	sgint->cmeimask1 &= ~(1 << (irq - SGINT_LOCAL3));
+	sgint->cmeimask1 &= ~(1 << (d->irq - SGINT_LOCAL3));
 	if (!sgint->cmeimask1)
 		sgint->imask1 &= ~(1 << (SGI_MAP_1_IRQ - SGINT_LOCAL1));
 }
 
 static struct irq_chip ip22_local3_irq_type = {
 	.name		= "IP22 local 3",
-	.ack		= disable_local3_irq,
-	.mask		= disable_local3_irq,
-	.mask_ack	= disable_local3_irq,
-	.unmask		= enable_local3_irq,
+	.irq_mask	= disable_local3_irq,
+	.irq_unmask	= enable_local3_irq,
 };
 
 static void indy_local0_irqdispatch(void)
@@ -163,32 +155,32 @@ static void __irq_entry indy_buserror_irq(void)
 
 static struct irqaction local0_cascade = {
 	.handler	= no_action,
-	.flags		= IRQF_DISABLED,
+	.flags		= IRQF_NO_THREAD,
 	.name		= "local0 cascade",
 };
 
 static struct irqaction local1_cascade = {
 	.handler	= no_action,
-	.flags		= IRQF_DISABLED,
+	.flags		= IRQF_NO_THREAD,
 	.name		= "local1 cascade",
 };
 
 static struct irqaction buserr = {
 	.handler	= no_action,
-	.flags		= IRQF_DISABLED,
+	.flags		= IRQF_NO_THREAD,
 	.name		= "Bus Error",
 };
 
 static struct irqaction map0_cascade = {
 	.handler	= no_action,
-	.flags		= IRQF_DISABLED,
+	.flags		= IRQF_NO_THREAD,
 	.name		= "mapable0 cascade",
 };
 
 #ifdef USE_LIO3_IRQ
 static struct irqaction map1_cascade = {
 	.handler	= no_action,
-	.flags		= IRQF_DISABLED,
+	.flags		= IRQF_NO_THREAD,
 	.name		= "mapable1 cascade",
 };
 #define SGI_INTERRUPTS	SGINT_END
@@ -320,7 +312,7 @@ void __init arch_init_irq(void)
 		else
 			handler		= &ip22_local3_irq_type;
 
-		set_irq_chip_and_handler(i, handler, handle_level_irq);
+		irq_set_chip_and_handler(i, handler, handle_level_irq);
 	}
 
 	/* vector handler. this register the IRQ as non-sharable */

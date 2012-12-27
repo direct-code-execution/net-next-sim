@@ -12,6 +12,12 @@
 #define	m5272sim_h
 /****************************************************************************/
 
+#define	CPU_NAME		"COLDFIRE(m5272)"
+#define	CPU_INSTR_PER_JIFFY	3
+#define	MCF_BUSCLK		MCF_CLK
+
+#include <asm/m52xxacr.h>
+
 /*
  *	Define the 5272 SIM register set addresses.
  */
@@ -62,6 +68,9 @@
 #define	MCFSIM_DCMR1		0x5c		/* DRAM 1 Mask reg (r/w) */
 #define	MCFSIM_DCCR1		0x63		/* DRAM 1 Control reg (r/w) */
 
+#define	MCFUART_BASE0		(MCF_MBAR + 0x100) /* Base address UART0 */
+#define	MCFUART_BASE1		(MCF_MBAR + 0x140) /* Base address UART1 */
+
 #define	MCFSIM_PACNT		(MCF_MBAR + 0x80) /* Port A Control (r/w) */
 #define	MCFSIM_PADDR		(MCF_MBAR + 0x84) /* Port A Direction (r/w) */
 #define	MCFSIM_PADAT		(MCF_MBAR + 0x86) /* Port A Data (r/w) */
@@ -71,6 +80,16 @@
 #define	MCFSIM_PCDDR		(MCF_MBAR + 0x94) /* Port C Direction (r/w) */
 #define	MCFSIM_PCDAT		(MCF_MBAR + 0x96) /* Port C Data (r/w) */
 #define	MCFSIM_PDCNT		(MCF_MBAR + 0x98) /* Port D Control (r/w) */
+
+#define	MCFDMA_BASE0		(MCF_MBAR + 0xe0) /* Base address DMA 0 */
+
+#define	MCFTIMER_BASE1		(MCF_MBAR + 0x200) /* Base address TIMER1 */
+#define	MCFTIMER_BASE2		(MCF_MBAR + 0x220) /* Base address TIMER2 */
+#define	MCFTIMER_BASE3		(MCF_MBAR + 0x240) /* Base address TIMER4 */
+#define	MCFTIMER_BASE4		(MCF_MBAR + 0x260) /* Base address TIMER3 */
+
+#define	MCFFEC_BASE0		(MCF_MBAR + 0x840) /* Base FEC ethernet */
+#define	MCFFEC_SIZE0		0x1d0
 
 /*
  *	Define system peripheral IRQ usage.
@@ -85,8 +104,8 @@
 #define	MCF_IRQ_TIMER2		70		/* Timer 2 */
 #define	MCF_IRQ_TIMER3		71		/* Timer 3 */
 #define	MCF_IRQ_TIMER4		72		/* Timer 4 */
-#define	MCF_IRQ_UART1		73		/* UART 1 */
-#define	MCF_IRQ_UART2		74		/* UART 2 */
+#define	MCF_IRQ_UART0		73		/* UART 0 */
+#define	MCF_IRQ_UART1		74		/* UART 1 */
 #define	MCF_IRQ_PLIP		75		/* PLIC 2Khz Periodic */
 #define	MCF_IRQ_PLIA		76		/* PLIC Asynchronous */
 #define	MCF_IRQ_USB0		77		/* USB Endpoint 0 */
@@ -98,9 +117,9 @@
 #define	MCF_IRQ_USB6		83		/* USB Endpoint 6 */
 #define	MCF_IRQ_USB7		84		/* USB Endpoint 7 */
 #define	MCF_IRQ_DMA		85		/* DMA Controller */
-#define	MCF_IRQ_ERX		86		/* Ethernet Receiver */
-#define	MCF_IRQ_ETX		87		/* Ethernet Transmitter */
-#define	MCF_IRQ_ENTC		88		/* Ethernet Non-Time Critical */
+#define	MCF_IRQ_FECRX0		86		/* Ethernet Receiver */
+#define	MCF_IRQ_FECTX0		87		/* Ethernet Transmitter */
+#define	MCF_IRQ_FECENTC0	88		/* Ethernet Non-Time Critical */
 #define	MCF_IRQ_QSPI		89		/* Queued Serial Interface */
 #define	MCF_IRQ_EINT5		90		/* External Interrupt 5 */
 #define	MCF_IRQ_EINT6		91		/* External Interrupt 6 */

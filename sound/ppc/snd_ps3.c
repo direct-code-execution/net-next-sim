@@ -24,6 +24,7 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/module.h>
 
 #include <sound/asound.h>
 #include <sound/control.h>
@@ -51,7 +52,7 @@ static struct snd_ps3_card_info the_card;
 static int snd_ps3_start_delay = CONFIG_SND_PS3_DEFAULT_START_DELAY;
 
 module_param_named(start_delay, snd_ps3_start_delay, uint, 0644);
-MODULE_PARM_DESC(start_delay, "time to insert silent data in milisec");
+MODULE_PARM_DESC(start_delay, "time to insert silent data in ms");
 
 static int index = SNDRV_DEFAULT_IDX1;
 static char *id = SNDRV_DEFAULT_STR1;
@@ -358,7 +359,7 @@ static irqreturn_t snd_ps3_interrupt(int irq, void *dev_id)
 		 * filling dummy data, serial automatically start to
 		 * consume them and then will generate normal buffer
 		 * empty interrupts.
-		 * If both buffer underflow and buffer empty are occured,
+		 * If both buffer underflow and buffer empty are occurred,
 		 * it is better to do nomal data transfer than empty one
 		 */
 		snd_ps3_program_dma(card,
@@ -845,7 +846,7 @@ static int __devinit snd_ps3_allocate_irq(void)
 		return ret;
 	}
 
-	ret = request_irq(the_card.irq_no, snd_ps3_interrupt, IRQF_DISABLED,
+	ret = request_irq(the_card.irq_no, snd_ps3_interrupt, 0,
 			  SND_PS3_DRIVER_NAME, &the_card);
 	if (ret) {
 		pr_info("%s: request_irq failed (%d)\n", __func__, ret);
@@ -875,7 +876,7 @@ static void __devinit snd_ps3_audio_set_base_addr(uint64_t ioaddr_start)
 		(0x0fUL << 12) |
 		(PS3_AUDIO_IOID);
 
-	ret = lv1_gpu_attribute(0x100, 0x007, val, 0, 0);
+	ret = lv1_gpu_attribute(0x100, 0x007, val);
 	if (ret)
 		pr_info("%s: gpu_attribute failed %d\n", __func__,
 			ret);

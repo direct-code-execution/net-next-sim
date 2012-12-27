@@ -10,7 +10,7 @@
 #include <linux/bitops.h>
 #include <linux/lockdep.h>
 #include <linux/threads.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 
 struct workqueue_struct;
 
@@ -127,11 +127,19 @@ struct execute_work {
 	.timer = TIMER_INITIALIZER(NULL, 0, 0),			\
 	}
 
+#define __DEFERRED_WORK_INITIALIZER(n, f) {			\
+	.work = __WORK_INITIALIZER((n).work, (f)),		\
+	.timer = TIMER_DEFERRED_INITIALIZER(NULL, 0, 0),	\
+	}
+
 #define DECLARE_WORK(n, f)					\
 	struct work_struct n = __WORK_INITIALIZER(n, f)
 
 #define DECLARE_DELAYED_WORK(n, f)				\
 	struct delayed_work n = __DELAYED_WORK_INITIALIZER(n, f)
+
+#define DECLARE_DEFERRED_WORK(n, f)				\
+	struct delayed_work n = __DEFERRED_WORK_INITIALIZER(n, f)
 
 /*
  * initialize a work item's function pointer
@@ -190,7 +198,7 @@ static inline unsigned int work_static(struct work_struct *work) { return 0; }
 		__INIT_WORK((_work), (_func), 0);		\
 	} while (0)
 
-#define INIT_WORK_ON_STACK(_work, _func)			\
+#define INIT_WORK_ONSTACK(_work, _func)				\
 	do {							\
 		__INIT_WORK((_work), (_func), 1);		\
 	} while (0)
@@ -201,9 +209,9 @@ static inline unsigned int work_static(struct work_struct *work) { return 0; }
 		init_timer(&(_work)->timer);			\
 	} while (0)
 
-#define INIT_DELAYED_WORK_ON_STACK(_work, _func)		\
+#define INIT_DELAYED_WORK_ONSTACK(_work, _func)			\
 	do {							\
-		INIT_WORK_ON_STACK(&(_work)->work, (_func));	\
+		INIT_WORK_ONSTACK(&(_work)->work, (_func));	\
 		init_timer_on_stack(&(_work)->timer);		\
 	} while (0)
 
@@ -242,12 +250,13 @@ static inline unsigned int work_static(struct work_struct *work) { return 0; }
 enum {
 	WQ_NON_REENTRANT	= 1 << 0, /* guarantee non-reentrance */
 	WQ_UNBOUND		= 1 << 1, /* not bound to any cpu */
-	WQ_FREEZEABLE		= 1 << 2, /* freeze during suspend */
-	WQ_RESCUER		= 1 << 3, /* has an rescue worker */
+	WQ_FREEZABLE		= 1 << 2, /* freeze during suspend */
+	WQ_MEM_RECLAIM		= 1 << 3, /* may be used for memory reclaim */
 	WQ_HIGHPRI		= 1 << 4, /* high priority */
 	WQ_CPU_INTENSIVE	= 1 << 5, /* cpu instensive workqueue */
 
-	WQ_DYING		= 1 << 6, /* internal: workqueue is dying */
+	WQ_DRAINING		= 1 << 6, /* internal: workqueue is draining */
+	WQ_RESCUER		= 1 << 7, /* internal: workqueue has rescuer */
 
 	WQ_MAX_ACTIVE		= 512,	  /* I like 512, better ideas? */
 	WQ_MAX_UNBOUND_PER_CPU	= 4,	  /* 4 * #cpus for unbound wq */
@@ -277,41 +286,82 @@ enum {
  * any specific CPU, not concurrency managed, and all queued works are
  * executed immediately as long as max_active limit is not reached and
  * resources are available.
+ *
+ * system_freezable_wq is equivalent to system_wq except that it's
+ * freezable.
+ *
+ * system_nrt_freezable_wq is equivalent to system_nrt_wq except that
+ * it's freezable.
  */
 extern struct workqueue_struct *system_wq;
 extern struct workqueue_struct *system_long_wq;
 extern struct workqueue_struct *system_nrt_wq;
 extern struct workqueue_struct *system_unbound_wq;
+extern struct workqueue_struct *system_freezable_wq;
+extern struct workqueue_struct *system_nrt_freezable_wq;
 
 extern struct workqueue_struct *
-__alloc_workqueue_key(const char *name, unsigned int flags, int max_active,
-		      struct lock_class_key *key, const char *lock_name);
+__alloc_workqueue_key(const char *fmt, unsigned int flags, int max_active,
+	struct lock_class_key *key, const char *lock_name, ...) __printf(1, 6);
 
+/**
+ * alloc_workqueue - allocate a workqueue
+ * @fmt: printf format for the name of the workqueue
+ * @flags: WQ_* flags
+ * @max_active: max in-flight work items, 0 for default
+ * @args: args for @fmt
+ *
+ * Allocate a workqueue with the specified parameters.  For detailed
+ * information on WQ_* flags, please refer to Documentation/workqueue.txt.
+ *
+ * The __lock_name macro dance is to guarantee that single lock_class_key
+ * doesn't end up with different namesm, which isn't allowed by lockdep.
+ *
+ * RETURNS:
+ * Pointer to the allocated workqueue on success, %NULL on failure.
+ */
 #ifdef CONFIG_LOCKDEP
-#define alloc_workqueue(name, flags, max_active)		\
+#define alloc_workqueue(fmt, flags, max_active, args...)	\
 ({								\
 	static struct lock_class_key __key;			\
 	const char *__lock_name;				\
 								\
-	if (__builtin_constant_p(name))				\
-		__lock_name = (name);				\
+	if (__builtin_constant_p(fmt))				\
+		__lock_name = (fmt);				\
 	else							\
-		__lock_name = #name;				\
+		__lock_name = #fmt;				\
 								\
-	__alloc_workqueue_key((name), (flags), (max_active),	\
-			      &__key, __lock_name);		\
+	__alloc_workqueue_key((fmt), (flags), (max_active),	\
+			      &__key, __lock_name, ##args);	\
 })
 #else
-#define alloc_workqueue(name, flags, max_active)		\
-	__alloc_workqueue_key((name), (flags), (max_active), NULL, NULL)
+#define alloc_workqueue(fmt, flags, max_active, args...)	\
+	__alloc_workqueue_key((fmt), (flags), (max_active),	\
+			      NULL, NULL, ##args)
 #endif
 
+/**
+ * alloc_ordered_workqueue - allocate an ordered workqueue
+ * @fmt: printf format for the name of the workqueue
+ * @flags: WQ_* flags (only WQ_FREEZABLE and WQ_MEM_RECLAIM are meaningful)
+ * @args: args for @fmt
+ *
+ * Allocate an ordered workqueue.  An ordered workqueue executes at
+ * most one work item at any given time in the queued order.  They are
+ * implemented as unbound workqueues with @max_active of one.
+ *
+ * RETURNS:
+ * Pointer to the allocated workqueue on success, %NULL on failure.
+ */
+#define alloc_ordered_workqueue(fmt, flags, args...)		\
+	alloc_workqueue(fmt, WQ_UNBOUND | (flags), 1, ##args)
+
 #define create_workqueue(name)					\
-	alloc_workqueue((name), WQ_RESCUER, 1)
-#define create_freezeable_workqueue(name)			\
-	alloc_workqueue((name), WQ_FREEZEABLE | WQ_UNBOUND | WQ_RESCUER, 1)
+	alloc_workqueue((name), WQ_MEM_RECLAIM, 1)
+#define create_freezable_workqueue(name)			\
+	alloc_workqueue((name), WQ_FREEZABLE | WQ_UNBOUND | WQ_MEM_RECLAIM, 1)
 #define create_singlethread_workqueue(name)			\
-	alloc_workqueue((name), WQ_UNBOUND | WQ_RESCUER, 1)
+	alloc_workqueue((name), WQ_UNBOUND | WQ_MEM_RECLAIM, 1)
 
 extern void destroy_workqueue(struct workqueue_struct *wq);
 
@@ -324,8 +374,8 @@ extern int queue_delayed_work_on(int cpu, struct workqueue_struct *wq,
 			struct delayed_work *work, unsigned long delay);
 
 extern void flush_workqueue(struct workqueue_struct *wq);
+extern void drain_workqueue(struct workqueue_struct *wq);
 extern void flush_scheduled_work(void);
-extern void flush_delayed_work(struct delayed_work *work);
 
 extern int schedule_work(struct work_struct *work);
 extern int schedule_work_on(int cpu, struct work_struct *work);
@@ -337,8 +387,13 @@ extern int keventd_up(void);
 
 int execute_in_process_context(work_func_t fn, struct execute_work *);
 
-extern int flush_work(struct work_struct *work);
-extern int cancel_work_sync(struct work_struct *work);
+extern bool flush_work(struct work_struct *work);
+extern bool flush_work_sync(struct work_struct *work);
+extern bool cancel_work_sync(struct work_struct *work);
+
+extern bool flush_delayed_work(struct delayed_work *dwork);
+extern bool flush_delayed_work_sync(struct delayed_work *work);
+extern bool cancel_delayed_work_sync(struct delayed_work *dwork);
 
 extern void workqueue_set_max_active(struct workqueue_struct *wq,
 				     int max_active);
@@ -352,9 +407,9 @@ extern unsigned int work_busy(struct work_struct *work);
  * it returns 1 and the work doesn't re-arm itself. Run flush_workqueue() or
  * cancel_work_sync() to wait on it.
  */
-static inline int cancel_delayed_work(struct delayed_work *work)
+static inline bool cancel_delayed_work(struct delayed_work *work)
 {
-	int ret;
+	bool ret;
 
 	ret = del_timer_sync(&work->timer);
 	if (ret)
@@ -367,31 +422,14 @@ static inline int cancel_delayed_work(struct delayed_work *work)
  * if it returns 0 the timer function may be running and the queueing is in
  * progress.
  */
-static inline int __cancel_delayed_work(struct delayed_work *work)
+static inline bool __cancel_delayed_work(struct delayed_work *work)
 {
-	int ret;
+	bool ret;
 
 	ret = del_timer(&work->timer);
 	if (ret)
 		work_clear_pending(&work->work);
 	return ret;
-}
-
-extern int cancel_delayed_work_sync(struct delayed_work *work);
-
-/* Obsolete. use cancel_delayed_work_sync() */
-static inline
-void cancel_rearming_delayed_workqueue(struct workqueue_struct *wq,
-					struct delayed_work *work)
-{
-	cancel_delayed_work_sync(work);
-}
-
-/* Obsolete. use cancel_delayed_work_sync() */
-static inline
-void cancel_rearming_delayed_work(struct delayed_work *work)
-{
-	cancel_delayed_work_sync(work);
 }
 
 #ifndef CONFIG_SMP
@@ -408,9 +446,5 @@ extern void freeze_workqueues_begin(void);
 extern bool freeze_workqueues_busy(void);
 extern void thaw_workqueues(void);
 #endif /* CONFIG_FREEZER */
-
-#ifdef CONFIG_LOCKDEP
-int in_workqueue_context(struct workqueue_struct *wq);
-#endif
 
 #endif

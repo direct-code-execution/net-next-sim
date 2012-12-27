@@ -1,12 +1,15 @@
-/**
-  * This file contains the major functions in WLAN
-  * driver. It includes init, exit, open, close and main
-  * thread etc..
-  */
+/*
+ * This file contains the major functions in WLAN
+ * driver. It includes init, exit, open, close and main
+ * thread etc..
+ */
 
-#include <linux/moduleparam.h>
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
+#include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/etherdevice.h>
+#include <linux/hardirq.h>
 #include <linux/netdevice.h>
 #include <linux/if_arp.h>
 #include <linux/kthread.h>
@@ -20,6 +23,7 @@
 #include "cfg.h"
 #include "debugfs.h"
 #include "cmd.h"
+#include "mesh.h"
 
 #define DRIVER_RELEASE_VERSION "323.p0"
 const char lbs_driver_version[] = "COMM-USB8388-" DRIVER_RELEASE_VERSION
@@ -34,19 +38,25 @@ unsigned int lbs_debug;
 EXPORT_SYMBOL_GPL(lbs_debug);
 module_param_named(libertas_debug, lbs_debug, int, 0644);
 
+unsigned int lbs_disablemesh;
+EXPORT_SYMBOL_GPL(lbs_disablemesh);
+module_param_named(libertas_disablemesh, lbs_disablemesh, int, 0644);
 
-/* This global structure is used to send the confirm_sleep command as
- * fast as possible down to the firmware. */
+
+/*
+ * This global structure is used to send the confirm_sleep command as
+ * fast as possible down to the firmware.
+ */
 struct cmd_confirm_sleep confirm_sleep;
 
 
-/**
+/*
  * the table to keep region code
  */
 u16 lbs_region_code_to_index[MRVDRV_MAX_REGION_CODE] =
     { 0x10, 0x20, 0x30, 0x31, 0x32, 0x40 };
 
-/**
+/*
  * FW rate table.  FW refers to rates by their index in this table, not by the
  * rate value itself.  Values of 0x00 are
  * reserved positions.
@@ -57,10 +67,10 @@ static u8 fw_data_rates[MAX_RATES] =
 };
 
 /**
- *  @brief use index to get the data rate
+ *  lbs_fw_index_to_data_rate - use index to get the data rate
  *
- *  @param idx                The index of data rate
- *  @return 	   		data rate or 0
+ *  @idx:	The index of data rate
+ *  returns:	data rate or 0
  */
 u32 lbs_fw_index_to_data_rate(u8 idx)
 {
@@ -70,10 +80,10 @@ u32 lbs_fw_index_to_data_rate(u8 idx)
 }
 
 /**
- *  @brief use rate to get the index
+ *  lbs_data_rate_to_fw_index - use rate to get the index
  *
- *  @param rate                 data rate
- *  @return 	   		index or 0
+ *  @rate:	data rate
+ *  returns:	index or 0
  */
 u8 lbs_data_rate_to_fw_index(u32 rate)
 {
@@ -89,12 +99,75 @@ u8 lbs_data_rate_to_fw_index(u32 rate)
 	return 0;
 }
 
+int lbs_set_iface_type(struct lbs_private *priv, enum nl80211_iftype type)
+{
+	int ret = 0;
+
+	switch (type) {
+	case NL80211_IFTYPE_MONITOR:
+		ret = lbs_set_monitor_mode(priv, 1);
+		break;
+	case NL80211_IFTYPE_STATION:
+		if (priv->wdev->iftype == NL80211_IFTYPE_MONITOR)
+			ret = lbs_set_monitor_mode(priv, 0);
+		if (!ret)
+			ret = lbs_set_snmp_mib(priv, SNMP_MIB_OID_BSS_TYPE, 1);
+		break;
+	case NL80211_IFTYPE_ADHOC:
+		if (priv->wdev->iftype == NL80211_IFTYPE_MONITOR)
+			ret = lbs_set_monitor_mode(priv, 0);
+		if (!ret)
+			ret = lbs_set_snmp_mib(priv, SNMP_MIB_OID_BSS_TYPE, 2);
+		break;
+	default:
+		ret = -ENOTSUPP;
+	}
+	return ret;
+}
+
+int lbs_start_iface(struct lbs_private *priv)
+{
+	struct cmd_ds_802_11_mac_address cmd;
+	int ret;
+
+	if (priv->power_restore) {
+		ret = priv->power_restore(priv);
+		if (ret)
+			return ret;
+	}
+
+	cmd.hdr.size = cpu_to_le16(sizeof(cmd));
+	cmd.action = cpu_to_le16(CMD_ACT_SET);
+	memcpy(cmd.macadd, priv->current_addr, ETH_ALEN);
+
+	ret = lbs_cmd_with_response(priv, CMD_802_11_MAC_ADDRESS, &cmd);
+	if (ret) {
+		lbs_deb_net("set MAC address failed\n");
+		goto err;
+	}
+
+	ret = lbs_set_iface_type(priv, priv->wdev->iftype);
+	if (ret) {
+		lbs_deb_net("set iface type failed\n");
+		goto err;
+	}
+
+	lbs_update_channel(priv);
+
+	priv->iface_running = true;
+	return 0;
+
+err:
+	if (priv->power_save)
+		priv->power_save(priv);
+	return ret;
+}
 
 /**
- *  @brief This function opens the ethX interface
+ *  lbs_dev_open - open the ethX interface
  *
- *  @param dev     A pointer to net_device structure
- *  @return 	   0 or -EBUSY if monitor mode active
+ *  @dev:	A pointer to &net_device structure
+ *  returns:	0 or -EBUSY if monitor mode active
  */
 static int lbs_dev_open(struct net_device *dev)
 {
@@ -102,27 +175,70 @@ static int lbs_dev_open(struct net_device *dev)
 	int ret = 0;
 
 	lbs_deb_enter(LBS_DEB_NET);
+	if (!priv->iface_running) {
+		ret = lbs_start_iface(priv);
+		if (ret)
+			goto out;
+	}
 
 	spin_lock_irq(&priv->driver_lock);
 
-	if (priv->connect_status == LBS_CONNECTED)
-		netif_carrier_on(dev);
-	else
-		netif_carrier_off(dev);
+	netif_carrier_off(dev);
 
 	if (!priv->tx_pending_len)
 		netif_wake_queue(dev);
 
 	spin_unlock_irq(&priv->driver_lock);
+
+out:
 	lbs_deb_leave_args(LBS_DEB_NET, "ret %d", ret);
 	return ret;
 }
 
+static bool lbs_command_queue_empty(struct lbs_private *priv)
+{
+	unsigned long flags;
+	bool ret;
+	spin_lock_irqsave(&priv->driver_lock, flags);
+	ret = priv->cur_cmd == NULL && list_empty(&priv->cmdpendingq);
+	spin_unlock_irqrestore(&priv->driver_lock, flags);
+	return ret;
+}
+
+int lbs_stop_iface(struct lbs_private *priv)
+{
+	unsigned long flags;
+	int ret = 0;
+
+	lbs_deb_enter(LBS_DEB_MAIN);
+
+	spin_lock_irqsave(&priv->driver_lock, flags);
+	priv->iface_running = false;
+	kfree_skb(priv->currenttxskb);
+	priv->currenttxskb = NULL;
+	priv->tx_pending_len = 0;
+	spin_unlock_irqrestore(&priv->driver_lock, flags);
+
+	cancel_work_sync(&priv->mcast_work);
+	del_timer_sync(&priv->tx_lockup_timer);
+
+	/* Disable command processing, and wait for all commands to complete */
+	lbs_deb_main("waiting for commands to complete\n");
+	wait_event(priv->waitq, lbs_command_queue_empty(priv));
+	lbs_deb_main("all commands completed\n");
+
+	if (priv->power_save)
+		ret = priv->power_save(priv);
+
+	lbs_deb_leave(LBS_DEB_MAIN);
+	return ret;
+}
+
 /**
- *  @brief This function closes the ethX interface
+ *  lbs_eth_stop - close the ethX interface
  *
- *  @param dev     A pointer to net_device structure
- *  @return 	   0
+ *  @dev:	A pointer to &net_device structure
+ *  returns:	0
  */
 static int lbs_eth_stop(struct net_device *dev)
 {
@@ -130,36 +246,25 @@ static int lbs_eth_stop(struct net_device *dev)
 
 	lbs_deb_enter(LBS_DEB_NET);
 
+	if (priv->connect_status == LBS_CONNECTED)
+		lbs_disconnect(priv, WLAN_REASON_DEAUTH_LEAVING);
+
 	spin_lock_irq(&priv->driver_lock);
 	netif_stop_queue(dev);
 	spin_unlock_irq(&priv->driver_lock);
 
-	schedule_work(&priv->mcast_work);
+	lbs_update_mcast(priv);
+	cancel_delayed_work_sync(&priv->scan_work);
+	if (priv->scan_req)
+		lbs_scan_done(priv);
+
+	netif_carrier_off(priv->dev);
+
+	if (!lbs_iface_active(priv))
+		lbs_stop_iface(priv);
 
 	lbs_deb_leave(LBS_DEB_NET);
 	return 0;
-}
-
-static void lbs_tx_timeout(struct net_device *dev)
-{
-	struct lbs_private *priv = dev->ml_priv;
-
-	lbs_deb_enter(LBS_DEB_TX);
-
-	lbs_pr_err("tx watch dog timeout\n");
-
-	dev->trans_start = jiffies; /* prevent tx timeout */
-
-	if (priv->currenttxskb)
-		lbs_send_tx_feedback(priv, 0);
-
-	/* XX: Shouldn't we also call into the hw-specific driver
-	   to kick it somehow? */
-	lbs_host_to_card_done(priv);
-
-	/* FIXME: reset the card */
-
-	lbs_deb_leave(LBS_DEB_TX);
 }
 
 void lbs_host_to_card_done(struct lbs_private *priv)
@@ -169,13 +274,14 @@ void lbs_host_to_card_done(struct lbs_private *priv)
 	lbs_deb_enter(LBS_DEB_THREAD);
 
 	spin_lock_irqsave(&priv->driver_lock, flags);
+	del_timer(&priv->tx_lockup_timer);
 
 	priv->dnld_sent = DNLD_RES_RECEIVED;
 
 	/* Wake main thread if commands are pending */
 	if (!priv->cur_cmd || priv->tx_pending_len > 0) {
 		if (!priv->wakeup_dev_required)
-			wake_up_interruptible(&priv->waitq);
+			wake_up(&priv->waitq);
 	}
 
 	spin_unlock_irqrestore(&priv->driver_lock, flags);
@@ -188,29 +294,24 @@ int lbs_set_mac_address(struct net_device *dev, void *addr)
 	int ret = 0;
 	struct lbs_private *priv = dev->ml_priv;
 	struct sockaddr *phwaddr = addr;
-	struct cmd_ds_802_11_mac_address cmd;
 
 	lbs_deb_enter(LBS_DEB_NET);
 
+	/*
+	 * Can only set MAC address when all interfaces are down, to be written
+	 * to the hardware when one of them is brought up.
+	 */
+	if (lbs_iface_active(priv))
+		return -EBUSY;
+
 	/* In case it was called from the mesh device */
 	dev = priv->dev;
-
-	cmd.hdr.size = cpu_to_le16(sizeof(cmd));
-	cmd.action = cpu_to_le16(CMD_ACT_SET);
-	memcpy(cmd.macadd, phwaddr->sa_data, ETH_ALEN);
-
-	ret = lbs_cmd_with_response(priv, CMD_802_11_MAC_ADDRESS, &cmd);
-	if (ret) {
-		lbs_deb_net("set MAC address failed\n");
-		goto done;
-	}
 
 	memcpy(priv->current_addr, phwaddr->sa_data, ETH_ALEN);
 	memcpy(dev->dev_addr, phwaddr->sa_data, ETH_ALEN);
 	if (priv->mesh_dev)
 		memcpy(priv->mesh_dev->dev_addr, phwaddr->sa_data, ETH_ALEN);
 
-done:
 	lbs_deb_leave_args(LBS_DEB_NET, "ret %d", ret);
 	return ret;
 }
@@ -264,18 +365,18 @@ static int lbs_add_mcast_addrs(struct cmd_ds_mac_multicast_adr *cmd,
 	return i;
 }
 
-static void lbs_set_mcast_worker(struct work_struct *work)
+void lbs_update_mcast(struct lbs_private *priv)
 {
-	struct lbs_private *priv = container_of(work, struct lbs_private, mcast_work);
 	struct cmd_ds_mac_multicast_adr mcast_cmd;
-	int dev_flags;
+	int dev_flags = 0;
 	int nr_addrs;
 	int old_mac_control = priv->mac_control;
 
 	lbs_deb_enter(LBS_DEB_NET);
 
-	dev_flags = priv->dev->flags;
-	if (priv->mesh_dev)
+	if (netif_running(priv->dev))
+		dev_flags |= priv->dev->flags;
+	if (priv->mesh_dev && netif_running(priv->mesh_dev))
 		dev_flags |= priv->mesh_dev->flags;
 
 	if (dev_flags & IFF_PROMISC) {
@@ -321,6 +422,12 @@ static void lbs_set_mcast_worker(struct work_struct *work)
 	lbs_deb_leave(LBS_DEB_NET);
 }
 
+static void lbs_set_mcast_worker(struct work_struct *work)
+{
+	struct lbs_private *priv = container_of(work, struct lbs_private, mcast_work);
+	lbs_update_mcast(priv);
+}
+
 void lbs_set_multicast_list(struct net_device *dev)
 {
 	struct lbs_private *priv = dev->ml_priv;
@@ -329,12 +436,12 @@ void lbs_set_multicast_list(struct net_device *dev)
 }
 
 /**
- *  @brief This function handles the major jobs in the LBS driver.
+ *  lbs_thread - handles the major jobs in the LBS driver.
  *  It handles all events generated by firmware, RX data received
  *  from firmware and TX data sent from kernel.
  *
- *  @param data    A pointer to lbs_thread structure
- *  @return 	   0
+ *  @data:	A pointer to &lbs_thread structure
+ *  returns:	0
  */
 static int lbs_thread(void *data)
 {
@@ -455,8 +562,8 @@ static int lbs_thread(void *data)
 		if (priv->cmd_timed_out && priv->cur_cmd) {
 			struct cmd_ctrl_node *cmdnode = priv->cur_cmd;
 
-			lbs_pr_info("Timeout submitting command 0x%04x\n",
-				le16_to_cpu(cmdnode->cmdbuf->command));
+			netdev_info(dev, "Timeout submitting command 0x%04x\n",
+				    le16_to_cpu(cmdnode->cmdbuf->command));
 			lbs_complete_command(priv, cmdnode, -ETIMEDOUT);
 			if (priv->reset_card)
 				priv->reset_card(priv);
@@ -483,8 +590,8 @@ static int lbs_thread(void *data)
 				 * after firmware fixes it
 				 */
 				priv->psstate = PS_STATE_AWAKE;
-				lbs_pr_alert("ignore PS_SleepConfirm in "
-					"non-connected state\n");
+				netdev_alert(dev,
+					     "ignore PS_SleepConfirm in non-connected state\n");
 			}
 		}
 
@@ -510,6 +617,9 @@ static int lbs_thread(void *data)
 			if (ret) {
 				lbs_deb_tx("host_to_card failed %d\n", ret);
 				priv->dnld_sent = DNLD_RES_RECEIVED;
+			} else {
+				mod_timer(&priv->tx_lockup_timer,
+					  jiffies + (HZ * 5));
 			}
 			priv->tx_pending_len = 0;
 			if (!priv->currenttxskb) {
@@ -518,7 +628,7 @@ static int lbs_thread(void *data)
 				if (priv->connect_status == LBS_CONNECTED)
 					netif_wake_queue(priv->dev);
 				if (priv->mesh_dev &&
-				    lbs_mesh_connected(priv))
+				    netif_running(priv->mesh_dev))
 					netif_wake_queue(priv->mesh_dev);
 			}
 		}
@@ -526,10 +636,48 @@ static int lbs_thread(void *data)
 	}
 
 	del_timer(&priv->command_timer);
+	del_timer(&priv->tx_lockup_timer);
 	del_timer(&priv->auto_deepsleep_timer);
 
 	lbs_deb_leave(LBS_DEB_THREAD);
 	return 0;
+}
+
+/**
+ * lbs_setup_firmware - gets the HW spec from the firmware and sets
+ *        some basic parameters
+ *
+ *  @priv:	A pointer to &struct lbs_private structure
+ *  returns:	0 or -1
+ */
+static int lbs_setup_firmware(struct lbs_private *priv)
+{
+	int ret = -1;
+	s16 curlevel = 0, minlevel = 0, maxlevel = 0;
+
+	lbs_deb_enter(LBS_DEB_FW);
+
+	/* Read MAC address from firmware */
+	memset(priv->current_addr, 0xff, ETH_ALEN);
+	ret = lbs_update_hw_spec(priv);
+	if (ret)
+		goto done;
+
+	/* Read power levels if available */
+	ret = lbs_get_tx_power(priv, &curlevel, &minlevel, &maxlevel);
+	if (ret == 0) {
+		priv->txpower_cur = curlevel;
+		priv->txpower_min = minlevel;
+		priv->txpower_max = maxlevel;
+	}
+
+	/* Send cmd to FW to enable 11D function */
+	ret = lbs_set_snmp_mib(priv, SNMP_MIB_OID_11D_ENABLE, 1);
+
+	lbs_set_mac_control(priv);
+done:
+	lbs_deb_leave_args(LBS_DEB_FW, "ret %d", ret);
+	return ret;
 }
 
 int lbs_suspend(struct lbs_private *priv)
@@ -541,7 +689,8 @@ int lbs_suspend(struct lbs_private *priv)
 	if (priv->is_deep_sleep) {
 		ret = lbs_set_deep_sleep(priv, 0);
 		if (ret) {
-			lbs_pr_err("deep sleep cancellation failed: %d\n", ret);
+			netdev_err(priv->dev,
+				   "deep sleep cancellation failed: %d\n", ret);
 			return ret;
 		}
 		priv->deep_sleep_required = 1;
@@ -574,8 +723,12 @@ int lbs_resume(struct lbs_private *priv)
 		priv->deep_sleep_required = 0;
 		ret = lbs_set_deep_sleep(priv, 1);
 		if (ret)
-			lbs_pr_err("deep sleep activation failed: %d\n", ret);
+			netdev_err(priv->dev,
+				   "deep sleep activation failed: %d\n", ret);
 	}
+
+	if (priv->setup_fw_on_resume)
+		ret = lbs_setup_firmware(priv);
 
 	lbs_deb_leave_args(LBS_DEB_FW, "ret %d", ret);
 	return ret;
@@ -583,45 +736,10 @@ int lbs_resume(struct lbs_private *priv)
 EXPORT_SYMBOL_GPL(lbs_resume);
 
 /**
- * @brief This function gets the HW spec from the firmware and sets
- *        some basic parameters.
+ * lbs_cmd_timeout_handler - handles the timeout of command sending.
+ * It will re-send the same command again.
  *
- *  @param priv    A pointer to struct lbs_private structure
- *  @return 	   0 or -1
- */
-static int lbs_setup_firmware(struct lbs_private *priv)
-{
-	int ret = -1;
-	s16 curlevel = 0, minlevel = 0, maxlevel = 0;
-
-	lbs_deb_enter(LBS_DEB_FW);
-
-	/* Read MAC address from firmware */
-	memset(priv->current_addr, 0xff, ETH_ALEN);
-	ret = lbs_update_hw_spec(priv);
-	if (ret)
-		goto done;
-
-	/* Read power levels if available */
-	ret = lbs_get_tx_power(priv, &curlevel, &minlevel, &maxlevel);
-	if (ret == 0) {
-		priv->txpower_cur = curlevel;
-		priv->txpower_min = minlevel;
-		priv->txpower_max = maxlevel;
-	}
-
-	/* Send cmd to FW to enable 11D function */
-	ret = lbs_set_snmp_mib(priv, SNMP_MIB_OID_11D_ENABLE, 1);
-
-	lbs_set_mac_control(priv);
-done:
-	lbs_deb_leave_args(LBS_DEB_FW, "ret %d", ret);
-	return ret;
-}
-
-/**
- *  This function handles the timeout of command sending.
- *  It will re-send the same command again.
+ * @data: &struct lbs_private pointer
  */
 static void lbs_cmd_timeout_handler(unsigned long data)
 {
@@ -634,19 +752,55 @@ static void lbs_cmd_timeout_handler(unsigned long data)
 	if (!priv->cur_cmd)
 		goto out;
 
-	lbs_pr_info("command 0x%04x timed out\n",
-		le16_to_cpu(priv->cur_cmd->cmdbuf->command));
+	netdev_info(priv->dev, "command 0x%04x timed out\n",
+		    le16_to_cpu(priv->cur_cmd->cmdbuf->command));
 
 	priv->cmd_timed_out = 1;
-	wake_up_interruptible(&priv->waitq);
+
+	/*
+	 * If the device didn't even acknowledge the command, reset the state
+	 * so that we don't block all future commands due to this one timeout.
+	 */
+	if (priv->dnld_sent == DNLD_CMD_SENT)
+		priv->dnld_sent = DNLD_RES_RECEIVED;
+
+	wake_up(&priv->waitq);
 out:
 	spin_unlock_irqrestore(&priv->driver_lock, flags);
 	lbs_deb_leave(LBS_DEB_CMD);
 }
 
 /**
- *  This function put the device back to deep sleep mode when timer expires
- *  and no activity (command, event, data etc.) is detected.
+ * lbs_tx_lockup_handler - handles the timeout of the passing of TX frames
+ * to the hardware. This is known to frequently happen with SD8686 when
+ * waking up after a Wake-on-WLAN-triggered resume.
+ *
+ * @data: &struct lbs_private pointer
+ */
+static void lbs_tx_lockup_handler(unsigned long data)
+{
+	struct lbs_private *priv = (struct lbs_private *)data;
+	unsigned long flags;
+
+	lbs_deb_enter(LBS_DEB_TX);
+	spin_lock_irqsave(&priv->driver_lock, flags);
+
+	netdev_info(priv->dev, "TX lockup detected\n");
+	if (priv->reset_card)
+		priv->reset_card(priv);
+
+	priv->dnld_sent = DNLD_RES_RECEIVED;
+	wake_up_interruptible(&priv->waitq);
+
+	spin_unlock_irqrestore(&priv->driver_lock, flags);
+	lbs_deb_leave(LBS_DEB_TX);
+}
+
+/**
+ * auto_deepsleep_timer_fn - put the device back to deep sleep mode when
+ * timer expires and no activity (command, event, data etc.) is detected.
+ * @data:	&struct lbs_private pointer
+ * returns:	N/A
  */
 static void auto_deepsleep_timer_fn(unsigned long data)
 {
@@ -728,6 +882,8 @@ static int lbs_init_adapter(struct lbs_private *priv)
 
 	setup_timer(&priv->command_timer, lbs_cmd_timeout_handler,
 		(unsigned long)priv);
+	setup_timer(&priv->tx_lockup_timer, lbs_tx_lockup_handler,
+		(unsigned long)priv);
 	setup_timer(&priv->auto_deepsleep_timer, auto_deepsleep_timer_fn,
 			(unsigned long)priv);
 
@@ -738,7 +894,7 @@ static int lbs_init_adapter(struct lbs_private *priv)
 
 	/* Allocate the command buffers */
 	if (lbs_allocate_cmd_buffer(priv)) {
-		lbs_pr_err("Out of memory allocating command buffers\n");
+		pr_err("Out of memory allocating command buffers\n");
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -748,7 +904,7 @@ static int lbs_init_adapter(struct lbs_private *priv)
 	/* Create the event FIFO */
 	ret = kfifo_alloc(&priv->event_fifo, sizeof(u32) * 16, GFP_KERNEL);
 	if (ret) {
-		lbs_pr_err("Out of memory allocating event FIFO buffer\n");
+		pr_err("Out of memory allocating event FIFO buffer\n");
 		goto out;
 	}
 
@@ -765,6 +921,7 @@ static void lbs_free_adapter(struct lbs_private *priv)
 	lbs_free_cmd_buffer(priv);
 	kfifo_free(&priv->event_fifo);
 	del_timer(&priv->command_timer);
+	del_timer(&priv->tx_lockup_timer);
 	del_timer(&priv->auto_deepsleep_timer);
 
 	lbs_deb_leave(LBS_DEB_MAIN);
@@ -775,18 +932,18 @@ static const struct net_device_ops lbs_netdev_ops = {
 	.ndo_stop		= lbs_eth_stop,
 	.ndo_start_xmit		= lbs_hard_start_xmit,
 	.ndo_set_mac_address	= lbs_set_mac_address,
-	.ndo_tx_timeout 	= lbs_tx_timeout,
-	.ndo_set_multicast_list = lbs_set_multicast_list,
+	.ndo_set_rx_mode	= lbs_set_multicast_list,
 	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
 };
 
 /**
- * @brief This function adds the card. it will probe the
+ * lbs_add_card - adds the card. It will probe the
  * card, allocate the lbs_priv and initialize the device.
  *
- *  @param card    A pointer to card
- *  @return 	   A pointer to struct lbs_private structure
+ * @card:	A pointer to card
+ * @dmdev:	A pointer to &struct device
+ * returns:	A pointer to &struct lbs_private structure
  */
 struct lbs_private *lbs_add_card(void *card, struct device *dmdev)
 {
@@ -799,7 +956,7 @@ struct lbs_private *lbs_add_card(void *card, struct device *dmdev)
 	/* Allocate an Ethernet device and register it */
 	wdev = lbs_cfg_alloc(dmdev);
 	if (IS_ERR(wdev)) {
-		lbs_pr_err("cfg80211 init failed\n");
+		pr_err("cfg80211 init failed\n");
 		goto done;
 	}
 
@@ -808,7 +965,7 @@ struct lbs_private *lbs_add_card(void *card, struct device *dmdev)
 	priv->wdev = wdev;
 
 	if (lbs_init_adapter(priv)) {
-		lbs_pr_err("failed to initialize adapter structure.\n");
+		pr_err("failed to initialize adapter structure\n");
 		goto err_wdev;
 	}
 
@@ -844,9 +1001,10 @@ struct lbs_private *lbs_add_card(void *card, struct device *dmdev)
 	priv->work_thread = create_singlethread_workqueue("lbs_worker");
 	INIT_WORK(&priv->mcast_work, lbs_set_mcast_worker);
 
-	priv->wol_criteria = 0xffffffff;
+	priv->wol_criteria = EHS_REMOVE_WAKEUP;
 	priv->wol_gpio = 0xff;
 	priv->wol_gap = 20;
+	priv->ehs_remove_supported = true;
 
 	goto done;
 
@@ -877,10 +1035,6 @@ void lbs_remove_card(struct lbs_private *priv)
 	lbs_remove_mesh(priv);
 	lbs_scan_deinit(priv);
 
-	dev = priv->dev;
-
-	cancel_work_sync(&priv->mcast_work);
-
 	/* worker thread destruction blocks on the in-flight command which
 	 * should have been cleared already in lbs_stop_card().
 	 */
@@ -908,8 +1062,6 @@ void lbs_remove_card(struct lbs_private *priv)
 
 	lbs_free_adapter(priv);
 	lbs_cfg_free(priv);
-
-	priv->dev = NULL;
 	free_netdev(dev);
 
 	lbs_deb_leave(LBS_DEB_MAIN);
@@ -940,18 +1092,22 @@ int lbs_start_card(struct lbs_private *priv)
 	if (ret)
 		goto done;
 
+	if (!lbs_disablemesh)
+		lbs_init_mesh(priv);
+	else
+		pr_info("%s: mesh disabled\n", dev->name);
+
 	if (lbs_cfg_register(priv)) {
-		lbs_pr_err("cannot register device\n");
+		pr_err("cannot register device\n");
 		goto done;
 	}
 
-	lbs_update_channel(priv);
-
-	lbs_init_mesh(priv);
+	if (lbs_mesh_activated(priv))
+		lbs_start_mesh(priv);
 
 	lbs_debugfs_init_one(priv, dev);
 
-	lbs_pr_info("%s: Marvell WLAN 802.11 adapter\n", dev->name);
+	netdev_info(dev, "Marvell WLAN 802.11 adapter\n");
 
 	ret = 0;
 
@@ -965,8 +1121,6 @@ EXPORT_SYMBOL_GPL(lbs_start_card);
 void lbs_stop_card(struct lbs_private *priv)
 {
 	struct net_device *dev;
-	struct cmd_ctrl_node *cmdnode;
-	unsigned long flags;
 
 	lbs_deb_enter(LBS_DEB_MAIN);
 
@@ -979,30 +1133,6 @@ void lbs_stop_card(struct lbs_private *priv)
 
 	lbs_debugfs_remove_one(priv);
 	lbs_deinit_mesh(priv);
-
-	/* Delete the timeout of the currently processing command */
-	del_timer_sync(&priv->command_timer);
-	del_timer_sync(&priv->auto_deepsleep_timer);
-
-	/* Flush pending command nodes */
-	spin_lock_irqsave(&priv->driver_lock, flags);
-	lbs_deb_main("clearing pending commands\n");
-	list_for_each_entry(cmdnode, &priv->cmdpendingq, list) {
-		cmdnode->result = -ENOENT;
-		cmdnode->cmdwaitqwoken = 1;
-		wake_up_interruptible(&cmdnode->cmdwait_q);
-	}
-
-	/* Flush the command the card is currently processing */
-	if (priv->cur_cmd) {
-		lbs_deb_main("clearing current command\n");
-		priv->cur_cmd->result = -ENOENT;
-		priv->cur_cmd->cmdwaitqwoken = 1;
-		wake_up_interruptible(&priv->cur_cmd->cmdwait_q);
-	}
-	lbs_deb_main("done clearing commands\n");
-	spin_unlock_irqrestore(&priv->driver_lock, flags);
-
 	unregister_netdev(dev);
 
 out:
@@ -1023,7 +1153,7 @@ void lbs_queue_event(struct lbs_private *priv, u32 event)
 
 	kfifo_in(&priv->event_fifo, (unsigned char *) &event, sizeof(u32));
 
-	wake_up_interruptible(&priv->waitq);
+	wake_up(&priv->waitq);
 
 	spin_unlock_irqrestore(&priv->driver_lock, flags);
 	lbs_deb_leave(LBS_DEB_THREAD);
@@ -1041,11 +1171,116 @@ void lbs_notify_command_response(struct lbs_private *priv, u8 resp_idx)
 	BUG_ON(resp_idx > 1);
 	priv->resp_idx = resp_idx;
 
-	wake_up_interruptible(&priv->waitq);
+	wake_up(&priv->waitq);
 
 	lbs_deb_leave(LBS_DEB_THREAD);
 }
 EXPORT_SYMBOL_GPL(lbs_notify_command_response);
+
+/**
+ *  lbs_get_firmware - Retrieves two-stage firmware
+ *
+ *  @dev:     	A pointer to &device structure
+ *  @user_helper: User-defined helper firmware file
+ *  @user_mainfw: User-defined main firmware file
+ *  @card_model: Bus-specific card model ID used to filter firmware table
+ *		elements
+ *  @fw_table:	Table of firmware file names and device model numbers
+ *		terminated by an entry with a NULL helper name
+ *  @helper:	On success, the helper firmware; caller must free
+ *  @mainfw:	On success, the main firmware; caller must free
+ *
+ *  returns:		0 on success, non-zero on failure
+ */
+int lbs_get_firmware(struct device *dev, const char *user_helper,
+			const char *user_mainfw, u32 card_model,
+			const struct lbs_fw_table *fw_table,
+			const struct firmware **helper,
+			const struct firmware **mainfw)
+{
+	const struct lbs_fw_table *iter;
+	int ret;
+
+	BUG_ON(helper == NULL);
+	BUG_ON(mainfw == NULL);
+
+	/* Try user-specified firmware first */
+	if (user_helper) {
+		ret = request_firmware(helper, user_helper, dev);
+		if (ret) {
+			dev_err(dev, "couldn't find helper firmware %s\n",
+				user_helper);
+			goto fail;
+		}
+	}
+	if (user_mainfw) {
+		ret = request_firmware(mainfw, user_mainfw, dev);
+		if (ret) {
+			dev_err(dev, "couldn't find main firmware %s\n",
+				user_mainfw);
+			goto fail;
+		}
+	}
+
+	if (*helper && *mainfw)
+		return 0;
+
+	/* Otherwise search for firmware to use.  If neither the helper or
+	 * the main firmware were specified by the user, then we need to
+	 * make sure that found helper & main are from the same entry in
+	 * fw_table.
+	 */
+	iter = fw_table;
+	while (iter && iter->helper) {
+		if (iter->model != card_model)
+			goto next;
+
+		if (*helper == NULL) {
+			ret = request_firmware(helper, iter->helper, dev);
+			if (ret)
+				goto next;
+
+			/* If the device has one-stage firmware (ie cf8305) and
+			 * we've got it then we don't need to bother with the
+			 * main firmware.
+			 */
+			if (iter->fwname == NULL)
+				return 0;
+		}
+
+		if (*mainfw == NULL) {
+			ret = request_firmware(mainfw, iter->fwname, dev);
+			if (ret && !user_helper) {
+				/* Clear the helper if it wasn't user-specified
+				 * and the main firmware load failed, to ensure
+				 * we don't have mismatched firmware pairs.
+				 */
+				release_firmware(*helper);
+				*helper = NULL;
+			}
+		}
+
+		if (*helper && *mainfw)
+			return 0;
+
+  next:
+		iter++;
+	}
+
+  fail:
+	/* Failed */
+	if (*helper) {
+		release_firmware(*helper);
+		*helper = NULL;
+	}
+	if (*mainfw) {
+		release_firmware(*mainfw);
+		*mainfw = NULL;
+	}
+
+	return -ENOENT;
+}
+EXPORT_SYMBOL_GPL(lbs_get_firmware);
 
 static int __init lbs_init_module(void)
 {

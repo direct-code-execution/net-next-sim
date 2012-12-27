@@ -1,5 +1,5 @@
 /*
- * k10temp.c - AMD Family 10h/11h processor hardware monitoring
+ * k10temp.c - AMD Family 10h/11h/12h/14h/15h processor hardware monitoring
  *
  * Copyright (c) 2009 Clemens Ladisch <clemens@ladisch.de>
  *
@@ -25,13 +25,16 @@
 #include <linux/pci.h>
 #include <asm/processor.h>
 
-MODULE_DESCRIPTION("AMD Family 10h/11h CPU core temperature monitor");
+MODULE_DESCRIPTION("AMD Family 10h+ CPU core temperature monitor");
 MODULE_AUTHOR("Clemens Ladisch <clemens@ladisch.de>");
 MODULE_LICENSE("GPL");
 
 static bool force;
 module_param(force, bool, 0444);
 MODULE_PARM_DESC(force, "force loading on processors with erratum 319");
+
+/* PCI-IDs for Northbridge devices not used anywhere else */
+#define PCI_DEVICE_ID_AMD_15H_M10H_NB_F3	0x1403
 
 /* CPUID function 0x80000001, ebx */
 #define CPUID_PKGTYPE_MASK	0xf0000000
@@ -173,7 +176,7 @@ static int __devinit k10temp_probe(struct pci_dev *pdev,
 		err = PTR_ERR(hwmon_dev);
 		goto exit_remove;
 	}
-	dev_set_drvdata(&pdev->dev, hwmon_dev);
+	pci_set_drvdata(pdev, hwmon_dev);
 
 	if (unreliable && force)
 		dev_warn(&pdev->dev,
@@ -194,7 +197,7 @@ exit:
 
 static void __devexit k10temp_remove(struct pci_dev *pdev)
 {
-	hwmon_device_unregister(dev_get_drvdata(&pdev->dev));
+	hwmon_device_unregister(pci_get_drvdata(pdev));
 	device_remove_file(&pdev->dev, &dev_attr_name);
 	device_remove_file(&pdev->dev, &dev_attr_temp1_input);
 	device_remove_file(&pdev->dev, &dev_attr_temp1_max);
@@ -202,12 +205,15 @@ static void __devexit k10temp_remove(struct pci_dev *pdev)
 			   &sensor_dev_attr_temp1_crit.dev_attr);
 	device_remove_file(&pdev->dev,
 			   &sensor_dev_attr_temp1_crit_hyst.dev_attr);
-	dev_set_drvdata(&pdev->dev, NULL);
+	pci_set_drvdata(pdev, NULL);
 }
 
-static const struct pci_device_id k10temp_id_table[] = {
+static DEFINE_PCI_DEVICE_TABLE(k10temp_id_table) = {
 	{ PCI_VDEVICE(AMD, PCI_DEVICE_ID_AMD_10H_NB_MISC) },
 	{ PCI_VDEVICE(AMD, PCI_DEVICE_ID_AMD_11H_NB_MISC) },
+	{ PCI_VDEVICE(AMD, PCI_DEVICE_ID_AMD_CNB17H_F3) },
+	{ PCI_VDEVICE(AMD, PCI_DEVICE_ID_AMD_15H_NB_F3) },
+	{ PCI_VDEVICE(AMD, PCI_DEVICE_ID_AMD_15H_M10H_NB_F3) },
 	{}
 };
 MODULE_DEVICE_TABLE(pci, k10temp_id_table);

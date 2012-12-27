@@ -14,7 +14,6 @@
 #include <linux/list.h>
 #include <linux/init.h>
 #include <linux/mtd/mtd.h>
-#include <linux/buffer_head.h>
 #include <linux/mutex.h>
 #include <linux/mount.h>
 #include <linux/slab.h>
@@ -91,7 +90,6 @@ static int block2mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 	} else
 		instr->state = MTD_ERASE_DONE;
 
-	instr->state = MTD_ERASE_DONE;
 	mtd_erase_callback(instr);
 	return err;
 }
@@ -105,14 +103,6 @@ static int block2mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 	int index = from >> PAGE_SHIFT;
 	int offset = from & (PAGE_SIZE-1);
 	int cpylen;
-
-	if (from > mtd->size)
-		return -EINVAL;
-	if (from + len > mtd->size)
-		len = mtd->size - from;
-
-	if (retlen)
-		*retlen = 0;
 
 	while (len) {
 		if ((offset + len) > PAGE_SIZE)
@@ -150,8 +140,6 @@ static int _block2mtd_write(struct block2mtd_dev *dev, const u_char *buf,
 	int offset = to & ~PAGE_MASK;	// page offset
 	int cpylen;
 
-	if (retlen)
-		*retlen = 0;
 	while (len) {
 		if ((offset+len) > PAGE_SIZE)
 			cpylen = PAGE_SIZE - offset;	// multiple pages
@@ -190,13 +178,6 @@ static int block2mtd_write(struct mtd_info *mtd, loff_t to, size_t len,
 	struct block2mtd_dev *dev = mtd->priv;
 	int err;
 
-	if (!len)
-		return 0;
-	if (to >= mtd->size)
-		return -ENOSPC;
-	if (to + len > mtd->size)
-		len = mtd->size - to;
-
 	mutex_lock(&dev->write_mutex);
 	err = _block2mtd_write(dev, buf, to, len, retlen);
 	mutex_unlock(&dev->write_mutex);
@@ -225,7 +206,7 @@ static void block2mtd_free_device(struct block2mtd_dev *dev)
 	if (dev->blkdev) {
 		invalidate_mapping_pages(dev->blkdev->bd_inode->i_mapping,
 					0, -1);
-		close_bdev_exclusive(dev->blkdev, FMODE_READ|FMODE_WRITE);
+		blkdev_put(dev->blkdev, FMODE_READ|FMODE_WRITE|FMODE_EXCL);
 	}
 
 	kfree(dev);
@@ -235,6 +216,7 @@ static void block2mtd_free_device(struct block2mtd_dev *dev)
 /* FIXME: ensure that mtd->size % erase_size == 0 */
 static struct block2mtd_dev *add_device(char *devname, int erase_size)
 {
+	const fmode_t mode = FMODE_READ | FMODE_WRITE | FMODE_EXCL;
 	struct block_device *bdev;
 	struct block2mtd_dev *dev;
 	char *name;
@@ -247,7 +229,7 @@ static struct block2mtd_dev *add_device(char *devname, int erase_size)
 		return NULL;
 
 	/* Get a handle on the device */
-	bdev = open_bdev_exclusive(devname, FMODE_READ|FMODE_WRITE, NULL);
+	bdev = blkdev_get_by_path(devname, mode, dev);
 #ifndef MODULE
 	if (IS_ERR(bdev)) {
 
@@ -255,9 +237,8 @@ static struct block2mtd_dev *add_device(char *devname, int erase_size)
 		   to resolve the device name by other means. */
 
 		dev_t devt = name_to_dev_t(devname);
-		if (devt) {
-			bdev = open_by_devnum(devt, FMODE_WRITE | FMODE_READ);
-		}
+		if (devt)
+			bdev = blkdev_get_by_dev(devt, mode, dev);
 	}
 #endif
 
@@ -285,18 +266,19 @@ static struct block2mtd_dev *add_device(char *devname, int erase_size)
 	dev->mtd.size = dev->blkdev->bd_inode->i_size & PAGE_MASK;
 	dev->mtd.erasesize = erase_size;
 	dev->mtd.writesize = 1;
+	dev->mtd.writebufsize = PAGE_SIZE;
 	dev->mtd.type = MTD_RAM;
 	dev->mtd.flags = MTD_CAP_RAM;
-	dev->mtd.erase = block2mtd_erase;
-	dev->mtd.write = block2mtd_write;
-	dev->mtd.writev = default_mtd_writev;
-	dev->mtd.sync = block2mtd_sync;
-	dev->mtd.read = block2mtd_read;
+	dev->mtd._erase = block2mtd_erase;
+	dev->mtd._write = block2mtd_write;
+	dev->mtd._writev = mtd_writev;
+	dev->mtd._sync = block2mtd_sync;
+	dev->mtd._read = block2mtd_read;
 	dev->mtd.priv = dev;
 	dev->mtd.owner = THIS_MODULE;
 
-	if (add_mtd_device(&dev->mtd)) {
-		/* Device didnt get added, so free the entry */
+	if (mtd_device_register(&dev->mtd, NULL, 0)) {
+		/* Device didn't get added, so free the entry */
 		goto devinit_err;
 	}
 	list_add(&dev->list, &blkmtd_device_list);
@@ -466,7 +448,7 @@ static void __devexit block2mtd_exit(void)
 	list_for_each_safe(pos, next, &blkmtd_device_list) {
 		struct block2mtd_dev *dev = list_entry(pos, typeof(*dev), list);
 		block2mtd_sync(&dev->mtd);
-		del_mtd_device(&dev->mtd);
+		mtd_device_unregister(&dev->mtd);
 		INFO("mtd%d: [%s] removed", dev->mtd.index,
 				dev->mtd.name + strlen("block2mtd: "));
 		list_del(&dev->list);

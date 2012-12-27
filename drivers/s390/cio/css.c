@@ -1,7 +1,7 @@
 /*
  * driver for channel subsystem
  *
- * Copyright IBM Corp. 2002, 2009
+ * Copyright IBM Corp. 2002, 2010
  *
  * Author(s): Arnd Bergmann (arndb@de.ibm.com)
  *	      Cornelia Huck (cornelia.huck@de.ibm.com)
@@ -35,6 +35,7 @@ int css_init_done = 0;
 int max_ssid;
 
 struct channel_subsystem *channel_subsystems[__MAX_CSSID + 1];
+static struct bus_type css_bus_type;
 
 int
 for_each_subchannel(int(*fn)(struct subchannel_id, void *), void *data)
@@ -193,51 +194,6 @@ void css_sch_device_unregister(struct subchannel *sch)
 	mutex_unlock(&sch->reg_mutex);
 }
 EXPORT_SYMBOL_GPL(css_sch_device_unregister);
-
-static void css_sch_todo(struct work_struct *work)
-{
-	struct subchannel *sch;
-	enum sch_todo todo;
-
-	sch = container_of(work, struct subchannel, todo_work);
-	/* Find out todo. */
-	spin_lock_irq(sch->lock);
-	todo = sch->todo;
-	CIO_MSG_EVENT(4, "sch_todo: sch=0.%x.%04x, todo=%d\n", sch->schid.ssid,
-		      sch->schid.sch_no, todo);
-	sch->todo = SCH_TODO_NOTHING;
-	spin_unlock_irq(sch->lock);
-	/* Perform todo. */
-	if (todo == SCH_TODO_UNREG)
-		css_sch_device_unregister(sch);
-	/* Release workqueue ref. */
-	put_device(&sch->dev);
-}
-
-/**
- * css_sched_sch_todo - schedule a subchannel operation
- * @sch: subchannel
- * @todo: todo
- *
- * Schedule the operation identified by @todo to be performed on the slow path
- * workqueue. Do nothing if another operation with higher priority is already
- * scheduled. Needs to be called with subchannel lock held.
- */
-void css_sched_sch_todo(struct subchannel *sch, enum sch_todo todo)
-{
-	CIO_MSG_EVENT(4, "sch_todo: sched sch=0.%x.%04x todo=%d\n",
-		      sch->schid.ssid, sch->schid.sch_no, todo);
-	if (sch->todo >= todo)
-		return;
-	/* Get workqueue ref. */
-	if (!get_device(&sch->dev))
-		return;
-	sch->todo = todo;
-	if (!queue_work(cio_work_q, &sch->todo_work)) {
-		/* Already queued, release workqueue ref. */
-		put_device(&sch->dev);
-	}
-}
 
 static void ssd_from_pmcw(struct chsc_ssd_info *ssd, struct pmcw *pmcw)
 {
@@ -465,6 +421,65 @@ static void css_evaluate_subchannel(struct subchannel_id schid, int slow)
 		css_schedule_eval(schid);
 }
 
+/**
+ * css_sched_sch_todo - schedule a subchannel operation
+ * @sch: subchannel
+ * @todo: todo
+ *
+ * Schedule the operation identified by @todo to be performed on the slow path
+ * workqueue. Do nothing if another operation with higher priority is already
+ * scheduled. Needs to be called with subchannel lock held.
+ */
+void css_sched_sch_todo(struct subchannel *sch, enum sch_todo todo)
+{
+	CIO_MSG_EVENT(4, "sch_todo: sched sch=0.%x.%04x todo=%d\n",
+		      sch->schid.ssid, sch->schid.sch_no, todo);
+	if (sch->todo >= todo)
+		return;
+	/* Get workqueue ref. */
+	if (!get_device(&sch->dev))
+		return;
+	sch->todo = todo;
+	if (!queue_work(cio_work_q, &sch->todo_work)) {
+		/* Already queued, release workqueue ref. */
+		put_device(&sch->dev);
+	}
+}
+
+static void css_sch_todo(struct work_struct *work)
+{
+	struct subchannel *sch;
+	enum sch_todo todo;
+	int ret;
+
+	sch = container_of(work, struct subchannel, todo_work);
+	/* Find out todo. */
+	spin_lock_irq(sch->lock);
+	todo = sch->todo;
+	CIO_MSG_EVENT(4, "sch_todo: sch=0.%x.%04x, todo=%d\n", sch->schid.ssid,
+		      sch->schid.sch_no, todo);
+	sch->todo = SCH_TODO_NOTHING;
+	spin_unlock_irq(sch->lock);
+	/* Perform todo. */
+	switch (todo) {
+	case SCH_TODO_NOTHING:
+		break;
+	case SCH_TODO_EVAL:
+		ret = css_evaluate_known_subchannel(sch, 1);
+		if (ret == -EAGAIN) {
+			spin_lock_irq(sch->lock);
+			css_sched_sch_todo(sch, todo);
+			spin_unlock_irq(sch->lock);
+		}
+		break;
+	case SCH_TODO_UNREG:
+		css_sch_device_unregister(sch);
+		break;
+	}
+	/* Release workqueue ref. */
+	put_device(&sch->dev);
+}
+
 static struct idset *slow_subchannel_set;
 static spinlock_t slow_subchannel_lock;
 static wait_queue_head_t css_eval_wq;
@@ -577,7 +592,7 @@ static int __unset_registered(struct device *dev, void *data)
 	return 0;
 }
 
-void css_schedule_eval_all_unreg(void)
+static void css_schedule_eval_all_unreg(void)
 {
 	unsigned long flags;
 	struct idset *unreg_set;
@@ -618,6 +633,7 @@ EXPORT_SYMBOL_GPL(css_schedule_reprobe);
 static void css_process_crw(struct crw *crw0, struct crw *crw1, int overflow)
 {
 	struct subchannel_id mchk_schid;
+	struct subchannel *sch;
 
 	if (overflow) {
 		css_schedule_eval_all();
@@ -635,8 +651,15 @@ static void css_process_crw(struct crw *crw0, struct crw *crw1, int overflow)
 	init_subchannel_id(&mchk_schid);
 	mchk_schid.sch_no = crw0->rsid;
 	if (crw1)
-		mchk_schid.ssid = (crw1->rsid >> 8) & 3;
+		mchk_schid.ssid = (crw1->rsid >> 4) & 3;
 
+	if (crw0->erc == CRW_ERC_PMOD) {
+		sch = get_subchannel_by_schid(mchk_schid);
+		if (sch) {
+			css_update_ssd_info(sch);
+			put_device(&sch->dev);
+		}
+	}
 	/*
 	 * Since we are always presented with IPI in the CRW, we have to
 	 * use stsch() to find out if the subchannel in question has come
@@ -790,7 +813,6 @@ static struct notifier_block css_reboot_notifier = {
 static int css_power_event(struct notifier_block *this, unsigned long event,
 			   void *ptr)
 {
-	void *secm_area;
 	int ret, i;
 
 	switch (event) {
@@ -806,15 +828,8 @@ static int css_power_event(struct notifier_block *this, unsigned long event,
 				mutex_unlock(&css->mutex);
 				continue;
 			}
-			secm_area = (void *)get_zeroed_page(GFP_KERNEL |
-							    GFP_DMA);
-			if (secm_area) {
-				if (__chsc_do_secm(css, 0, secm_area))
-					ret = NOTIFY_BAD;
-				free_page((unsigned long)secm_area);
-			} else
-				ret = NOTIFY_BAD;
-
+			ret = __chsc_do_secm(css, 0);
+			ret = notifier_from_errno(ret);
 			mutex_unlock(&css->mutex);
 		}
 		break;
@@ -830,15 +845,8 @@ static int css_power_event(struct notifier_block *this, unsigned long event,
 				mutex_unlock(&css->mutex);
 				continue;
 			}
-			secm_area = (void *)get_zeroed_page(GFP_KERNEL |
-							    GFP_DMA);
-			if (secm_area) {
-				if (__chsc_do_secm(css, 1, secm_area))
-					ret = NOTIFY_BAD;
-				free_page((unsigned long)secm_area);
-			} else
-				ret = NOTIFY_BAD;
-
+			ret = __chsc_do_secm(css, 1);
+			ret = notifier_from_errno(ret);
 			mutex_unlock(&css->mutex);
 		}
 		/* search for subchannels, which appeared during hibernation */
@@ -863,14 +871,11 @@ static int __init css_bus_init(void)
 {
 	int ret, i;
 
-	ret = chsc_determine_css_characteristics();
-	if (ret == -ENOMEM)
-		goto out;
-
-	ret = chsc_alloc_sei_area();
+	ret = chsc_init();
 	if (ret)
-		goto out;
+		return ret;
 
+	chsc_determine_css_characteristics();
 	/* Try to enable MSS. */
 	ret = chsc_enable_facility(CHSC_SDA_OC_MSS);
 	if (ret)
@@ -956,9 +961,9 @@ out_unregister:
 	}
 	bus_unregister(&css_bus_type);
 out:
-	crw_unregister_handler(CRW_RSC_CSS);
-	chsc_free_sei_area();
+	crw_unregister_handler(CRW_RSC_SCH);
 	idset_free(slow_subchannel_set);
+	chsc_init_cleanup();
 	pr_alert("The CSS device driver initialization failed with "
 		 "errno=%d\n", ret);
 	return ret;
@@ -978,9 +983,9 @@ static void __init css_bus_cleanup(void)
 		device_unregister(&css->device);
 	}
 	bus_unregister(&css_bus_type);
-	crw_unregister_handler(CRW_RSC_CSS);
-	chsc_free_sei_area();
+	crw_unregister_handler(CRW_RSC_SCH);
 	idset_free(slow_subchannel_set);
+	chsc_init_cleanup();
 	isc_unregister(IO_SCH_ISC);
 }
 
@@ -1048,7 +1053,16 @@ subsys_initcall_sync(channel_subsystem_init_sync);
 
 void channel_subsystem_reinit(void)
 {
+	struct channel_path *chp;
+	struct chp_id chpid;
+
 	chsc_enable_facility(CHSC_SDA_OC_MSS);
+	chp_id_for_each(&chpid) {
+		chp = chpid_to_chp(chpid);
+		if (!chp)
+			continue;
+		chsc_determine_base_channel_path_desc(chpid, &chp->desc);
+	}
 }
 
 #ifdef CONFIG_PROC_FS
@@ -1067,6 +1081,7 @@ static ssize_t cio_settle_write(struct file *file, const char __user *buf,
 static const struct file_operations cio_settle_proc_fops = {
 	.open = nonseekable_open,
 	.write = cio_settle_write,
+	.llseek = no_llseek,
 };
 
 static int __init cio_settle_init(void)
@@ -1199,6 +1214,7 @@ static int css_pm_restore(struct device *dev)
 	struct subchannel *sch = to_subchannel(dev);
 	struct css_driver *drv;
 
+	css_update_ssd_info(sch);
 	if (!sch->dev.driver)
 		return 0;
 	drv = to_cssdriver(sch->dev.driver);
@@ -1213,7 +1229,7 @@ static const struct dev_pm_ops css_pm_ops = {
 	.restore = css_pm_restore,
 };
 
-struct bus_type css_bus_type = {
+static struct bus_type css_bus_type = {
 	.name     = "css",
 	.match    = css_bus_match,
 	.probe    = css_probe,
@@ -1232,9 +1248,7 @@ struct bus_type css_bus_type = {
  */
 int css_driver_register(struct css_driver *cdrv)
 {
-	cdrv->drv.name = cdrv->name;
 	cdrv->drv.bus = &css_bus_type;
-	cdrv->drv.owner = cdrv->owner;
 	return driver_register(&cdrv->drv);
 }
 EXPORT_SYMBOL_GPL(css_driver_register);
@@ -1252,4 +1266,3 @@ void css_driver_unregister(struct css_driver *cdrv)
 EXPORT_SYMBOL_GPL(css_driver_unregister);
 
 MODULE_LICENSE("GPL");
-EXPORT_SYMBOL(css_bus_type);

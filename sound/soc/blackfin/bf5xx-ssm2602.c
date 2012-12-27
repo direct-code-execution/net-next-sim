@@ -33,7 +33,6 @@
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/soc.h>
-#include <sound/soc-dapm.h>
 #include <sound/pcm_params.h>
 
 #include <asm/dma.h>
@@ -42,26 +41,14 @@
 #include "../codecs/ssm2602.h"
 #include "bf5xx-sport.h"
 #include "bf5xx-i2s-pcm.h"
-#include "bf5xx-i2s.h"
 
 static struct snd_soc_card bf5xx_ssm2602;
-
-static int bf5xx_ssm2602_startup(struct snd_pcm_substream *substream)
-{
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *cpu_dai = rtd->dai->cpu_dai;
-
-	pr_debug("%s enter\n", __func__);
-	cpu_dai->private_data = sport_handle;
-	return 0;
-}
 
 static int bf5xx_ssm2602_hw_params(struct snd_pcm_substream *substream,
 	struct snd_pcm_hw_params *params)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *codec_dai = rtd->dai->codec_dai;
-	struct snd_soc_dai *cpu_dai = rtd->dai->cpu_dai;
+	struct snd_soc_dai *codec_dai = rtd->codec_dai;
 	unsigned int clk = 0;
 	int ret = 0;
 
@@ -87,21 +74,6 @@ static int bf5xx_ssm2602_hw_params(struct snd_pcm_substream *substream,
 		break;
 	}
 
-	/*
-	 * CODEC is master for BCLK and LRC in this configuration.
-	 */
-
-	/* set codec DAI configuration */
-	ret = snd_soc_dai_set_fmt(codec_dai, SND_SOC_DAIFMT_I2S |
-		SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_CBM_CFM);
-	if (ret < 0)
-		return ret;
-	/* set cpu DAI configuration */
-	ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_I2S |
-		SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_CBM_CFM);
-	if (ret < 0)
-		return ret;
-
 	ret = snd_soc_dai_set_sysclk(codec_dai, SSM2602_SYSCLK, clk,
 		SND_SOC_CLOCK_IN);
 	if (ret < 0)
@@ -111,41 +83,41 @@ static int bf5xx_ssm2602_hw_params(struct snd_pcm_substream *substream,
 }
 
 static struct snd_soc_ops bf5xx_ssm2602_ops = {
-	.startup = bf5xx_ssm2602_startup,
 	.hw_params = bf5xx_ssm2602_hw_params,
 };
 
-static struct snd_soc_dai_link bf5xx_ssm2602_dai = {
-	.name = "ssm2602",
-	.stream_name = "SSM2602",
-	.cpu_dai = &bf5xx_i2s_dai,
-	.codec_dai = &ssm2602_dai,
-	.ops = &bf5xx_ssm2602_ops,
-};
+/* CODEC is master for BCLK and LRC in this configuration. */
+#define BF5XX_SSM2602_DAIFMT (SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF | \
+				SND_SOC_DAIFMT_CBM_CFM)
 
-/*
- * SSM2602 2 wire address is determined by CSB
- * state during powerup.
- *    low  = 0x1a
- *    high = 0x1b
- */
-
-static struct ssm2602_setup_data bf5xx_ssm2602_setup = {
-	.i2c_bus = 0,
-	.i2c_address = 0x1b,
+static struct snd_soc_dai_link bf5xx_ssm2602_dai[] = {
+	{
+		.name = "ssm2602",
+		.stream_name = "SSM2602",
+		.cpu_dai_name = "bfin-i2s.0",
+		.codec_dai_name = "ssm2602-hifi",
+		.platform_name = "bfin-i2s-pcm-audio",
+		.codec_name = "ssm2602.0-001b",
+		.ops = &bf5xx_ssm2602_ops,
+		.dai_fmt = BF5XX_SSM2602_DAIFMT,
+	},
+	{
+		.name = "ssm2602",
+		.stream_name = "SSM2602",
+		.cpu_dai_name = "bfin-i2s.1",
+		.codec_dai_name = "ssm2602-hifi",
+		.platform_name = "bfin-i2s-pcm-audio",
+		.codec_name = "ssm2602.0-001b",
+		.ops = &bf5xx_ssm2602_ops,
+		.dai_fmt = BF5XX_SSM2602_DAIFMT,
+	},
 };
 
 static struct snd_soc_card bf5xx_ssm2602 = {
-	.name = "bf5xx_ssm2602",
-	.platform = &bf5xx_i2s_soc_platform,
-	.dai_link = &bf5xx_ssm2602_dai,
+	.name = "bfin-ssm2602",
+	.owner = THIS_MODULE,
+	.dai_link = &bf5xx_ssm2602_dai[CONFIG_SND_BF5XX_SPORT_NUM],
 	.num_links = 1,
-};
-
-static struct snd_soc_device bf5xx_ssm2602_snd_devdata = {
-	.card = &bf5xx_ssm2602,
-	.codec_dev = &soc_codec_dev_ssm2602,
-	.codec_data = &bf5xx_ssm2602_setup,
 };
 
 static struct platform_device *bf5xx_ssm2602_snd_device;
@@ -159,9 +131,7 @@ static int __init bf5xx_ssm2602_init(void)
 	if (!bf5xx_ssm2602_snd_device)
 		return -ENOMEM;
 
-	platform_set_drvdata(bf5xx_ssm2602_snd_device,
-				&bf5xx_ssm2602_snd_devdata);
-	bf5xx_ssm2602_snd_devdata.dev = &bf5xx_ssm2602_snd_device->dev;
+	platform_set_drvdata(bf5xx_ssm2602_snd_device, &bf5xx_ssm2602);
 	ret = platform_device_add(bf5xx_ssm2602_snd_device);
 
 	if (ret)

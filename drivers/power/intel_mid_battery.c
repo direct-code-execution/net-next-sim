@@ -61,7 +61,8 @@ MODULE_PARM_DESC(debug, "Flag to enable PMIC Battery debug messages.");
 #define PMIC_BATT_CHR_SBATDET_MASK	(1 << 5)
 #define PMIC_BATT_CHR_SDCLMT_MASK	(1 << 6)
 #define PMIC_BATT_CHR_SUSBOVP_MASK	(1 << 7)
-#define PMIC_BATT_CHR_EXCPT_MASK	0xC6
+#define PMIC_BATT_CHR_EXCPT_MASK	0x86
+
 #define PMIC_BATT_ADC_ACCCHRG_MASK	(1 << 31)
 #define PMIC_BATT_ADC_ACCCHRGVAL_MASK	0x7FFFFFFF
 
@@ -304,11 +305,6 @@ static void pmic_battery_read_status(struct pmic_power_module_info *pbi)
 			pbi->batt_status = POWER_SUPPLY_STATUS_NOT_CHARGING;
 			pmic_battery_log_event(BATT_EVENT_BATOVP_EXCPT);
 			batt_exception = 1;
-		} else if (r8 & PMIC_BATT_CHR_SDCLMT_MASK) {
-			pbi->batt_health = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
-			pbi->batt_status = POWER_SUPPLY_STATUS_NOT_CHARGING;
-			pmic_battery_log_event(BATT_EVENT_DCLMT_EXCPT);
-			batt_exception = 1;
 		} else if (r8 & PMIC_BATT_CHR_STEMP_MASK) {
 			pbi->batt_health = POWER_SUPPLY_HEALTH_OVERHEAT;
 			pbi->batt_status = POWER_SUPPLY_STATUS_NOT_CHARGING;
@@ -316,6 +312,10 @@ static void pmic_battery_read_status(struct pmic_power_module_info *pbi)
 			batt_exception = 1;
 		} else {
 			pbi->batt_health = POWER_SUPPLY_HEALTH_GOOD;
+			if (r8 & PMIC_BATT_CHR_SDCLMT_MASK) {
+				/* PMIC will change charging current automatically */
+				pmic_battery_log_event(BATT_EVENT_DCLMT_EXCPT);
+			}
 		}
 	}
 
@@ -522,7 +522,7 @@ static int pmic_battery_set_charger(struct pmic_power_module_info *pbi,
 	if (retval) {
 		dev_warn(pbi->dev, "%s(): ipc pmic read failed\n",
 								__func__);
-		return retval;;
+		return retval;
 	}
 
 	return 0;
@@ -730,8 +730,7 @@ static __devinit int probe(int irq, struct device *dev)
 power_reg_failed_1:
 	power_supply_unregister(&pbi->batt);
 power_reg_failed:
-	cancel_rearming_delayed_workqueue(pbi->monitor_wqueue,
-						&pbi->monitor_battery);
+	cancel_delayed_work_sync(&pbi->monitor_battery);
 requestirq_failed:
 	destroy_workqueue(pbi->monitor_wqueue);
 wqueue_failed:
@@ -760,14 +759,13 @@ static int __devexit platform_pmic_battery_remove(struct platform_device *pdev)
 	struct pmic_power_module_info *pbi = dev_get_drvdata(&pdev->dev);
 
 	free_irq(pbi->irq, pbi);
-	cancel_rearming_delayed_workqueue(pbi->monitor_wqueue,
-					&pbi->monitor_battery);
+	cancel_delayed_work_sync(&pbi->monitor_battery);
 	destroy_workqueue(pbi->monitor_wqueue);
 
 	power_supply_unregister(&pbi->usb);
 	power_supply_unregister(&pbi->batt);
 
-	flush_scheduled_work();
+	cancel_work_sync(&pbi->handler);
 	kfree(pbi);
 	return 0;
 }
@@ -781,18 +779,7 @@ static struct platform_driver platform_pmic_battery_driver = {
 	.remove = __devexit_p(platform_pmic_battery_remove),
 };
 
-static int __init platform_pmic_battery_module_init(void)
-{
-	return platform_driver_register(&platform_pmic_battery_driver);
-}
-
-static void __exit platform_pmic_battery_module_exit(void)
-{
-	platform_driver_unregister(&platform_pmic_battery_driver);
-}
-
-module_init(platform_pmic_battery_module_init);
-module_exit(platform_pmic_battery_module_exit);
+module_platform_driver(platform_pmic_battery_driver);
 
 MODULE_AUTHOR("Nithish Mahalingam <nithish.mahalingam@intel.com>");
 MODULE_DESCRIPTION("Intel Moorestown PMIC Battery Driver");

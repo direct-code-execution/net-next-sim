@@ -24,7 +24,7 @@
  *
  *
  *  Asus OLED support is based on asusoled program taken from
- *  https://launchpad.net/asusoled/.
+ *  <http://lapsus.berlios.de/asus_oled.html>.
  *
  *
  */
@@ -70,7 +70,7 @@ module_param(start_off, uint, 0644);
 MODULE_PARM_DESC(start_off,
 		 "Set to 1 to switch off OLED display after it is attached");
 
-enum oled_pack_mode{
+enum oled_pack_mode {
 	PACK_MODE_G1,
 	PACK_MODE_G50,
 	PACK_MODE_LAST
@@ -159,7 +159,6 @@ static void setup_packet_header(struct asus_oled_packet *packet, char flags,
 
 static void enable_oled(struct asus_oled_dev *odev, uint8_t enabl)
 {
-	int a;
 	int retval;
 	int act_len;
 	struct asus_oled_packet *packet;
@@ -178,17 +177,15 @@ static void enable_oled(struct asus_oled_dev *odev, uint8_t enabl)
 	else
 		packet->bitmap[0] = 0xae;
 
-	for (a = 0; a < 1; a++) {
-		retval = usb_bulk_msg(odev->udev,
-			usb_sndbulkpipe(odev->udev, 2),
-			packet,
-			sizeof(struct asus_oled_header) + 1,
-			&act_len,
-			-1);
+	retval = usb_bulk_msg(odev->udev,
+		usb_sndbulkpipe(odev->udev, 2),
+		packet,
+		sizeof(struct asus_oled_header) + 1,
+		&act_len,
+		-1);
 
-		if (retval)
-			dev_dbg(&odev->udev->dev, "retval = %d\n", retval);
-	}
+	if (retval)
+		dev_dbg(&odev->udev->dev, "retval = %d\n", retval);
 
 	odev->enabled = enabl;
 
@@ -201,7 +198,7 @@ static ssize_t set_enabled(struct device *dev, struct device_attribute *attr,
 	struct usb_interface *intf = to_usb_interface(dev);
 	struct asus_oled_dev *odev = usb_get_intfdata(intf);
 	unsigned long value;
-	if (strict_strtoul(buf, 10, &value))
+	if (kstrtoul(buf, 10, &value))
 		return -EINVAL;
 
 	enable_oled(odev, value);
@@ -217,7 +214,7 @@ static ssize_t class_set_enabled(struct device *device,
 		(struct asus_oled_dev *) dev_get_drvdata(device);
 	unsigned long value;
 
-	if (strict_strtoul(buf, 10, &value))
+	if (kstrtoul(buf, 10, &value))
 		return -EINVAL;
 
 	enable_oled(odev, value);
@@ -355,7 +352,14 @@ static void send_data(struct asus_oled_dev *odev)
 
 static int append_values(struct asus_oled_dev *odev, uint8_t val, size_t count)
 {
-	while (count-- > 0 && val) {
+	odev->last_val = val;
+
+	if (val == 0) {
+		odev->buf_offs += count;
+		return 0;
+	}
+
+	while (count-- > 0) {
 		size_t x = odev->buf_offs % odev->width;
 		size_t y = odev->buf_offs / odev->width;
 		size_t i;
@@ -406,7 +410,6 @@ static int append_values(struct asus_oled_dev *odev, uint8_t val, size_t count)
 			;
 		}
 
-		odev->last_val = val;
 		odev->buf_offs++;
 	}
 
@@ -620,13 +623,13 @@ static ssize_t class_set_picture(struct device *device,
 
 #define ASUS_OLED_DEVICE_ATTR(_file)		dev_attr_asus_oled_##_file
 
-static DEVICE_ATTR(asus_oled_enabled, S_IWUGO | S_IRUGO,
+static DEVICE_ATTR(asus_oled_enabled, S_IWUSR | S_IRUGO,
 		   get_enabled, set_enabled);
-static DEVICE_ATTR(asus_oled_picture, S_IWUGO , NULL, set_picture);
+static DEVICE_ATTR(asus_oled_picture, S_IWUSR , NULL, set_picture);
 
-static DEVICE_ATTR(enabled, S_IWUGO | S_IRUGO,
+static DEVICE_ATTR(enabled, S_IWUSR | S_IRUGO,
 		   class_get_enabled, class_set_enabled);
-static DEVICE_ATTR(picture, S_IWUGO, NULL, class_set_picture);
+static DEVICE_ATTR(picture, S_IWUSR, NULL, class_set_picture);
 
 static int asus_oled_probe(struct usb_interface *interface,
 			   const struct usb_device_id *id)
@@ -805,10 +808,9 @@ error:
 
 static void __exit asus_oled_exit(void)
 {
+	usb_deregister(&oled_driver);
 	class_remove_file(oled_class, &class_attr_version.attr);
 	class_destroy(oled_class);
-
-	usb_deregister(&oled_driver);
 }
 
 module_init(asus_oled_init);

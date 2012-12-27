@@ -91,7 +91,6 @@ static void nilfs_commit_chunk(struct page *page,
 			       unsigned from, unsigned to)
 {
 	struct inode *dir = mapping->host;
-	struct nilfs_sb_info *sbi = NILFS_SB(dir->i_sb);
 	loff_t pos = page_offset(page) + from;
 	unsigned len = to - from;
 	unsigned nr_dirty, copied;
@@ -103,7 +102,7 @@ static void nilfs_commit_chunk(struct page *page,
 		i_size_write(dir, pos + copied);
 	if (IS_DIRSYNC(dir))
 		nilfs_set_transaction_flag(NILFS_TI_SYNC);
-	err = nilfs_set_file_dirty(sbi, dir, nr_dirty);
+	err = nilfs_set_file_dirty(dir, nr_dirty);
 	WARN_ON(err); /* do not happen */
 	unlock_page(page);
 }
@@ -252,7 +251,7 @@ nilfs_type_by_mode[S_IFMT >> S_SHIFT] = {
 
 static void nilfs_set_de_type(struct nilfs_dir_entry *de, struct inode *inode)
 {
-	mode_t mode = inode->i_mode;
+	umode_t mode = inode->i_mode;
 
 	de->file_type = nilfs_type_by_mode[(mode & S_IFMT)>>S_SHIFT];
 }
@@ -441,7 +440,6 @@ void nilfs_set_link(struct inode *dir, struct nilfs_dir_entry *de,
 	nilfs_commit_chunk(page, mapping, from, to);
 	nilfs_put_page(page);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
-/*	NILFS_I(dir)->i_flags &= ~NILFS_BTREE_FL; */
 }
 
 /*
@@ -532,7 +530,6 @@ got_it:
 	nilfs_set_de_type(de, inode);
 	nilfs_commit_chunk(page, page->mapping, from, to);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
-/*	NILFS_I(dir)->i_flags &= ~NILFS_BTREE_FL; */
 	nilfs_mark_inode_dirty(dir);
 	/* OFFSET_CACHE */
 out_put:
@@ -580,7 +577,6 @@ int nilfs_delete_entry(struct nilfs_dir_entry *dir, struct page *page)
 	dir->inode = 0;
 	nilfs_commit_chunk(page, mapping, from, to);
 	inode->i_ctime = inode->i_mtime = CURRENT_TIME;
-/*	NILFS_I(inode)->i_flags &= ~NILFS_BTREE_FL; */
 out:
 	nilfs_put_page(page);
 	return err;
@@ -606,7 +602,7 @@ int nilfs_make_empty(struct inode *inode, struct inode *parent)
 		unlock_page(page);
 		goto fail;
 	}
-	kaddr = kmap_atomic(page, KM_USER0);
+	kaddr = kmap_atomic(page);
 	memset(kaddr, 0, chunk_size);
 	de = (struct nilfs_dir_entry *)kaddr;
 	de->name_len = 1;
@@ -621,7 +617,7 @@ int nilfs_make_empty(struct inode *inode, struct inode *parent)
 	de->inode = cpu_to_le64(parent->i_ino);
 	memcpy(de->name, "..\0", 4);
 	nilfs_set_de_type(de, inode);
-	kunmap_atomic(kaddr, KM_USER0);
+	kunmap_atomic(kaddr);
 	nilfs_commit_chunk(page, mapping, 0, chunk_size);
 fail:
 	page_cache_release(page);
@@ -685,7 +681,7 @@ const struct file_operations nilfs_dir_operations = {
 	.readdir	= nilfs_readdir,
 	.unlocked_ioctl	= nilfs_ioctl,
 #ifdef CONFIG_COMPAT
-	.compat_ioctl	= nilfs_ioctl,
+	.compat_ioctl	= nilfs_compat_ioctl,
 #endif	/* CONFIG_COMPAT */
 	.fsync		= nilfs_sync_file,
 

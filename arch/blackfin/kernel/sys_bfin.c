@@ -21,6 +21,8 @@
 
 #include <asm/cacheflush.h>
 #include <asm/dma.h>
+#include <asm/cachectl.h>
+#include <asm/ptrace.h>
 
 asmlinkage void *sys_sram_alloc(size_t size, unsigned long flags)
 {
@@ -39,6 +41,7 @@ asmlinkage void *sys_dma_memcpy(void *dest, const void *src, size_t len)
 
 #if defined(CONFIG_FB) || defined(CONFIG_FB_MODULE)
 #include <linux/fb.h>
+#include <linux/export.h>
 unsigned long get_fb_unmapped_area(struct file *filp, unsigned long orig_addr,
 	unsigned long len, unsigned long pgoff, unsigned long flags)
 {
@@ -69,4 +72,17 @@ asmlinkage int sys_bfin_spinlock(int *p)
 	spin_unlock(&bfin_spinlock_lock);
 
 	return ret;
+}
+
+SYSCALL_DEFINE3(cacheflush, unsigned long, addr, unsigned long, len, int, op)
+{
+	if (is_user_addr_valid(current, addr, len) != 0)
+		return -EINVAL;
+
+	if (op & DCACHE)
+		blackfin_dcache_flush_range(addr, addr + len);
+	if (op & ICACHE)
+		blackfin_icache_flush_range(addr, addr + len);
+
+	return 0;
 }

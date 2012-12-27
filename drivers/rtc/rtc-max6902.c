@@ -139,12 +139,13 @@ static int __devinit max6902_probe(struct spi_device *spi)
 	if (IS_ERR(rtc))
 		return PTR_ERR(rtc);
 
+	dev_set_drvdata(&spi->dev, rtc);
 	return 0;
 }
 
 static int __devexit max6902_remove(struct spi_device *spi)
 {
-	struct rtc_device *rtc = platform_get_drvdata(spi);
+	struct rtc_device *rtc = dev_get_drvdata(&spi->dev);
 
 	rtc_device_unregister(rtc);
 	return 0;
@@ -153,24 +154,13 @@ static int __devexit max6902_remove(struct spi_device *spi)
 static struct spi_driver max6902_driver = {
 	.driver = {
 		.name	= "rtc-max6902",
-		.bus	= &spi_bus_type,
 		.owner	= THIS_MODULE,
 	},
 	.probe	= max6902_probe,
 	.remove = __devexit_p(max6902_remove),
 };
 
-static __init int max6902_init(void)
-{
-	return spi_register_driver(&max6902_driver);
-}
-module_init(max6902_init);
-
-static __exit void max6902_exit(void)
-{
-	spi_unregister_driver(&max6902_driver);
-}
-module_exit(max6902_exit);
+module_spi_driver(max6902_driver);
 
 MODULE_DESCRIPTION ("max6902 spi RTC driver");
 MODULE_AUTHOR ("Raphael Assenat");

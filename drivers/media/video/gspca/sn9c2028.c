@@ -18,6 +18,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #define MODULE_NAME "sn9c2028"
 
 #include "gspca.h"
@@ -75,8 +77,8 @@ static int sn9c2028_command(struct gspca_dev *gspca_dev, u8 *command)
 			USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_INTERFACE,
 			2, 0, gspca_dev->usb_buf, 6, 500);
 	if (rc < 0) {
-		PDEBUG(D_ERR, "command write [%02x] error %d",
-				gspca_dev->usb_buf[0], rc);
+		pr_err("command write [%02x] error %d\n",
+		       gspca_dev->usb_buf[0], rc);
 		return rc;
 	}
 
@@ -93,7 +95,7 @@ static int sn9c2028_read1(struct gspca_dev *gspca_dev)
 			USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_INTERFACE,
 			1, 0, gspca_dev->usb_buf, 1, 500);
 	if (rc != 1) {
-		PDEBUG(D_ERR, "read1 error %d", rc);
+		pr_err("read1 error %d\n", rc);
 		return (rc < 0) ? rc : -EIO;
 	}
 	PDEBUG(D_USBI, "read1 response %02x", gspca_dev->usb_buf[0]);
@@ -109,7 +111,7 @@ static int sn9c2028_read4(struct gspca_dev *gspca_dev, u8 *reading)
 			USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_INTERFACE,
 			4, 0, gspca_dev->usb_buf, 4, 500);
 	if (rc != 4) {
-		PDEBUG(D_ERR, "read4 error %d", rc);
+		pr_err("read4 error %d\n", rc);
 		return (rc < 0) ? rc : -EIO;
 	}
 	memcpy(reading, gspca_dev->usb_buf, 4);
@@ -131,7 +133,7 @@ static int sn9c2028_long_command(struct gspca_dev *gspca_dev, u8 *command)
 	for (i = 0; i < 256 && status < 2; i++)
 		status = sn9c2028_read1(gspca_dev);
 	if (status != 2) {
-		PDEBUG(D_ERR, "long command status read error %d", status);
+		pr_err("long command status read error %d\n", status);
 		return (status < 0) ? status : -EIO;
 	}
 
@@ -638,7 +640,7 @@ static int sd_start(struct gspca_dev *gspca_dev)
 		err_code = start_vivitar_cam(gspca_dev);
 		break;
 	default:
-		PDEBUG(D_ERR, "Starting unknown camera, please report this");
+		pr_err("Starting unknown camera, please report this\n");
 		return -ENXIO;
 	}
 
@@ -703,7 +705,7 @@ static const struct sd_desc sd_desc = {
 };
 
 /* -- module initialisation -- */
-static const __devinitdata struct usb_device_id device_table[] = {
+static const struct usb_device_id device_table[] = {
 	{USB_DEVICE(0x0458, 0x7005)}, /* Genius Smart 300, version 2 */
 	/* The Genius Smart is untested. I can't find an owner ! */
 	/* {USB_DEVICE(0x0c45, 0x8000)}, DC31VC, Don't know this camera */
@@ -735,23 +737,4 @@ static struct usb_driver sd_driver = {
 #endif
 };
 
-/* -- module insert / remove -- */
-static int __init sd_mod_init(void)
-{
-	int ret;
-
-	ret = usb_register(&sd_driver);
-	if (ret < 0)
-		return ret;
-	PDEBUG(D_PROBE, "registered");
-	return 0;
-}
-
-static void __exit sd_mod_exit(void)
-{
-	usb_deregister(&sd_driver);
-	PDEBUG(D_PROBE, "deregistered");
-}
-
-module_init(sd_mod_init);
-module_exit(sd_mod_exit);
+module_usb_driver(sd_driver);

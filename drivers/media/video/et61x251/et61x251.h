@@ -21,7 +21,6 @@
 #ifndef _ET61X251_H_
 #define _ET61X251_H_
 
-#include <linux/version.h>
 #include <linux/usb.h>
 #include <linux/videodev2.h>
 #include <media/v4l2-common.h>
@@ -59,31 +58,7 @@
 /*****************************************************************************/
 
 static const struct usb_device_id et61x251_id_table[] = {
-	{ USB_DEVICE(0x102c, 0x6151), },
 	{ USB_DEVICE(0x102c, 0x6251), },
-	{ USB_DEVICE(0x102c, 0x6253), },
-	{ USB_DEVICE(0x102c, 0x6254), },
-	{ USB_DEVICE(0x102c, 0x6255), },
-	{ USB_DEVICE(0x102c, 0x6256), },
-	{ USB_DEVICE(0x102c, 0x6257), },
-	{ USB_DEVICE(0x102c, 0x6258), },
-	{ USB_DEVICE(0x102c, 0x6259), },
-	{ USB_DEVICE(0x102c, 0x625a), },
-	{ USB_DEVICE(0x102c, 0x625b), },
-	{ USB_DEVICE(0x102c, 0x625c), },
-	{ USB_DEVICE(0x102c, 0x625d), },
-	{ USB_DEVICE(0x102c, 0x625e), },
-	{ USB_DEVICE(0x102c, 0x625f), },
-	{ USB_DEVICE(0x102c, 0x6260), },
-	{ USB_DEVICE(0x102c, 0x6261), },
-	{ USB_DEVICE(0x102c, 0x6262), },
-	{ USB_DEVICE(0x102c, 0x6263), },
-	{ USB_DEVICE(0x102c, 0x6264), },
-	{ USB_DEVICE(0x102c, 0x6265), },
-	{ USB_DEVICE(0x102c, 0x6266), },
-	{ USB_DEVICE(0x102c, 0x6267), },
-	{ USB_DEVICE(0x102c, 0x6268), },
-	{ USB_DEVICE(0x102c, 0x6269), },
 	{ }
 };
 
@@ -190,45 +165,49 @@ et61x251_attach_sensor(struct et61x251_device* cam,
 #undef DBG
 #undef KDBG
 #ifdef ET61X251_DEBUG
-#	define DBG(level, fmt, args...)                                       \
-do {                                                                          \
-	if (debug >= (level)) {                                               \
-		if ((level) == 1)                                             \
-			dev_err(&cam->usbdev->dev, fmt "\n", ## args);        \
-		else if ((level) == 2)                                        \
-			dev_info(&cam->usbdev->dev, fmt "\n", ## args);       \
-		else if ((level) >= 3)                                        \
-			dev_info(&cam->usbdev->dev, "[%s:%s:%d] " fmt "\n",   \
-				 __FILE__, __func__, __LINE__ , ## args); \
-	}                                                                     \
+#define DBG(level, fmt, ...)						\
+do {									\
+	if (debug >= (level)) {						\
+		if ((level) == 1)					\
+			dev_err(&cam->usbdev->dev, fmt "\n",		\
+				##__VA_ARGS__);				\
+		else if ((level) == 2)					\
+			dev_info(&cam->usbdev->dev, fmt "\n",		\
+				 ##__VA_ARGS__);			\
+		else if ((level) >= 3)					\
+			dev_info(&cam->usbdev->dev, "[%s:%s:%d] " fmt "\n", \
+				 __FILE__, __func__, __LINE__,		\
+				 ##__VA_ARGS__);			\
+	}								\
 } while (0)
-#	define KDBG(level, fmt, args...)                                      \
-do {                                                                          \
-	if (debug >= (level)) {                                               \
-		if ((level) == 1 || (level) == 2)                             \
-			pr_info("et61x251: " fmt "\n", ## args);              \
-		else if ((level) == 3)                                        \
-			pr_debug("sn9c102: [%s:%s:%d] " fmt "\n", __FILE__,   \
-				 __func__, __LINE__ , ## args);           \
-	}                                                                     \
+#define KDBG(level, fmt, ...)						\
+do {									\
+	if (debug >= (level)) {						\
+		if ((level) == 1 || (level) == 2)			\
+			pr_info(fmt "\n", ##__VA_ARGS__);		\
+		else if ((level) == 3)					\
+			pr_debug("[%s:%s:%d] " fmt "\n",		\
+				 __FILE__,  __func__, __LINE__,		\
+				 ##__VA_ARGS__);			\
+	}								\
 } while (0)
-#	define V4LDBG(level, name, cmd)                                       \
-do {                                                                          \
-	if (debug >= (level))                                                 \
-		v4l_print_ioctl(name, cmd);                                   \
+#define V4LDBG(level, name, cmd)					\
+do {									\
+	if (debug >= (level))						\
+		v4l_print_ioctl(name, cmd);				\
 } while (0)
 #else
-#	define DBG(level, fmt, args...) do {;} while(0)
-#	define KDBG(level, fmt, args...) do {;} while(0)
-#	define V4LDBG(level, name, cmd) do {;} while(0)
+#define DBG(level, fmt, ...) do {;} while(0)
+#define KDBG(level, fmt, ...) do {;} while(0)
+#define V4LDBG(level, name, cmd) do {;} while(0)
 #endif
 
 #undef PDBG
-#define PDBG(fmt, args...)                                                    \
-dev_info(&cam->usbdev->dev, "[%s:%s:%d] " fmt "\n", __FILE__, __func__,   \
-	 __LINE__ , ## args)
+#define PDBG(fmt, ...)							\
+	dev_info(&cam->usbdev->dev, "[%s:%s:%d] " fmt "\n",		\
+		 __FILE__, __func__, __LINE__, ##__VA_ARGS__)
 
 #undef PDBGG
-#define PDBGG(fmt, args...) do {;} while(0) /* placeholder */
+#define PDBGG(fmt, args...) do {;} while (0) /* placeholder */
 
 #endif /* _ET61X251_H_ */

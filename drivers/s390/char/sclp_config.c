@@ -11,7 +11,7 @@
 #include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/cpu.h>
-#include <linux/sysdev.h>
+#include <linux/device.h>
 #include <linux/workqueue.h>
 #include <asm/smp.h>
 
@@ -31,13 +31,14 @@ static struct work_struct sclp_cpu_change_work;
 static void sclp_cpu_capability_notify(struct work_struct *work)
 {
 	int cpu;
-	struct sys_device *sysdev;
+	struct device *dev;
 
+	s390_adjust_jiffies();
 	pr_warning("cpu capability changed.\n");
 	get_online_cpus();
 	for_each_online_cpu(cpu) {
-		sysdev = get_cpu_sysdev(cpu);
-		kobject_uevent(&sysdev->kobj, KOBJ_CHANGE);
+		dev = get_cpu_device(cpu);
+		kobject_uevent(&dev->kobj, KOBJ_CHANGE);
 	}
 	put_online_cpus();
 }
@@ -70,21 +71,9 @@ static struct sclp_register sclp_conf_register =
 
 static int __init sclp_conf_init(void)
 {
-	int rc;
-
 	INIT_WORK(&sclp_cpu_capability_work, sclp_cpu_capability_notify);
 	INIT_WORK(&sclp_cpu_change_work, sclp_cpu_change_notify);
-
-	rc = sclp_register(&sclp_conf_register);
-	if (rc)
-		return rc;
-
-	if (!(sclp_conf_register.sclp_send_mask & EVTYP_CONFMGMDATA_MASK)) {
-		pr_warning("no configuration management.\n");
-		sclp_unregister(&sclp_conf_register);
-		rc = -ENOSYS;
-	}
-	return rc;
+	return sclp_register(&sclp_conf_register);
 }
 
 __initcall(sclp_conf_init);

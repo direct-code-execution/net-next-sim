@@ -66,6 +66,7 @@ ikconfig_read_current(struct file *file, char __user *buf,
 static const struct file_operations ikconfig_file_ops = {
 	.owner = THIS_MODULE,
 	.read = ikconfig_read_current,
+	.llseek = default_llseek,
 };
 
 static int __init ikconfig_init(void)
@@ -91,8 +92,8 @@ static void __exit ikconfig_cleanup(void)
 module_init(ikconfig_init);
 module_exit(ikconfig_cleanup);
 
+#endif /* CONFIG_IKCONFIG_PROC */
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Randy Dunlap");
 MODULE_DESCRIPTION("Echo the kernel .config file used to build the kernel");
-
-#endif /* CONFIG_IKCONFIG_PROC */

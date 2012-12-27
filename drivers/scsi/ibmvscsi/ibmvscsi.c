@@ -55,13 +55,7 @@
  * and sends a CRQ message back to inform the client that the request has
  * completed.
  *
- * Note that some of the underlying infrastructure is different between
- * machines conforming to the "RS/6000 Platform Architecture" (RPA) and
- * the older iSeries hypervisor models.  To support both, some low level
- * routines have been broken out into rpa_vscsi.c and iseries_vscsi.c.
- * The Makefile should pick one, not two, not zero, of these.
- *
- * TODO: This is currently pretty tied to the IBM i/pSeries hypervisor
+ * TODO: This is currently pretty tied to the IBM pSeries hypervisor
  * interfaces.  It would be really nice to abstract this above an RDMA
  * layer.
  */
@@ -713,7 +707,7 @@ static inline u16 lun_from_dev(struct scsi_device *dev)
  * @cmd:	struct scsi_cmnd to be executed
  * @done:	Callback function to be called when cmd is completed
 */
-static int ibmvscsi_queuecommand(struct scsi_cmnd *cmnd,
+static int ibmvscsi_queuecommand_lck(struct scsi_cmnd *cmnd,
 				 void (*done) (struct scsi_cmnd *))
 {
 	struct srp_cmd *srp_cmd;
@@ -765,6 +759,8 @@ static int ibmvscsi_queuecommand(struct scsi_cmnd *cmnd,
 
 	return ibmvscsi_send_srp_event(evt_struct, hostdata, 0);
 }
+
+static DEF_SCSI_QCMD(ibmvscsi_queuecommand)
 
 /* ------------------------------------------------------------
  * Routines for driver initialization
@@ -1847,8 +1843,7 @@ static void ibmvscsi_do_work(struct ibmvscsi_host_data *hostdata)
 		rc = ibmvscsi_ops->reset_crq_queue(&hostdata->queue, hostdata);
 		if (!rc)
 			rc = ibmvscsi_ops->send_crq(hostdata, 0xC001000000000000LL, 0);
-		if (!rc)
-			rc = vio_enable_interrupts(to_vio_dev(hostdata->dev));
+		vio_enable_interrupts(to_vio_dev(hostdata->dev));
 	} else if (hostdata->reenable_crq) {
 		smp_rmb();
 		action = "enable";
@@ -2066,11 +2061,8 @@ static struct vio_driver ibmvscsi_driver = {
 	.probe = ibmvscsi_probe,
 	.remove = ibmvscsi_remove,
 	.get_desired_dma = ibmvscsi_get_desired_dma,
-	.driver = {
-		.name = "ibmvscsi",
-		.owner = THIS_MODULE,
-		.pm = &ibmvscsi_pm_ops,
-	}
+	.name = "ibmvscsi",
+	.pm = &ibmvscsi_pm_ops,
 };
 
 static struct srp_function_template ibmvscsi_transport_functions = {
@@ -2084,9 +2076,7 @@ int __init ibmvscsi_module_init(void)
 	driver_template.can_queue = max_requests;
 	max_events = max_requests + 2;
 
-	if (firmware_has_feature(FW_FEATURE_ISERIES))
-		ibmvscsi_ops = &iseriesvscsi_ops;
-	else if (firmware_has_feature(FW_FEATURE_VIO))
+	if (firmware_has_feature(FW_FEATURE_VIO))
 		ibmvscsi_ops = &rpavscsi_ops;
 	else
 		return -ENODEV;

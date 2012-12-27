@@ -43,6 +43,7 @@
 #include <linux/errno.h>
 #include <linux/clk.h>
 #include <linux/io.h>
+#include <linux/bug.h>
 
 #include <plat/clock.h>
 
@@ -97,7 +98,7 @@ static u8 _get_div_and_fieldval(struct clk *src_clk, struct clk *clk,
 				u32 *field_val)
 {
 	const struct clksel *clks;
-	const struct clksel_rate *clkr, *max_clkr;
+	const struct clksel_rate *clkr, *max_clkr = NULL;
 	u8 max_div = 0;
 
 	clks = _get_clksel_by_parent(clk, src_clk);

@@ -203,18 +203,13 @@ static ssize_t debug_read(struct file *file, char __user *buf,
 	return simple_read_from_buffer(buf, count, ppos, debug_buffer, bsize);
 }
 
-static int debug_open(struct inode *inode, struct file *file)
-{
-	file->private_data = inode->i_private;
-	return 0;
-}
-
 static const struct file_operations debug_ops = {
 	.read = debug_read,
-	.open = debug_open,
+	.open = simple_open,
+	.llseek = default_llseek,
 };
 
-static void debug_create(const char *name, mode_t mode,
+static void debug_create(const char *name, umode_t mode,
 			 struct dentry *dent,
 			 int (*fill)(char *buf, int max))
 {
@@ -269,8 +264,10 @@ void smsm_print_sleep_info(void)
 {
 	unsigned long flags;
 	uint32_t *ptr;
+#ifndef CONFIG_ARCH_MSM_SCORPION
 	struct tramp_gpio_smem *gpio;
 	struct smsm_interrupt_info *int_info;
+#endif
 
 
 	spin_lock_irqsave(&smem_lock, flags);

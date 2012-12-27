@@ -109,7 +109,7 @@ static unsigned long corgibl_flags;
 #define CORGIBL_BATTLOW       0x02
 
 /*
- * This is only a psuedo I2C interface. We can't use the standard kernel
+ * This is only a pseudo I2C interface. We can't use the standard kernel
  * routines as the interface is write only. We just assume the data is acked...
  */
 static void lcdtg_ssp_i2c_send(struct corgi_lcd *lcd, uint8_t data)
@@ -562,6 +562,7 @@ static int __devinit corgi_lcd_probe(struct spi_device *spi)
 	lcd->mode = (pdata) ? pdata->init_mode : CORGI_LCD_MODE_VGA;
 
 	memset(&props, 0, sizeof(struct backlight_properties));
+	props.type = BACKLIGHT_RAW;
 	props.max_brightness = pdata->max_intensity;
 	lcd->bl_dev = backlight_device_register("corgi_bl", &spi->dev, lcd,
 						&corgi_bl_ops, &props);
@@ -628,17 +629,7 @@ static struct spi_driver corgi_lcd_driver = {
 	.resume		= corgi_lcd_resume,
 };
 
-static int __init corgi_lcd_init(void)
-{
-	return spi_register_driver(&corgi_lcd_driver);
-}
-module_init(corgi_lcd_init);
-
-static void __exit corgi_lcd_exit(void)
-{
-	spi_unregister_driver(&corgi_lcd_driver);
-}
-module_exit(corgi_lcd_exit);
+module_spi_driver(corgi_lcd_driver);
 
 MODULE_DESCRIPTION("LCD and backlight driver for SHARP C7x0/Cxx00");
 MODULE_AUTHOR("Eric Miao <eric.miao@marvell.com>");

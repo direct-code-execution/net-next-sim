@@ -20,33 +20,34 @@
 #include <linux/dm9000.h>
 #include <linux/mmc/host.h>
 #include <linux/spi/spi.h>
+#include <linux/spi/pxa2xx_spi.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/partitions.h>
 #include <linux/mtd/physmap.h>
 #include <linux/i2c.h>
+#include <linux/i2c/pxa-i2c.h>
 #include <linux/i2c/pca953x.h>
 #include <linux/apm-emulation.h>
 #include <linux/can/platform/mcp251x.h>
 
 #include <asm/mach-types.h>
+#include <asm/suspend.h>
+#include <asm/system_info.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 
-#include <plat/i2c.h>
-
-#include <mach/pxa2xx-regs.h>
+#include <mach/pxa27x.h>
 #include <mach/regs-uart.h>
 #include <mach/ohci.h>
 #include <mach/mmc.h>
 #include <mach/pxa27x-udc.h>
 #include <mach/udc.h>
 #include <mach/pxafb.h>
-#include <mach/pxa2xx_spi.h>
-#include <mach/mfp-pxa27x.h>
 #include <mach/pm.h>
 #include <mach/audio.h>
 #include <mach/arcom-pcmcia.h>
 #include <mach/zeus.h>
+#include <mach/smemc.h>
 
 #include "generic.h"
 
@@ -82,19 +83,19 @@ static inline int zeus_bit_to_irq(int bit)
 	return zeus_isa_irqs[bit] + PXA_ISA_IRQ(0);
 }
 
-static void zeus_ack_irq(unsigned int irq)
+static void zeus_ack_irq(struct irq_data *d)
 {
-	__raw_writew(zeus_irq_to_bitmask(irq), ZEUS_CPLD_ISA_IRQ);
+	__raw_writew(zeus_irq_to_bitmask(d->irq), ZEUS_CPLD_ISA_IRQ);
 }
 
-static void zeus_mask_irq(unsigned int irq)
+static void zeus_mask_irq(struct irq_data *d)
 {
-	zeus_irq_enabled_mask &= ~(zeus_irq_to_bitmask(irq));
+	zeus_irq_enabled_mask &= ~(zeus_irq_to_bitmask(d->irq));
 }
 
-static void zeus_unmask_irq(unsigned int irq)
+static void zeus_unmask_irq(struct irq_data *d)
 {
-	zeus_irq_enabled_mask |= zeus_irq_to_bitmask(irq);
+	zeus_irq_enabled_mask |= zeus_irq_to_bitmask(d->irq);
 }
 
 static inline unsigned long zeus_irq_pending(void)
@@ -110,7 +111,7 @@ static void zeus_irq_handler(unsigned int irq, struct irq_desc *desc)
 	do {
 		/* we're in a chained irq handler,
 		 * so ack the interrupt by hand */
-		desc->chip->ack(gpio_to_irq(ZEUS_ISA_GPIO));
+		desc->irq_data.chip->irq_ack(&desc->irq_data);
 
 		if (likely(pending)) {
 			irq = zeus_bit_to_irq(__ffs(pending));
@@ -121,10 +122,10 @@ static void zeus_irq_handler(unsigned int irq, struct irq_desc *desc)
 }
 
 static struct irq_chip zeus_irq_chip = {
-	.name	= "ISA",
-	.ack	= zeus_ack_irq,
-	.mask	= zeus_mask_irq,
-	.unmask	= zeus_unmask_irq,
+	.name		= "ISA",
+	.irq_ack	= zeus_ack_irq,
+	.irq_mask	= zeus_mask_irq,
+	.irq_unmask	= zeus_unmask_irq,
 };
 
 static void __init zeus_init_irq(void)
@@ -136,22 +137,23 @@ static void __init zeus_init_irq(void)
 
 	/* Peripheral IRQs. It would be nice to move those inside driver
 	   configuration, but it is not supported at the moment. */
-	set_irq_type(gpio_to_irq(ZEUS_AC97_GPIO),	IRQ_TYPE_EDGE_RISING);
-	set_irq_type(gpio_to_irq(ZEUS_WAKEUP_GPIO),	IRQ_TYPE_EDGE_RISING);
-	set_irq_type(gpio_to_irq(ZEUS_PTT_GPIO),	IRQ_TYPE_EDGE_RISING);
-	set_irq_type(gpio_to_irq(ZEUS_EXTGPIO_GPIO),	IRQ_TYPE_EDGE_FALLING);
-	set_irq_type(gpio_to_irq(ZEUS_CAN_GPIO),	IRQ_TYPE_EDGE_FALLING);
+	irq_set_irq_type(gpio_to_irq(ZEUS_AC97_GPIO), IRQ_TYPE_EDGE_RISING);
+	irq_set_irq_type(gpio_to_irq(ZEUS_WAKEUP_GPIO), IRQ_TYPE_EDGE_RISING);
+	irq_set_irq_type(gpio_to_irq(ZEUS_PTT_GPIO), IRQ_TYPE_EDGE_RISING);
+	irq_set_irq_type(gpio_to_irq(ZEUS_EXTGPIO_GPIO),
+			 IRQ_TYPE_EDGE_FALLING);
+	irq_set_irq_type(gpio_to_irq(ZEUS_CAN_GPIO), IRQ_TYPE_EDGE_FALLING);
 
 	/* Setup ISA IRQs */
 	for (level = 0; level < ARRAY_SIZE(zeus_isa_irqs); level++) {
 		isa_irq = zeus_bit_to_irq(level);
-		set_irq_chip(isa_irq, &zeus_irq_chip);
-		set_irq_handler(isa_irq, handle_edge_irq);
+		irq_set_chip_and_handler(isa_irq, &zeus_irq_chip,
+					 handle_edge_irq);
 		set_irq_flags(isa_irq, IRQF_VALID | IRQF_PROBE);
 	}
 
-	set_irq_type(gpio_to_irq(ZEUS_ISA_GPIO), IRQ_TYPE_EDGE_RISING);
-	set_irq_chained_handler(gpio_to_irq(ZEUS_ISA_GPIO), zeus_irq_handler);
+	irq_set_irq_type(gpio_to_irq(ZEUS_ISA_GPIO), IRQ_TYPE_EDGE_RISING);
+	irq_set_chained_handler(gpio_to_irq(ZEUS_ISA_GPIO), zeus_irq_handler);
 }
 
 
@@ -232,7 +234,7 @@ static struct plat_serial8250_port serial_platform_data[] = {
 	/* FIXME: Shared IRQs on COM1-COM4 will not work properly on v1i1 hardware. */
 	{ /* COM1 */
 		.mapbase	= 0x10000000,
-		.irq		= gpio_to_irq(ZEUS_UARTA_GPIO),
+		.irq		= PXA_GPIO_TO_IRQ(ZEUS_UARTA_GPIO),
 		.irqflags	= IRQF_TRIGGER_RISING,
 		.uartclk	= 14745600,
 		.regshift	= 1,
@@ -241,7 +243,7 @@ static struct plat_serial8250_port serial_platform_data[] = {
 	},
 	{ /* COM2 */
 		.mapbase	= 0x10800000,
-		.irq		= gpio_to_irq(ZEUS_UARTB_GPIO),
+		.irq		= PXA_GPIO_TO_IRQ(ZEUS_UARTB_GPIO),
 		.irqflags	= IRQF_TRIGGER_RISING,
 		.uartclk	= 14745600,
 		.regshift	= 1,
@@ -250,7 +252,7 @@ static struct plat_serial8250_port serial_platform_data[] = {
 	},
 	{ /* COM3 */
 		.mapbase	= 0x11000000,
-		.irq		= gpio_to_irq(ZEUS_UARTC_GPIO),
+		.irq		= PXA_GPIO_TO_IRQ(ZEUS_UARTC_GPIO),
 		.irqflags	= IRQF_TRIGGER_RISING,
 		.uartclk	= 14745600,
 		.regshift	= 1,
@@ -259,7 +261,7 @@ static struct plat_serial8250_port serial_platform_data[] = {
 	},
 	{ /* COM4 */
 		.mapbase	= 0x11800000,
-		.irq		= gpio_to_irq(ZEUS_UARTD_GPIO),
+		.irq		= PXA_GPIO_TO_IRQ(ZEUS_UARTD_GPIO),
 		.irqflags	= IRQF_TRIGGER_RISING,
 		.uartclk	= 14745600,
 		.regshift	= 1,
@@ -320,8 +322,8 @@ static struct resource zeus_dm9k0_resource[] = {
 		.flags = IORESOURCE_MEM
 	},
 	[2] = {
-		.start = gpio_to_irq(ZEUS_ETH0_GPIO),
-		.end   = gpio_to_irq(ZEUS_ETH0_GPIO),
+		.start = PXA_GPIO_TO_IRQ(ZEUS_ETH0_GPIO),
+		.end   = PXA_GPIO_TO_IRQ(ZEUS_ETH0_GPIO),
 		.flags = IORESOURCE_IRQ | IORESOURCE_IRQ_LOWEDGE,
 	},
 };
@@ -338,8 +340,8 @@ static struct resource zeus_dm9k1_resource[] = {
 		.flags = IORESOURCE_MEM,
 	},
 	[2] = {
-		.start = gpio_to_irq(ZEUS_ETH1_GPIO),
-		.end   = gpio_to_irq(ZEUS_ETH1_GPIO),
+		.start = PXA_GPIO_TO_IRQ(ZEUS_ETH1_GPIO),
+		.end   = PXA_GPIO_TO_IRQ(ZEUS_ETH1_GPIO),
 		.flags = IORESOURCE_IRQ | IORESOURCE_IRQ_LOWEDGE,
 	},
 };
@@ -422,7 +424,7 @@ static struct spi_board_info zeus_spi_board_info[] = {
 	[0] = {
 		.modalias	= "mcp2515",
 		.platform_data	= &zeus_mcp2515_pdata,
-		.irq		= gpio_to_irq(ZEUS_CAN_GPIO),
+		.irq		= PXA_GPIO_TO_IRQ(ZEUS_CAN_GPIO),
 		.max_speed_hz	= 1*1000*1000,
 		.bus_num	= 3,
 		.mode		= SPI_MODE_0,
@@ -675,7 +677,7 @@ static struct pxa2xx_udc_mach_info zeus_udc_info = {
 static void zeus_power_off(void)
 {
 	local_irq_disable();
-	pxa27x_cpu_suspend(PWRMODE_DEEPSLEEP);
+	cpu_suspend(PWRMODE_DEEPSLEEP, pxa27x_finish_suspend);
 }
 #else
 #define zeus_power_off   NULL
@@ -752,7 +754,7 @@ static struct i2c_board_info __initdata zeus_i2c_devices[] = {
 	{
 		I2C_BOARD_INFO("pca9535",	0x20),
 		.platform_data	= &zeus_pca953x_pdata[2],
-		.irq		= gpio_to_irq(ZEUS_EXTGPIO_GPIO),
+		.irq		= PXA_GPIO_TO_IRQ(ZEUS_EXTGPIO_GPIO),
 	},
 	{ I2C_BOARD_INFO("lm75a",	0x48) },
 	{ I2C_BOARD_INFO("24c01",	0x50) },
@@ -823,13 +825,16 @@ static mfp_cfg_t zeus_pin_config[] __initdata = {
 static void __init zeus_init(void)
 {
 	u16 dm9000_msc = DM9K_MSC_VALUE;
+	u32 msc0, msc1;
 
 	system_rev = __raw_readw(ZEUS_CPLD_VERSION);
 	pr_info("Zeus CPLD V%dI%d\n", (system_rev & 0xf0) >> 4, (system_rev & 0x0f));
 
 	/* Fix timings for dm9000s (CS1/CS2)*/
-	MSC0 = (MSC0 & 0xffff) | (dm9000_msc << 16);
-	MSC1 = (MSC1 & 0xffff0000) | dm9000_msc;
+	msc0 = (__raw_readl(MSC0) & 0x0000ffff) | (dm9000_msc << 16);
+	msc1 = (__raw_readl(MSC1) & 0xffff0000) | dm9000_msc;
+	__raw_writel(msc0, MSC0);
+	__raw_writel(msc1, MSC1);
 
 	pm_power_off = zeus_power_off;
 	zeus_setup_apm();
@@ -843,7 +848,7 @@ static void __init zeus_init(void)
 	if (zeus_setup_fb_gpios())
 		pr_err("Failed to setup fb gpios\n");
 	else
-		set_pxa_fb_info(&zeus_fb_info);
+		pxa_set_fb_info(NULL, &zeus_fb_info);
 
 	pxa_set_mci_info(&zeus_mci_platform_data);
 	pxa_set_udc_info(&zeus_udc_info);
@@ -856,25 +861,25 @@ static void __init zeus_init(void)
 
 static struct map_desc zeus_io_desc[] __initdata = {
 	{
-		.virtual = ZEUS_CPLD_VERSION,
+		.virtual = (unsigned long)ZEUS_CPLD_VERSION,
 		.pfn     = __phys_to_pfn(ZEUS_CPLD_VERSION_PHYS),
 		.length  = 0x1000,
 		.type    = MT_DEVICE,
 	},
 	{
-		.virtual = ZEUS_CPLD_ISA_IRQ,
+		.virtual = (unsigned long)ZEUS_CPLD_ISA_IRQ,
 		.pfn     = __phys_to_pfn(ZEUS_CPLD_ISA_IRQ_PHYS),
 		.length  = 0x1000,
 		.type    = MT_DEVICE,
 	},
 	{
-		.virtual = ZEUS_CPLD_CONTROL,
+		.virtual = (unsigned long)ZEUS_CPLD_CONTROL,
 		.pfn     = __phys_to_pfn(ZEUS_CPLD_CONTROL_PHYS),
 		.length  = 0x1000,
 		.type    = MT_DEVICE,
 	},
 	{
-		.virtual = ZEUS_PC104IO,
+		.virtual = (unsigned long)ZEUS_PC104IO,
 		.pfn     = __phys_to_pfn(ZEUS_PC104IO_PHYS),
 		.length  = 0x00800000,
 		.type    = MT_DEVICE,
@@ -883,7 +888,7 @@ static struct map_desc zeus_io_desc[] __initdata = {
 
 static void __init zeus_map_io(void)
 {
-	pxa_map_io();
+	pxa27x_map_io();
 
 	iotable_init(zeus_io_desc, ARRAY_SIZE(zeus_io_desc));
 
@@ -900,12 +905,13 @@ static void __init zeus_map_io(void)
 
 MACHINE_START(ARCOM_ZEUS, "Arcom/Eurotech ZEUS")
 	/* Maintainer: Marc Zyngier <maz@misterjones.org> */
-	.phys_io	= 0x40000000,
-	.io_pg_offst	= ((io_p2v(0x40000000) >> 18) & 0xfffc),
-	.boot_params	= 0xa0000100,
+	.atag_offset	= 0x100,
 	.map_io		= zeus_map_io,
+	.nr_irqs	= ZEUS_NR_IRQS,
 	.init_irq	= zeus_init_irq,
+	.handle_irq	= pxa27x_handle_irq,
 	.timer		= &pxa_timer,
 	.init_machine	= zeus_init,
+	.restart	= pxa_restart,
 MACHINE_END
 

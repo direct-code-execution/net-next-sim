@@ -11,10 +11,16 @@
 #define m520xsim_h
 /****************************************************************************/
 
+#define	CPU_NAME		"COLDFIRE(m520x)"
+#define	CPU_INSTR_PER_JIFFY	3
+#define	MCF_BUSCLK		(MCF_CLK / 2)
+
+#include <asm/m52xxacr.h>
+
 /*
  *  Define the 520x SIM register set addresses.
  */
-#define MCFICM_INTC0        0x48000     /* Base for Interrupt Ctrl 0 */
+#define MCFICM_INTC0        0xFC048000  /* Base for Interrupt Ctrl 0 */
 #define MCFINTC_IPRH        0x00        /* Interrupt pending 32-63 */
 #define MCFINTC_IPRL        0x04        /* Interrupt pending 1-31 */
 #define MCFINTC_IMRH        0x08        /* Interrupt mask 32-63 */
@@ -30,9 +36,9 @@
  *  address to the SIMR and CIMR registers (not offsets into IPSBAR).
  *  The 520x family only has a single INTC unit.
  */
-#define MCFINTC0_SIMR       (MCF_IPSBAR + MCFICM_INTC0 + MCFINTC_SIMR)
-#define MCFINTC0_CIMR       (MCF_IPSBAR + MCFICM_INTC0 + MCFINTC_CIMR)
-#define	MCFINTC0_ICR0       (MCF_IPSBAR + MCFICM_INTC0 + MCFINTC_ICR0)
+#define MCFINTC0_SIMR       (MCFICM_INTC0 + MCFINTC_SIMR)
+#define MCFINTC0_CIMR       (MCFICM_INTC0 + MCFINTC_CIMR)
+#define	MCFINTC0_ICR0       (MCFICM_INTC0 + MCFINTC_ICR0)
 #define MCFINTC1_SIMR       (0)
 #define MCFINTC1_CIMR       (0)
 #define	MCFINTC1_ICR0       (0)
@@ -42,21 +48,40 @@
 #define MCFINT_UART1        27          /* Interrupt number for UART1 */
 #define MCFINT_UART2        28          /* Interrupt number for UART2 */
 #define MCFINT_QSPI         31          /* Interrupt number for QSPI */
+#define MCFINT_FECRX0	    36		/* Interrupt number for FEC RX */
+#define MCFINT_FECTX0	    40		/* Interrupt number for FEC RX */
+#define MCFINT_FECENTC0	    42		/* Interrupt number for FEC RX */
 #define MCFINT_PIT1         4           /* Interrupt number for PIT1 (PIT0 in processor) */
+
+#define MCF_IRQ_UART0	    (MCFINT_VECBASE + MCFINT_UART0)
+#define MCF_IRQ_UART1	    (MCFINT_VECBASE + MCFINT_UART1)
+#define MCF_IRQ_UART2	    (MCFINT_VECBASE + MCFINT_UART2)
+
+#define MCF_IRQ_FECRX0	    (MCFINT_VECBASE + MCFINT_FECRX0)
+#define MCF_IRQ_FECTX0	    (MCFINT_VECBASE + MCFINT_FECTX0)
+#define MCF_IRQ_FECENTC0    (MCFINT_VECBASE + MCFINT_FECENTC0)
+
+#define	MCF_IRQ_QSPI	    (MCFINT_VECBASE + MCFINT_QSPI)
 
 /*
  *  SDRAM configuration registers.
  */
-#define MCFSIM_SDMR         0x000a8000	/* SDRAM Mode/Extended Mode Register */
-#define MCFSIM_SDCR         0x000a8004	/* SDRAM Control Register */
-#define MCFSIM_SDCFG1       0x000a8008	/* SDRAM Configuration Register 1 */
-#define MCFSIM_SDCFG2       0x000a800c	/* SDRAM Configuration Register 2 */
-#define MCFSIM_SDCS0        0x000a8110	/* SDRAM Chip Select 0 Configuration */
-#define MCFSIM_SDCS1        0x000a8114	/* SDRAM Chip Select 1 Configuration */
+#define MCFSIM_SDMR         0xFC0a8000	/* SDRAM Mode/Extended Mode Register */
+#define MCFSIM_SDCR         0xFC0a8004	/* SDRAM Control Register */
+#define MCFSIM_SDCFG1       0xFC0a8008	/* SDRAM Configuration Register 1 */
+#define MCFSIM_SDCFG2       0xFC0a800c	/* SDRAM Configuration Register 2 */
+#define MCFSIM_SDCS0        0xFC0a8110	/* SDRAM Chip Select 0 Configuration */
+#define MCFSIM_SDCS1        0xFC0a8114	/* SDRAM Chip Select 1 Configuration */
 
+/*
+ * EPORT and GPIO registers.
+ */
+#define MCFEPORT_EPPAR			0xFC088000
 #define MCFEPORT_EPDDR			0xFC088002
+#define MCFEPORT_EPIER			0xFC088003
 #define MCFEPORT_EPDR			0xFC088004
 #define MCFEPORT_EPPDR			0xFC088005
+#define MCFEPORT_EPFR			0xFC088006
 
 #define MCFGPIO_PODR_BUSCTL		0xFC0A4000
 #define MCFGPIO_PODR_BE			0xFC0A4001
@@ -78,15 +103,13 @@
 #define MCFGPIO_PDDR_FECH		0xFC0A4013
 #define MCFGPIO_PDDR_FECL		0xFC0A4014
 
-#define MCFGPIO_PPDSDR_BUSCTL		0xFC0A401A
-#define MCFGPIO_PPDSDR_BE		0xFC0A401B
-#define MCFGPIO_PPDSDR_CS		0xFC0A401C
-#define MCFGPIO_PPDSDR_FECI2C		0xFC0A401D
-#define MCFGPIO_PPDSDR_QSPI		0xFC0A401E
-#define MCFGPIO_PPDSDR_TIMER		0xFC0A401F
-#define MCFGPIO_PPDSDR_UART		0xFC0A4021
-#define MCFGPIO_PPDSDR_FECH		0xFC0A4021
-#define MCFGPIO_PPDSDR_FECL		0xFC0A4022
+#define MCFGPIO_PPDSDR_CS		0xFC0A401A
+#define MCFGPIO_PPDSDR_FECI2C		0xFC0A401B
+#define MCFGPIO_PPDSDR_QSPI		0xFC0A401C
+#define MCFGPIO_PPDSDR_TIMER		0xFC0A401D
+#define MCFGPIO_PPDSDR_UART		0xFC0A401E
+#define MCFGPIO_PPDSDR_FECH		0xFC0A401F
+#define MCFGPIO_PPDSDR_FECL		0xFC0A4020
 
 #define MCFGPIO_PCLRR_BUSCTL		0xFC0A4024
 #define MCFGPIO_PCLRR_BE		0xFC0A4025
@@ -97,24 +120,24 @@
 #define MCFGPIO_PCLRR_UART		0xFC0A402A
 #define MCFGPIO_PCLRR_FECH		0xFC0A402B
 #define MCFGPIO_PCLRR_FECL		0xFC0A402C
+
 /*
  * Generic GPIO support
  */
-#define MCFGPIO_PODR			MCFGPIO_PODR_BUSCTL
-#define MCFGPIO_PDDR			MCFGPIO_PDDR_BUSCTL
-#define MCFGPIO_PPDR			MCFGPIO_PPDSDR_BUSCTL
-#define MCFGPIO_SETR			MCFGPIO_PPDSDR_BUSCTL
-#define MCFGPIO_CLRR			MCFGPIO_PCLRR_BUSCTL
+#define MCFGPIO_PODR			MCFGPIO_PODR_CS
+#define MCFGPIO_PDDR			MCFGPIO_PDDR_CS
+#define MCFGPIO_PPDR			MCFGPIO_PPDSDR_CS
+#define MCFGPIO_SETR			MCFGPIO_PPDSDR_CS
+#define MCFGPIO_CLRR			MCFGPIO_PCLRR_CS
 
 #define MCFGPIO_PIN_MAX			80
 #define MCFGPIO_IRQ_MAX			8
 #define MCFGPIO_IRQ_VECBASE		MCFINT_VECBASE
-/****************************************************************************/
 
-#define MCF_GPIO_PAR_UART                   (0xA4036)
-#define MCF_GPIO_PAR_FECI2C                 (0xA4033)
-#define MCF_GPIO_PAR_QSPI                   (0xA4034)
-#define MCF_GPIO_PAR_FEC                    (0xA4038)
+#define MCF_GPIO_PAR_UART		0xFC0A4036
+#define MCF_GPIO_PAR_FECI2C		0xFC0A4033
+#define MCF_GPIO_PAR_QSPI		0xFC0A4034
+#define MCF_GPIO_PAR_FEC		0xFC0A4038
 
 #define MCF_GPIO_PAR_UART_PAR_URXD0         (0x0001)
 #define MCF_GPIO_PAR_UART_PAR_UTXD0         (0x0002)
@@ -126,7 +149,36 @@
 #define MCF_GPIO_PAR_FECI2C_PAR_SCL_UTXD2   (0x04)
 
 /*
- *  Reset Controll Unit.
+ *  PIT timer module.
+ */
+#define	MCFPIT_BASE1		0xFC080000	/* Base address of TIMER1 */
+#define	MCFPIT_BASE2		0xFC084000	/* Base address of TIMER2 */
+
+/*
+ *  UART module.
+ */
+#define MCFUART_BASE0		0xFC060000	/* Base address of UART0 */
+#define MCFUART_BASE1		0xFC064000	/* Base address of UART1 */
+#define MCFUART_BASE2		0xFC068000	/* Base address of UART2 */
+
+/*
+ *  FEC module.
+ */
+#define	MCFFEC_BASE0		0xFC030000	/* Base of FEC ethernet */
+#define	MCFFEC_SIZE0		0x800		/* Register set size */
+
+/*
+ *  QSPI module.
+ */
+#define	MCFQSPI_BASE		0xFC05C000	/* Base of QSPI module */
+#define	MCFQSPI_SIZE		0x40		/* Register set size */
+
+#define	MCFQSPI_CS0		46
+#define	MCFQSPI_CS1		47
+#define	MCFQSPI_CS2		27
+
+/*
+ *  Reset Control Unit.
  */
 #define	MCF_RCR			0xFC0A0000
 #define	MCF_RSR			0xFC0A0001

@@ -16,32 +16,6 @@
  *
  * See http://geocities.com/i0xox0i for information on this driver and the
  * earthmate usb device.
- *
- *  Lonnie Mendez <dignome@gmail.com>
- *  4-29-2005
- *	Fixed problem where setting or retreiving the serial config would fail
- *	with EPIPE.  Removed CRTS toggling so the driver behaves more like
- *	other usbserial adapters.  Issued new interval of 1ms instead of the
- *	default 10ms.  As a result, transfer speed has been substantially
- *	increased from avg. 850bps to avg. 3300bps.  initial termios has also
- *	been modified.  Cleaned up code and formatting issues so it is more
- *	readable.  Replaced the C++ style comments.
- *
- *  Lonnie Mendez <dignome@gmail.com>
- *  12-15-2004
- *	Incorporated write buffering from pl2303 driver.  Fixed bug with line
- *	handling so both lines are raised in cypress_open. (was dropping rts)
- *      Various code cleanups made as well along with other misc bug fixes.
- *
- *  Lonnie Mendez <dignome@gmail.com>
- *  04-10-2004
- *	Driver modified to support dynamic line settings.  Various improvments
- *      and features.
- *
- *  Neil Whelchel
- *  10-2003
- *	Driver first released.
- *
  */
 
 /* Thanks to Neil Whelchel for writing the first cypress m8 implementation
@@ -72,10 +46,10 @@
 #include "cypress_m8.h"
 
 
-static int debug;
-static int stats;
+static bool debug;
+static bool stats;
 static int interval;
-static int unstable_bauds;
+static bool unstable_bauds;
 
 /*
  * Version Information
@@ -120,7 +94,6 @@ static struct usb_driver cypress_driver = {
 	.probe =	usb_serial_probe,
 	.disconnect =	usb_serial_disconnect,
 	.id_table =	id_table_combined,
-	.no_dynamic_id = 	1,
 };
 
 enum packet_format {
@@ -169,12 +142,12 @@ static int  cypress_write(struct tty_struct *tty, struct usb_serial_port *port,
 			const unsigned char *buf, int count);
 static void cypress_send(struct usb_serial_port *port);
 static int  cypress_write_room(struct tty_struct *tty);
-static int  cypress_ioctl(struct tty_struct *tty, struct file *file,
+static int  cypress_ioctl(struct tty_struct *tty,
 			unsigned int cmd, unsigned long arg);
 static void cypress_set_termios(struct tty_struct *tty,
 			struct usb_serial_port *port, struct ktermios *old);
-static int  cypress_tiocmget(struct tty_struct *tty, struct file *file);
-static int  cypress_tiocmset(struct tty_struct *tty, struct file *file,
+static int  cypress_tiocmget(struct tty_struct *tty);
+static int  cypress_tiocmset(struct tty_struct *tty,
 			unsigned int set, unsigned int clear);
 static int  cypress_chars_in_buffer(struct tty_struct *tty);
 static void cypress_throttle(struct tty_struct *tty);
@@ -189,7 +162,6 @@ static struct usb_serial_driver cypress_earthmate_device = {
 		.name =			"earthmate",
 	},
 	.description =			"DeLorme Earthmate USB",
-	.usb_driver = 			&cypress_driver,
 	.id_table =			id_table_earthmate,
 	.num_ports =			1,
 	.attach =			cypress_earthmate_startup,
@@ -216,7 +188,6 @@ static struct usb_serial_driver cypress_hidcom_device = {
 		.name =			"cyphidcom",
 	},
 	.description =			"HID->COM RS232 Adapter",
-	.usb_driver = 			&cypress_driver,
 	.id_table =			id_table_cyphidcomrs232,
 	.num_ports =			1,
 	.attach =			cypress_hidcom_startup,
@@ -243,7 +214,6 @@ static struct usb_serial_driver cypress_ca42v2_device = {
 		.name =			"nokiaca42v2",
 	},
 	.description =			"Nokia CA-42 V2 Adapter",
-	.usb_driver = 			&cypress_driver,
 	.id_table =			id_table_nokiaca42v2,
 	.num_ports =			1,
 	.attach =			cypress_ca42v2_startup,
@@ -262,6 +232,11 @@ static struct usb_serial_driver cypress_ca42v2_device = {
 	.unthrottle =			cypress_unthrottle,
 	.read_int_callback =		cypress_read_int_callback,
 	.write_int_callback =		cypress_write_int_callback,
+};
+
+static struct usb_serial_driver * const serial_drivers[] = {
+	&cypress_earthmate_device, &cypress_hidcom_device,
+	&cypress_ca42v2_device, NULL
 };
 
 /*****************************************************************************
@@ -826,7 +801,7 @@ send:
 		cypress_write_int_callback, port, priv->write_urb_interval);
 	result = usb_submit_urb(port->interrupt_out_urb, GFP_ATOMIC);
 	if (result) {
-		dev_err(&port->dev,
+		dev_err_console(port,
 				"%s - failed submitting write urb, error %d\n",
 							__func__, result);
 		priv->write_urb_in_use = 0;
@@ -864,7 +839,7 @@ static int cypress_write_room(struct tty_struct *tty)
 }
 
 
-static int cypress_tiocmget(struct tty_struct *tty, struct file *file)
+static int cypress_tiocmget(struct tty_struct *tty)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	struct cypress_private *priv = usb_get_serial_port_data(port);
@@ -892,7 +867,7 @@ static int cypress_tiocmget(struct tty_struct *tty, struct file *file)
 }
 
 
-static int cypress_tiocmset(struct tty_struct *tty, struct file *file,
+static int cypress_tiocmset(struct tty_struct *tty,
 			       unsigned int set, unsigned int clear)
 {
 	struct usb_serial_port *port = tty->driver_data;
@@ -917,7 +892,7 @@ static int cypress_tiocmset(struct tty_struct *tty, struct file *file,
 }
 
 
-static int cypress_ioctl(struct tty_struct *tty, struct file *file,
+static int cypress_ioctl(struct tty_struct *tty,
 					unsigned int cmd, unsigned long arg)
 {
 	struct usb_serial_port *port = tty->driver_data;
@@ -1162,8 +1137,6 @@ static void cypress_unthrottle(struct tty_struct *tty)
 		return;
 
 	if (actually_throttled) {
-		port->interrupt_in_urb->dev = port->serial->dev;
-
 		result = usb_submit_urb(port->interrupt_in_urb, GFP_KERNEL);
 		if (result) {
 			dev_err(&port->dev, "%s - failed submitting read urb, "
@@ -1320,8 +1293,6 @@ continue_read:
 			cypress_set_dead(port);
 		}
 	}
-
-	return;
 } /* cypress_read_int_callback */
 
 
@@ -1354,7 +1325,6 @@ static void cypress_write_int_callback(struct urb *urb)
 		dbg("%s - nonzero write bulk status received: %d",
 			__func__, status);
 		port->interrupt_out_urb->transfer_buffer_length = 1;
-		port->interrupt_out_urb->dev = port->serial->dev;
 		result = usb_submit_urb(port->interrupt_out_urb, GFP_ATOMIC);
 		if (!result)
 			return;
@@ -1376,58 +1346,7 @@ static void cypress_write_int_callback(struct urb *urb)
 	cypress_send(port);
 }
 
-
-/*****************************************************************************
- * Module functions
- *****************************************************************************/
-
-static int __init cypress_init(void)
-{
-	int retval;
-
-	dbg("%s", __func__);
-
-	retval = usb_serial_register(&cypress_earthmate_device);
-	if (retval)
-		goto failed_em_register;
-	retval = usb_serial_register(&cypress_hidcom_device);
-	if (retval)
-		goto failed_hidcom_register;
-	retval = usb_serial_register(&cypress_ca42v2_device);
-	if (retval)
-		goto failed_ca42v2_register;
-	retval = usb_register(&cypress_driver);
-	if (retval)
-		goto failed_usb_register;
-
-	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_VERSION ":"
-	       DRIVER_DESC "\n");
-	return 0;
-
-failed_usb_register:
-	usb_serial_deregister(&cypress_ca42v2_device);
-failed_ca42v2_register:
-	usb_serial_deregister(&cypress_hidcom_device);
-failed_hidcom_register:
-	usb_serial_deregister(&cypress_earthmate_device);
-failed_em_register:
-	return retval;
-}
-
-
-static void __exit cypress_exit(void)
-{
-	dbg("%s", __func__);
-
-	usb_deregister(&cypress_driver);
-	usb_serial_deregister(&cypress_earthmate_device);
-	usb_serial_deregister(&cypress_hidcom_device);
-	usb_serial_deregister(&cypress_ca42v2_device);
-}
-
-
-module_init(cypress_init);
-module_exit(cypress_exit);
+module_usb_serial_driver(cypress_driver, serial_drivers);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

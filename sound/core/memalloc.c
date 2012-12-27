@@ -176,7 +176,7 @@ static void snd_free_dev_pages(struct device *dev, size_t size, void *ptr,
  * Calls the memory-allocator function for the corresponding
  * buffer type.
  * 
- * Returns zero if the buffer with the given size is allocated successfuly,
+ * Returns zero if the buffer with the given size is allocated successfully,
  * other a negative value at error.
  */
 int snd_dma_alloc_pages(int type, struct device *device, size_t size,
@@ -192,7 +192,8 @@ int snd_dma_alloc_pages(int type, struct device *device, size_t size,
 	dmab->bytes = 0;
 	switch (type) {
 	case SNDRV_DMA_TYPE_CONTINUOUS:
-		dmab->area = snd_malloc_pages(size, (unsigned long)device);
+		dmab->area = snd_malloc_pages(size,
+					(__force gfp_t)(unsigned long)device);
 		dmab->addr = 0;
 		break;
 #ifdef CONFIG_HAS_DMA
@@ -229,7 +230,7 @@ int snd_dma_alloc_pages(int type, struct device *device, size_t size,
  * tries to allocate again.  The size actually allocated is stored in
  * res_size argument.
  * 
- * Returns zero if the buffer with the given size is allocated successfuly,
+ * Returns zero if the buffer with the given size is allocated successfully,
  * other a negative value at error.
  */
 int snd_dma_alloc_pages_fallback(int type, struct device *device, size_t size,

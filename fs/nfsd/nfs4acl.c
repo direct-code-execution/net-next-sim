@@ -36,7 +36,8 @@
 
 #include <linux/slab.h>
 #include <linux/nfs_fs.h>
-#include <linux/nfs4_acl.h>
+#include <linux/export.h>
+#include "acl.h"
 
 
 /* mode bit translations: */

@@ -341,10 +341,10 @@ MODULE_PARM_DESC(aic79xx,
 "				(0/256ms,1/128ms,2/64ms,3/32ms)\n"
 "	slowcrc			Turn on the SLOWCRC bit (Rev B only)\n"		 
 "\n"
-"	Sample /etc/modprobe.conf line:\n"
-"		Enable verbose logging\n"
-"		Set tag depth on Controller 2/Target 2 to 10 tags\n"
-"		Shorten the selection timeout to 128ms\n"
+"	Sample modprobe configuration file:\n"
+"	#	Enable verbose logging\n"
+"	#	Set tag depth on Controller 2/Target 2 to 10 tags\n"
+"	#	Shorten the selection timeout to 128ms\n"
 "\n"
 "	options aic79xx 'aic79xx=verbose.tag_info:{{}.{}.{..10}}.seltime:1'\n"
 );
@@ -573,7 +573,7 @@ ahd_linux_info(struct Scsi_Host *host)
  * Queue an SCB to the controller.
  */
 static int
-ahd_linux_queue(struct scsi_cmnd * cmd, void (*scsi_done) (struct scsi_cmnd *))
+ahd_linux_queue_lck(struct scsi_cmnd * cmd, void (*scsi_done) (struct scsi_cmnd *))
 {
 	struct	 ahd_softc *ahd;
 	struct	 ahd_linux_device *dev = scsi_transport_device_data(cmd->device);
@@ -587,6 +587,8 @@ ahd_linux_queue(struct scsi_cmnd * cmd, void (*scsi_done) (struct scsi_cmnd *))
 
 	return rtn;
 }
+
+static DEF_SCSI_QCMD(ahd_linux_queue)
 
 static struct scsi_target **
 ahd_linux_target_in_softc(struct scsi_target *starget)
@@ -1439,7 +1441,7 @@ ahd_platform_set_tags(struct ahd_softc *ahd, struct scsi_device *sdev,
 		usertags = ahd_linux_user_tagdepth(ahd, devinfo);
 		if (!was_queuing) {
 			/*
-			 * Start out agressively and allow our
+			 * Start out aggressively and allow our
 			 * dynamic queue depth algorithm to take
 			 * care of the rest.
 			 */

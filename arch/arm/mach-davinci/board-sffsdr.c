@@ -35,16 +35,15 @@
 #include <asm/mach/arch.h>
 #include <asm/mach/flash.h>
 
-#include <mach/dm644x.h>
 #include <mach/common.h>
 #include <mach/i2c.h>
 #include <mach/serial.h>
 #include <mach/mux.h>
 #include <mach/usb.h>
 
-#define SFFSDR_PHY_MASK		(0x2)
-#define SFFSDR_MDIO_FREQUENCY	(2200000) /* PHY bus frequency */
+#include "davinci.h"
 
+#define SFFSDR_PHY_ID		"davinci_mdio-0:01"
 static struct mtd_partition davinci_sffsdr_nandflash_partition[] = {
 	/* U-Boot Environment: Block 0
 	 * UBL:                Block 1
@@ -143,8 +142,7 @@ static __init void davinci_sffsdr_init(void)
 			     ARRAY_SIZE(davinci_sffsdr_devices));
 	sffsdr_init_i2c();
 	davinci_serial_init(&uart_config);
-	soc_info->emac_pdata->phy_mask = SFFSDR_PHY_MASK;
-	soc_info->emac_pdata->mdio_max_freq = SFFSDR_MDIO_FREQUENCY;
+	soc_info->emac_pdata->phy_id = SFFSDR_PHY_ID;
 	davinci_setup_usb(0, 0); /* We support only peripheral mode. */
 
 	/* mux VLYNQ pins */
@@ -154,11 +152,11 @@ static __init void davinci_sffsdr_init(void)
 
 MACHINE_START(SFFSDR, "Lyrtech SFFSDR")
 	/* Maintainer: Hugo Villeneuve hugo.villeneuve@lyrtech.com */
-	.phys_io      = IO_PHYS,
-	.io_pg_offst  = (__IO_ADDRESS(IO_PHYS) >> 18) & 0xfffc,
-	.boot_params  = (DAVINCI_DDR_BASE + 0x100),
+	.atag_offset  = 0x100,
 	.map_io	      = davinci_sffsdr_map_io,
 	.init_irq     = davinci_irq_init,
 	.timer	      = &davinci_timer,
 	.init_machine = davinci_sffsdr_init,
+	.dma_zone_size	= SZ_128M,
+	.restart	= davinci_restart,
 MACHINE_END

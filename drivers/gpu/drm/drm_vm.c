@@ -34,6 +34,7 @@
  */
 
 #include "drmP.h"
+#include <linux/export.h>
 #if defined(__ia64__)
 #include <linux/efi.h>
 #include <linux/slab.h>
@@ -518,28 +519,18 @@ static int drm_mmap_dma(struct file *filp, struct vm_area_struct *vma)
 	vma->vm_flags |= VM_RESERVED;	/* Don't swap */
 	vma->vm_flags |= VM_DONTEXPAND;
 
-	vma->vm_file = filp;	/* Needed for drm_vm_open() */
 	drm_vm_open_locked(vma);
 	return 0;
 }
 
-resource_size_t drm_core_get_map_ofs(struct drm_local_map * map)
-{
-	return map->offset;
-}
-
-EXPORT_SYMBOL(drm_core_get_map_ofs);
-
-resource_size_t drm_core_get_reg_ofs(struct drm_device *dev)
+static resource_size_t drm_core_get_reg_ofs(struct drm_device *dev)
 {
 #ifdef __alpha__
-	return dev->hose->dense_mem_base - dev->hose->mem_space->start;
+	return dev->hose->dense_mem_base;
 #else
 	return 0;
 #endif
 }
-
-EXPORT_SYMBOL(drm_core_get_reg_ofs);
 
 /**
  * mmap DMA memory.
@@ -627,7 +618,7 @@ int drm_mmap_locked(struct file *filp, struct vm_area_struct *vma)
 #endif
 	case _DRM_FRAME_BUFFER:
 	case _DRM_REGISTERS:
-		offset = dev->driver->get_reg_ofs(dev);
+		offset = drm_core_get_reg_ofs(dev);
 		vma->vm_flags |= VM_IO;	/* not in core dump */
 		vma->vm_page_prot = drm_io_prot(map->type, vma);
 #if !defined(__arm__)
@@ -679,7 +670,6 @@ int drm_mmap_locked(struct file *filp, struct vm_area_struct *vma)
 	vma->vm_flags |= VM_RESERVED;	/* Don't swap */
 	vma->vm_flags |= VM_DONTEXPAND;
 
-	vma->vm_file = filp;	/* Needed for drm_vm_open() */
 	drm_vm_open_locked(vma);
 	return 0;
 }
@@ -689,6 +679,9 @@ int drm_mmap(struct file *filp, struct vm_area_struct *vma)
 	struct drm_file *priv = filp->private_data;
 	struct drm_device *dev = priv->minor->dev;
 	int ret;
+
+	if (drm_device_is_unplugged(dev))
+		return -ENODEV;
 
 	mutex_lock(&dev->struct_mutex);
 	ret = drm_mmap_locked(filp, vma);

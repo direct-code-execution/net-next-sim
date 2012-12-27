@@ -171,7 +171,8 @@ ssize_t ssb_attr_sprom_store(struct ssb_bus *bus,
 			     const char *buf, size_t count,
 			     int (*sprom_check_crc)(const u16 *sprom, size_t size),
 			     int (*sprom_write)(struct ssb_bus *bus, const u16 *sprom));
-extern const struct ssb_sprom *ssb_get_fallback_sprom(void);
+extern int ssb_fill_sprom_with_fallback(struct ssb_bus *bus,
+					struct ssb_sprom *out);
 
 
 /* core.c */
@@ -205,5 +206,9 @@ static inline void b43_pci_ssb_bridge_exit(void)
 {
 }
 #endif /* CONFIG_SSB_B43_PCI_BRIDGE */
+
+/* driver_chipcommon_pmu.c */
+extern u32 ssb_pmu_get_cpu_clock(struct ssb_chipcommon *cc);
+extern u32 ssb_pmu_get_controlclock(struct ssb_chipcommon *cc);
 
 #endif /* LINUX_SSB_PRIVATE_H_ */

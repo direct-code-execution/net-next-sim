@@ -11,10 +11,11 @@
 #include <linux/console.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
+#include <linux/compat.h>
+#include <linux/module.h>
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/smp_lock.h>
 
 #include <asm/compat.h>
 #include <asm/ccwdev.h>
@@ -520,6 +521,7 @@ static const struct file_operations fs3270_fops = {
 	.compat_ioctl	 = fs3270_ioctl,	/* ioctl */
 	.open		 = fs3270_open,		/* open */
 	.release	 = fs3270_close,	/* release */
+	.llseek		= no_llseek,
 };
 
 /*

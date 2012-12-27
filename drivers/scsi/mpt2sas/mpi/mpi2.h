@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2000-2010 LSI Corporation.
+ *  Copyright (c) 2000-2011 LSI Corporation.
  *
  *
  *           Name:  mpi2.h
@@ -8,7 +8,7 @@
  *                  scatter/gather formats.
  *  Creation Date:  June 21, 2006
  *
- *  mpi2.h Version:  02.00.15
+ *  mpi2.h Version:  02.00.22
  *
  *  Version History
  *  ---------------
@@ -61,6 +61,16 @@
  *                      Added define for MPI2_FUNCTION_PWR_MGMT_CONTROL.
  *                      Added defines for product-specific range of message
  *                      function codes, 0xF0 to 0xFF.
+ *  05-12-10  02.00.16  Bumped MPI2_HEADER_VERSION_UNIT.
+ *                      Added alternative defines for the SGE Direction bit.
+ *  08-11-10  02.00.17  Bumped MPI2_HEADER_VERSION_UNIT.
+ *  11-10-10  02.00.18  Bumped MPI2_HEADER_VERSION_UNIT.
+ *                      Added MPI2_IEEE_SGE_FLAGS_SYSTEMPLBCPI_ADDR define.
+ *  02-23-11  02.00.19  Bumped MPI2_HEADER_VERSION_UNIT.
+ *                      Added MPI2_FUNCTION_SEND_HOST_MESSAGE.
+ *  03-09-11  02.00.20  Bumped MPI2_HEADER_VERSION_UNIT.
+ *  05-25-11  02.00.21  Bumped MPI2_HEADER_VERSION_UNIT.
+ *  08-24-11  02.00.22  Bumped MPI2_HEADER_VERSION_UNIT.
  *  --------------------------------------------------------------------------
  */
 
@@ -86,7 +96,7 @@
 #define MPI2_VERSION_02_00                  (0x0200)
 
 /* versioning for this MPI header set */
-#define MPI2_HEADER_VERSION_UNIT            (0x0F)
+#define MPI2_HEADER_VERSION_UNIT            (0x16)
 #define MPI2_HEADER_VERSION_DEV             (0x00)
 #define MPI2_HEADER_VERSION_UNIT_MASK       (0xFF00)
 #define MPI2_HEADER_VERSION_UNIT_SHIFT      (8)
@@ -510,6 +520,8 @@ typedef union _MPI2_REPLY_DESCRIPTORS_UNION
 #define MPI2_FUNCTION_HOST_BASED_DISCOVERY_ACTION   (0x2F)
 /* Power Management Control */
 #define MPI2_FUNCTION_PWR_MGMT_CONTROL              (0x30)
+/* Send Host Message */
+#define MPI2_FUNCTION_SEND_HOST_MESSAGE             (0x31)
 /* beginning of product-specific range */
 #define MPI2_FUNCTION_MIN_PRODUCT_SPECIFIC          (0xF0)
 /* end of product-specific range */
@@ -929,6 +941,9 @@ typedef struct _MPI2_MPI_SGE_UNION
 #define MPI2_SGE_FLAGS_IOC_TO_HOST              (0x00)
 #define MPI2_SGE_FLAGS_HOST_TO_IOC              (0x04)
 
+#define MPI2_SGE_FLAGS_DEST                     (MPI2_SGE_FLAGS_IOC_TO_HOST)
+#define MPI2_SGE_FLAGS_SOURCE                   (MPI2_SGE_FLAGS_HOST_TO_IOC)
+
 /* Address Size */
 
 #define MPI2_SGE_FLAGS_32_BIT_ADDRESSING        (0x00)
@@ -1054,10 +1069,16 @@ typedef struct _MPI2_IEEE_SGE_UNION
 
 #define MPI2_IEEE_SGE_FLAGS_ADDR_MASK           (0x03)
 #define MPI2_IEEE_SGE_FLAGS_SYSTEM_ADDR         (0x00)
+						/* IEEE Simple Element only */
 #define MPI2_IEEE_SGE_FLAGS_IOCDDR_ADDR         (0x01)
+						/* IEEE Simple Element only */
 #define MPI2_IEEE_SGE_FLAGS_IOCPLB_ADDR         (0x02)
 #define MPI2_IEEE_SGE_FLAGS_IOCPLBNTA_ADDR      (0x03)
-
+						/* IEEE Simple Element only */
+#define MPI2_IEEE_SGE_FLAGS_SYSTEMPLBPCI_ADDR   (0x03)
+						/* IEEE Chain Element only */
+#define MPI2_IEEE_SGE_FLAGS_SYSTEMPLBCPI_ADDR   \
+	(MPI2_IEEE_SGE_FLAGS_SYSTEMPLBPCI_ADDR) /* typo in name */
 
 /****************************************************************************
 *  IEEE SGE operation Macros

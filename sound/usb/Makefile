@@ -3,16 +3,16 @@
 #
 
 snd-usb-audio-objs := 	card.o \
+			clock.o \
+			endpoint.o \
+			format.o \
+			helper.o \
 			mixer.o \
 			mixer_quirks.o \
+			pcm.o \
 			proc.o \
 			quirks.o \
-			format.o \
-			endpoint.o \
-			urb.o \
-			pcm.o \
-			helper.o \
-			clock.o
+			stream.o
 
 snd-usbmidi-lib-objs := midi.o
 
@@ -23,4 +23,4 @@ obj-$(CONFIG_SND_USB_UA101) += snd-usbmidi-lib.o
 obj-$(CONFIG_SND_USB_USX2Y) += snd-usbmidi-lib.o
 obj-$(CONFIG_SND_USB_US122L) += snd-usbmidi-lib.o
 
-obj-$(CONFIG_SND) += misc/ usx2y/ caiaq/
+obj-$(CONFIG_SND) += misc/ usx2y/ caiaq/ 6fire/

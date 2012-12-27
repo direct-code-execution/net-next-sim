@@ -1,7 +1,7 @@
 /*
- * file for managing the edac_device class of devices for EDAC
+ * file for managing the edac_device subsystem of devices for EDAC
  *
- * (C) 2007 SoftwareBitMaker (http://www.softwarebitmaker.com)
+ * (C) 2007 SoftwareBitMaker 
  *
  * This file may be distributed under the terms of the
  * GNU General Public License.
@@ -13,6 +13,7 @@
 #include <linux/ctype.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/edac.h>
 
 #include "edac_core.h"
 #include "edac_module.h"
@@ -229,21 +230,21 @@ static struct kobj_type ktype_device_ctrl = {
  */
 int edac_device_register_sysfs_main_kobj(struct edac_device_ctl_info *edac_dev)
 {
-	struct sysdev_class *edac_class;
+	struct bus_type *edac_subsys;
 	int err;
 
 	debugf1("%s()\n", __func__);
 
 	/* get the /sys/devices/system/edac reference */
-	edac_class = edac_get_edac_class();
-	if (edac_class == NULL) {
-		debugf1("%s() no edac_class error\n", __func__);
+	edac_subsys = edac_get_sysfs_subsys();
+	if (edac_subsys == NULL) {
+		debugf1("%s() no edac_subsys error\n", __func__);
 		err = -ENODEV;
 		goto err_out;
 	}
 
-	/* Point to the 'edac_class' this instance 'reports' to */
-	edac_dev->edac_class = edac_class;
+	/* Point to the 'edac_subsys' this instance 'reports' to */
+	edac_dev->edac_subsys = edac_subsys;
 
 	/* Init the devices's kobject */
 	memset(&edac_dev->kobj, 0, sizeof(struct kobject));
@@ -255,12 +256,12 @@ int edac_device_register_sysfs_main_kobj(struct edac_device_ctl_info *edac_dev)
 
 	if (!try_module_get(edac_dev->owner)) {
 		err = -ENODEV;
-		goto err_out;
+		goto err_mod_get;
 	}
 
 	/* register */
 	err = kobject_init_and_add(&edac_dev->kobj, &ktype_device_ctrl,
-				   &edac_class->kset.kobj,
+				   &edac_subsys->dev_root->kobj,
 				   "%s", edac_dev->name);
 	if (err) {
 		debugf1("%s()Failed to register '.../edac/%s'\n",
@@ -282,6 +283,9 @@ int edac_device_register_sysfs_main_kobj(struct edac_device_ctl_info *edac_dev)
 err_kobj_reg:
 	module_put(edac_dev->owner);
 
+err_mod_get:
+	edac_put_sysfs_subsys();
+
 err_out:
 	return err;
 }
@@ -290,12 +294,11 @@ err_out:
  * edac_device_unregister_sysfs_main_kobj:
  *	the '..../edac/<name>' kobject
  */
-void edac_device_unregister_sysfs_main_kobj(
-					struct edac_device_ctl_info *edac_dev)
+void edac_device_unregister_sysfs_main_kobj(struct edac_device_ctl_info *dev)
 {
 	debugf0("%s()\n", __func__);
 	debugf4("%s() name of kobject is: %s\n",
-		__func__, kobject_name(&edac_dev->kobj));
+		__func__, kobject_name(&dev->kobj));
 
 	/*
 	 * Unregister the edac device's kobject and
@@ -304,7 +307,8 @@ void edac_device_unregister_sysfs_main_kobj(
 	 *   a) module_put() this module
 	 *   b) 'kfree' the memory
 	 */
-	kobject_put(&edac_dev->kobj);
+	kobject_put(&dev->kobj);
+	edac_put_sysfs_subsys();
 }
 
 /* edac_dev -> instance information */
@@ -529,7 +533,7 @@ static int edac_device_create_block(struct edac_device_ctl_info *edac_dev,
 	memset(&block->kobj, 0, sizeof(struct kobject));
 
 	/* bump the main kobject's reference count for this controller
-	 * and this instance is dependant on the main
+	 * and this instance is dependent on the main
 	 */
 	main_kobj = kobject_get(&edac_dev->kobj);
 	if (!main_kobj) {
@@ -631,7 +635,7 @@ static int edac_device_create_instance(struct edac_device_ctl_info *edac_dev,
 	instance->ctl = edac_dev;
 
 	/* bump the main kobject's reference count for this controller
-	 * and this instance is dependant on the main
+	 * and this instance is dependent on the main
 	 */
 	main_kobj = kobject_get(&edac_dev->kobj);
 	if (!main_kobj) {

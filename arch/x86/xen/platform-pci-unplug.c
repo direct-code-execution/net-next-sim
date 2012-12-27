@@ -35,7 +35,7 @@ EXPORT_SYMBOL_GPL(xen_platform_pci_unplug);
 #ifdef CONFIG_XEN_PVHVM
 static int xen_emul_unplug;
 
-static int __init check_platform_magic(void)
+static int check_platform_magic(void)
 {
 	short magic;
 	char protocol;
@@ -68,7 +68,7 @@ static int __init check_platform_magic(void)
 	return 0;
 }
 
-void __init xen_unplug_emulated_devices(void)
+void xen_unplug_emulated_devices(void)
 {
 	int r;
 

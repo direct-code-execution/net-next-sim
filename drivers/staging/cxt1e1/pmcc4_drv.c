@@ -1,8 +1,3 @@
-/*
- * $Id: pmcc4_drv.c,v 3.1 2007/08/15 23:32:17 rickd PMCC4_3_1B $
- */
-
-
 /*-----------------------------------------------------------------------------
  * pmcc4_drv.c -
  *
@@ -22,74 +17,10 @@
  * For further information, contact via email: support@onestopsystems.com
  * One Stop Systems, Inc.  Escondido, California  U.S.A.
  *-----------------------------------------------------------------------------
- * RCS info:
- * RCS revision: $Revision: 3.1 $
- * Last changed on $Date: 2007/08/15 23:32:17 $
- * Changed by $Author: rickd $
- *-----------------------------------------------------------------------------
- * $Log: pmcc4_drv.c,v $
- * Revision 3.1  2007/08/15 23:32:17  rickd
- * Use 'if 0' instead of GNU comment delimeter to avoid line wrap induced compiler errors.
- *
- * Revision 3.0  2007/08/15 22:19:55  rickd
- * Correct sizeof() castings and pi->regram to support 64bit compatibility.
- *
- * Revision 2.10  2006/04/21 00:56:40  rickd
- * workqueue files now prefixed with <sbecom> prefix.
- *
- * Revision 2.9  2005/11/01 19:22:49  rickd
- * Add sanity checks against max_port for ioctl functions.
- *
- * Revision 2.8  2005/10/27 18:59:25  rickd
- * Code cleanup.  Default channel config to HDLC_FCS16.
- *
- * Revision 2.7  2005/10/18 18:16:30  rickd
- * Further NCOMM code repairs - (1) interrupt matrix usage inconsistant
- * for indexing into nciInterrupt[][], code missing double parameters.
- * (2) check input of ncomm interrupt registration cardID for correct
- * boundary values.
- *
- * Revision 2.6  2005/10/17 23:55:28  rickd
- * Initial port of NCOMM support patches from original work found
- * in pmc_c4t1e1 as updated by NCOMM.  Ref: CONFIG_SBE_PMCC4_NCOMM.
- * Corrected NCOMMs wanpmcC4T1E1_getBaseAddress() to correctly handle
- * multiple boards.
- *
- * Revision 2.5  2005/10/13 23:01:28  rickd
- * Correct panic for illegal address reference w/in get_brdinfo on
- * first_if/last_if name acquistion under Linux 2.6
- *
- * Revision 2.4  2005/10/13 21:20:19  rickd
- * Correction of c4_cleanup() wherein next should be acquired before
- * ci_t structure is free'd.
- *
- * Revision 2.3  2005/10/13 19:20:10  rickd
- * Correct driver removal cleanup code for multiple boards.
- *
- * Revision 2.2  2005/10/11 18:34:04  rickd
- * New routine added to determine number of ports (comets) on board.
- *
- * Revision 2.1  2005/10/05 00:48:13  rickd
- * Add some RX activation trace code.
- *
- * Revision 2.0  2005/09/28 00:10:06  rickd
- * Implement 2.6 workqueue for TX/RX restart.  Correction to
- * hardware register boundary checks allows expanded access of MUSYCC.
- * Implement new musycc reg&bits namings.
- *
- *-----------------------------------------------------------------------------
  */
-
-char        OSSIid_pmcc4_drvc[] =
-"@(#)pmcc4_drv.c - $Revision: 3.1 $   (c) Copyright 2002-2007 One Stop Systems, Inc.";
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#if defined (__FreeBSD__) || defined (__NetBSD__)
-#include <sys/param.h>
-#include <sys/systm.h>
-#include <sys/errno.h>
-#else
 #include <linux/types.h>
 #include "pmcc4_sysdep.h"
 #include <linux/errno.h>
@@ -98,7 +29,6 @@ char        OSSIid_pmcc4_drvc[] =
 #include <linux/timer.h>        /* include for timer */
 #include <linux/hdlc.h>
 #include <asm/io.h>
-#endif
 
 #include "sbecom_inline_linux.h"
 #include "libsbew.h"
@@ -135,9 +65,9 @@ void        musycc_serv_req (mpi_t *, u_int32_t);
 void        musycc_update_timeslots (mpi_t *);
 
 extern void musycc_update_tx_thp (mch_t *);
-extern int  log_level;
-extern int  max_mru;
-extern int  max_mtu;
+extern int  cxt1e1_log_level;
+extern int  cxt1e1_max_mru;
+extern int  cxt1e1_max_mtu;
 extern int  max_rxdesc_used, max_rxdesc_default;
 extern int  max_txdesc_used, max_txdesc_default;
 
@@ -168,12 +98,12 @@ sbecom_set_loglevel (int d)
                                                          * for card 0 only */
     } else
     {
-        if (log_level != d)
+        if (cxt1e1_log_level != d)
         {
-            pr_info("log level changed from %d to %d\n", log_level, d);
-            log_level = d;          /* set new */
+            pr_info("log level changed from %d to %d\n", cxt1e1_log_level, d);
+            cxt1e1_log_level = d;          /* set new */
         } else
-            pr_info("log level is %d\n", log_level);
+            pr_info("log level is %d\n", cxt1e1_log_level);
     }
 }
 
@@ -513,7 +443,7 @@ checkPorts (ci_t * ci)
             if ((value == 0x1c) || (value == 0x19) || (value == 0x12))
                 c4_loop_port (ci, portnum, COMET_MDIAG_LBOFF);  /* take port out of any
                                                                  * loopbk mode */
-            if (log_level >= LOG_DEBUG)
+            if (cxt1e1_log_level >= LOG_DEBUG)
                 if (value != 0x3f)
                     pr_warning("%s: BOC value = %x on Port %d\n",
                                ci->devname, value, portnum);
@@ -533,7 +463,7 @@ c4_watchdog (ci_t * ci)
 {
     if (drvr_state != SBE_DRVR_AVAILABLE)
     {
-        if (log_level >= LOG_MONITOR)
+        if (cxt1e1_log_level >= LOG_MONITOR)
             pr_info("drvr not available (%x)\n", drvr_state);
         return;
     }
@@ -794,19 +724,19 @@ c4_loop_port (ci_t * ci, int portnum, u_int8_t cmd)
         }
 
         pci_write_32 ((u_int32_t *) &comet->mdiag, cmd);
-        if (log_level >= LOG_WARN)
+        if (cxt1e1_log_level >= LOG_WARN)
             pr_info("%s: loopback mode changed to %2x from %2x on Port %d\n",
                     ci->devname, cmd, loopValue, portnum);
         loopValue = pci_read_32 ((u_int32_t *) &comet->mdiag) & COMET_MDIAG_LBMASK;
         if (loopValue != cmd)
         {
-            if (log_level >= LOG_ERROR)
+            if (cxt1e1_log_level >= LOG_ERROR)
                 pr_info("%s: write to loop register failed, unknown state for Port %d\n",
                         ci->devname, portnum);
         }
     } else
     {
-        if (log_level >= LOG_WARN)
+        if (cxt1e1_log_level >= LOG_WARN)
             pr_info("%s: loopback already in that mode (%2x)\n",
                     ci->devname, loopValue);
     }
@@ -997,7 +927,7 @@ c4_set_port (ci_t * ci, int portnum)
     pi = &ci->port[portnum];
     pp = &ci->port[portnum].p;
     e1mode = IS_FRAME_ANY_E1 (pp->port_mode);
-    if (log_level >= LOG_MONITOR2)
+    if (cxt1e1_log_level >= LOG_MONITOR2)
     {
         pr_info("%s: c4_set_port[%d]:  entered, e1mode = %x, openchans %d.\n",
                 ci->devname,
@@ -1047,7 +977,7 @@ c4_set_port (ci_t * ci, int portnum)
                                 MUSYCC_PCD_RXDATA_RISING);
 
     /* Message length descriptor */
-    pi->regram->mld = __constant_cpu_to_le32 (max_mru | (max_mru << 16));
+       pi->regram->mld = __constant_cpu_to_le32 (cxt1e1_max_mru | (cxt1e1_max_mru << 16));
 
     /* tsm algorithm */
     for (i = 0; i < 32; i++)
@@ -1278,12 +1208,12 @@ c4_fifo_alloc (mpi_t * pi, int chan, int *len)
     }
     if (max != *len)
     {
-        if (log_level >= LOG_WARN)
+        if (cxt1e1_log_level >= LOG_WARN)
             pr_info("%s: wanted to allocate %d fifo space, but got only %d\n",
                     pi->up->devname, *len, max);
         *len = max;
     }
-    if (log_level >= LOG_DEBUG)
+    if (cxt1e1_log_level >= LOG_DEBUG)
         pr_info("%s: allocated %d fifo at %d for channel %d/%d\n",
                 pi->up->devname, max, start, chan, pi->p.portnum);
     for (i = maxstart; i < (maxstart + max); i++)
@@ -1296,7 +1226,7 @@ c4_fifo_free (mpi_t * pi, int chan)
 {
     int         i;
 
-    if (log_level >= LOG_DEBUG)
+    if (cxt1e1_log_level >= LOG_DEBUG)
         pr_info("%s: deallocated fifo for channel %d/%d\n",
                 pi->up->devname, chan, pi->p.portnum);
     for (i = 0; i < 32; i++)
@@ -1321,7 +1251,7 @@ c4_chan_up (ci_t * ci, int channum)
         return ENOENT;
     if (ch->state == UP)
     {
-        if (log_level >= LOG_MONITOR)
+        if (cxt1e1_log_level >= LOG_MONITOR)
             pr_info("%s: channel already UP, graceful early exit\n",
                     ci->devname);
         return 0;
@@ -1334,7 +1264,7 @@ c4_chan_up (ci_t * ci, int channum)
     {
         if (ch->p.bitmask[i] & pi->tsm[i])
         {
-            if (1 || log_level >= LOG_WARN)
+            if (1 || cxt1e1_log_level >= LOG_WARN)
             {
                 pr_info("%s: c4_chan_up[%d] EINVAL (attempt to cfg in-use or unavailable TimeSlot[%d])\n",
                         ci->devname, channum, i);
@@ -1351,7 +1281,7 @@ c4_chan_up (ci_t * ci, int channum)
     nbuf = nts / 8 ? nts / 8 : 1;
     if (!nbuf)
     {
-        /* if( log_level >= LOG_WARN)  */
+        /* if( cxt1e1_log_level >= LOG_WARN)  */
         pr_info("%s: c4_chan_up[%d] ENOBUFS (no TimeSlots assigned)\n",
                 ci->devname, channum);
         return ENOBUFS;             /* this should not happen */
@@ -1420,7 +1350,7 @@ c4_chan_up (ci_t * ci, int channum)
 
 #if 0
     /* DEBUG INFO */
-    if (log_level >= LOG_MONITOR)
+    if (cxt1e1_log_level >= LOG_MONITOR)
         pr_info("%s: mode %x rxnum %d (rxused %d def %d) txnum %d (txused %d def %d)\n",
                 ci->devname, ch->p.chan_mode,
                 rxnum, max_rxdesc_used, max_rxdesc_default,
@@ -1434,9 +1364,9 @@ c4_chan_up (ci_t * ci, int channum)
     ch->mdr = OS_kmalloc (sizeof (struct mdesc) * rxnum);
     ch->mdt = OS_kmalloc (sizeof (struct mdesc) * txnum);
     if (ch->p.chan_mode == CFG_CH_PROTO_TRANS)
-        tmp = __constant_cpu_to_le32 (max_mru | EOBIRQ_ENABLE);
+               tmp = __constant_cpu_to_le32 (cxt1e1_max_mru | EOBIRQ_ENABLE);
     else
-        tmp = __constant_cpu_to_le32 (max_mru);
+               tmp = __constant_cpu_to_le32 (cxt1e1_max_mru);
 
     for (i = 0, md = ch->mdr; i < rxnum; i++, md++)
     {
@@ -1449,11 +1379,11 @@ c4_chan_up (ci_t * ci, int channum)
         }
         md->next = cpu_to_le32 (OS_vtophys (md->snext));
 
-        if (!(m = OS_mem_token_alloc (max_mru)))
+               if (!(m = OS_mem_token_alloc (cxt1e1_max_mru)))
         {
-            if (log_level >= LOG_MONITOR)
+            if (cxt1e1_log_level >= LOG_MONITOR)
                 pr_info("%s: c4_chan_up[%d] - token alloc failure, size = %d.\n",
-                        ci->devname, channum, max_mru);
+                                               ci->devname, channum, cxt1e1_max_mru);
             goto errfree;
         }
         md->mem_token = m;

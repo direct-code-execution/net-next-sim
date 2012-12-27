@@ -34,13 +34,13 @@
 #include <linux/err.h>
 #include <linux/ftrace.h>
 
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/cpu.h>
 #include <asm/processor.h>
 #include <asm/r4k-timer.h>
-#include <asm/system.h>
 #include <asm/mmu_context.h>
 #include <asm/time.h>
+#include <asm/setup.h>
 
 #ifdef CONFIG_MIPS_MT_SMTC
 #include <asm/mipsmtregs.h>
@@ -148,7 +148,7 @@ static void stop_this_cpu(void *dummy)
 	/*
 	 * Remove this CPU:
 	 */
-	cpu_clear(smp_processor_id(), cpu_online_map);
+	set_cpu_online(smp_processor_id(), false);
 	for (;;) {
 		if (cpu_wait)
 			(*cpu_wait)();		/* Wait if available. */
@@ -174,7 +174,7 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
 	mp_ops->prepare_cpus(max_cpus);
 	set_cpu_sibling_map(0);
 #ifndef CONFIG_HOTPLUG_CPU
-	init_cpu_present(&cpu_possible_map);
+	init_cpu_present(cpu_possible_mask);
 #endif
 }
 
@@ -193,6 +193,22 @@ void __devinit smp_prepare_boot_cpu(void)
  */
 static struct task_struct *cpu_idle_thread[NR_CPUS];
 
+struct create_idle {
+	struct work_struct work;
+	struct task_struct *idle;
+	struct completion done;
+	int cpu;
+};
+
+static void __cpuinit do_fork_idle(struct work_struct *work)
+{
+	struct create_idle *c_idle =
+		container_of(work, struct create_idle, work);
+
+	c_idle->idle = fork_idle(c_idle->cpu);
+	complete(&c_idle->done);
+}
+
 int __cpuinit __cpu_up(unsigned int cpu)
 {
 	struct task_struct *idle;
@@ -203,8 +219,19 @@ int __cpuinit __cpu_up(unsigned int cpu)
 	 * Linux can schedule processes on this slave.
 	 */
 	if (!cpu_idle_thread[cpu]) {
-		idle = fork_idle(cpu);
-		cpu_idle_thread[cpu] = idle;
+		/*
+		 * Schedule work item to avoid forking user task
+		 * Ported from arch/x86/kernel/smpboot.c
+		 */
+		struct create_idle c_idle = {
+			.cpu    = cpu,
+			.done   = COMPLETION_INITIALIZER_ONSTACK(c_idle.done),
+		};
+
+		INIT_WORK_ONSTACK(&c_idle.work, do_fork_idle);
+		schedule_work(&c_idle.work);
+		wait_for_completion(&c_idle.done);
+		idle = cpu_idle_thread[cpu] = c_idle.idle;
 
 		if (IS_ERR(idle))
 			panic(KERN_ERR "Fork failed for CPU %d", cpu);
@@ -221,7 +248,7 @@ int __cpuinit __cpu_up(unsigned int cpu)
 	while (!cpu_isset(cpu, cpu_callin_map))
 		udelay(100);
 
-	cpu_set(cpu, cpu_online_map);
+	set_cpu_online(cpu, true);
 
 	return 0;
 }
@@ -293,13 +320,12 @@ void flush_tlb_mm(struct mm_struct *mm)
 	if ((atomic_read(&mm->mm_users) != 1) || (current->mm != mm)) {
 		smp_on_other_tlbs(flush_tlb_mm_ipi, mm);
 	} else {
-		cpumask_t mask = cpu_online_map;
 		unsigned int cpu;
 
-		cpu_clear(smp_processor_id(), mask);
-		for_each_cpu_mask(cpu, mask)
-			if (cpu_context(cpu, mm))
+		for_each_online_cpu(cpu) {
+			if (cpu != smp_processor_id() && cpu_context(cpu, mm))
 				cpu_context(cpu, mm) = 0;
+		}
 	}
 	local_flush_tlb_mm(mm);
 
@@ -333,13 +359,12 @@ void flush_tlb_range(struct vm_area_struct *vma, unsigned long start, unsigned l
 
 		smp_on_other_tlbs(flush_tlb_range_ipi, &fd);
 	} else {
-		cpumask_t mask = cpu_online_map;
 		unsigned int cpu;
 
-		cpu_clear(smp_processor_id(), mask);
-		for_each_cpu_mask(cpu, mask)
-			if (cpu_context(cpu, mm))
+		for_each_online_cpu(cpu) {
+			if (cpu != smp_processor_id() && cpu_context(cpu, mm))
 				cpu_context(cpu, mm) = 0;
+		}
 	}
 	local_flush_tlb_range(vma, start, end);
 	preempt_enable();
@@ -380,13 +405,12 @@ void flush_tlb_page(struct vm_area_struct *vma, unsigned long page)
 
 		smp_on_other_tlbs(flush_tlb_page_ipi, &fd);
 	} else {
-		cpumask_t mask = cpu_online_map;
 		unsigned int cpu;
 
-		cpu_clear(smp_processor_id(), mask);
-		for_each_cpu_mask(cpu, mask)
-			if (cpu_context(cpu, vma->vm_mm))
+		for_each_online_cpu(cpu) {
+			if (cpu != smp_processor_id() && cpu_context(cpu, vma->vm_mm))
 				cpu_context(cpu, vma->vm_mm) = 0;
+		}
 	}
 	local_flush_tlb_page(vma, page);
 	preempt_enable();

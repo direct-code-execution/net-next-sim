@@ -30,6 +30,7 @@ static struct usb_device_id zd1201_table[] = {
 	{USB_DEVICE(0x0ace, 0x1201)}, /* ZyDAS ZD1201 Wireless USB Adapter */
 	{USB_DEVICE(0x050d, 0x6051)}, /* Belkin F5D6051 usb  adapter */
 	{USB_DEVICE(0x0db0, 0x6823)}, /* MSI UB11B usb  adapter */
+	{USB_DEVICE(0x1044, 0x8004)}, /* Gigabyte GN-WLBZ101 */
 	{USB_DEVICE(0x1044, 0x8005)}, /* GIGABYTE GN-WLBZ201 usb adapter */
 	{}
 };
@@ -1721,7 +1722,7 @@ static const struct net_device_ops zd1201_netdev_ops = {
 	.ndo_stop		= zd1201_net_stop,
 	.ndo_start_xmit		= zd1201_hard_start_xmit,
 	.ndo_tx_timeout		= zd1201_tx_timeout,
-	.ndo_set_multicast_list = zd1201_set_multicast,
+	.ndo_set_rx_mode	= zd1201_set_multicast,
 	.ndo_set_mac_address	= zd1201_set_mac_address,
 	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
@@ -1829,7 +1830,7 @@ err_zd:
 
 static void zd1201_disconnect(struct usb_interface *interface)
 {
-	struct zd1201 *zd=(struct zd1201 *)usb_get_intfdata(interface);
+	struct zd1201 *zd = usb_get_intfdata(interface);
 	struct hlist_node *node, *node2;
 	struct zd1201_frag *frag;
 
@@ -1906,15 +1907,4 @@ static struct usb_driver zd1201_usb = {
 	.resume = zd1201_resume,
 };
 
-static int __init zd1201_init(void)
-{
-	return usb_register(&zd1201_usb);
-}
-
-static void __exit zd1201_cleanup(void)
-{
-	usb_deregister(&zd1201_usb);
-}
-
-module_init(zd1201_init);
-module_exit(zd1201_cleanup);
+module_usb_driver(zd1201_usb);

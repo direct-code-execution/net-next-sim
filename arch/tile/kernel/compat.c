@@ -16,12 +16,10 @@
 #define __SYSCALL_COMPAT
 
 #include <linux/compat.h>
-#include <linux/msg.h>
 #include <linux/syscalls.h>
 #include <linux/kdev_t.h>
 #include <linux/fs.h>
 #include <linux/fcntl.h>
-#include <linux/smp_lock.h>
 #include <linux/uaccess.h>
 #include <linux/signal.h>
 #include <asm/syscalls.h>
@@ -96,66 +94,19 @@ long compat_sys_sched_rr_get_interval(compat_pid_t pid,
 	return ret;
 }
 
-/*
- * The usual compat_sys_msgsnd() and _msgrcv() seem to be assuming
- * some different calling convention than our normal 32-bit tile code.
- */
-
-/* Already defined in ipc/compat.c, but we need it here. */
-struct compat_msgbuf {
-	compat_long_t mtype;
-	char mtext[1];
-};
-
-long tile_compat_sys_msgsnd(int msqid,
-			    struct compat_msgbuf __user *msgp,
-			    size_t msgsz, int msgflg)
-{
-	compat_long_t mtype;
-
-	if (get_user(mtype, &msgp->mtype))
-		return -EFAULT;
-	return do_msgsnd(msqid, mtype, msgp->mtext, msgsz, msgflg);
-}
-
-long tile_compat_sys_msgrcv(int msqid,
-			    struct compat_msgbuf __user *msgp,
-			    size_t msgsz, long msgtyp, int msgflg)
-{
-	long err, mtype;
-
-	err =  do_msgrcv(msqid, &mtype, msgp->mtext, msgsz, msgtyp, msgflg);
-	if (err < 0)
-		goto out;
-
-	if (put_user(mtype, &msgp->mtype))
-		err = -EFAULT;
- out:
-	return err;
-}
-
 /* Provide the compat syscall number to call mapping. */
 #undef __SYSCALL
-#define __SYSCALL(nr, call) [nr] = (compat_##call),
-
-/* The generic versions of these don't work for Tile. */
-#define compat_sys_msgrcv tile_compat_sys_msgrcv
-#define compat_sys_msgsnd tile_compat_sys_msgsnd
+#define __SYSCALL(nr, call) [nr] = (call),
 
 /* See comments in sys.c */
-#define compat_sys_fadvise64 sys32_fadvise64
 #define compat_sys_fadvise64_64 sys32_fadvise64_64
 #define compat_sys_readahead sys32_readahead
-#define compat_sys_sync_file_range compat_sys_sync_file_range2
 
-/* The native 64-bit "struct stat" matches the 32-bit "struct stat64". */
-#define compat_sys_stat64 sys_newstat
-#define compat_sys_lstat64 sys_newlstat
-#define compat_sys_fstat64 sys_newfstat
-#define compat_sys_fstatat64 sys_newfstatat
-
-/* Pass full 64-bit values through ptrace. */
-#define compat_sys_ptrace tile_compat_sys_ptrace
+/* Call the trampolines to manage pt_regs where necessary. */
+#define compat_sys_execve _compat_sys_execve
+#define compat_sys_sigaltstack _compat_sys_sigaltstack
+#define compat_sys_rt_sigreturn _compat_sys_rt_sigreturn
+#define sys_clone _sys_clone
 
 /*
  * Note that we can't include <linux/unistd.h> here since the header

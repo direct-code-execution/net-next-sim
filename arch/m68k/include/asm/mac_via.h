@@ -204,7 +204,7 @@
 #define vT2CL	0x1000  /* [VIA only] Timer two counter low. */
 #define vT2CH	0x1200  /* [VIA only] Timer two counter high. */
 #define vSR	0x1400  /* [VIA only] Shift register. */
-#define vACR	0x1600  /* [VIA only] Auxilary control register. */
+#define vACR	0x1600  /* [VIA only] Auxiliary control register. */
 #define vPCR	0x1800  /* [VIA only] Peripheral control register. */
                         /*            CHRP sez never ever to *write* this.
 			 *            Mac family says never to *change* this.
@@ -253,6 +253,15 @@
 
 extern volatile __u8 *via1,*via2;
 extern int rbv_present,via_alt_mapping;
+
+extern void via_register_interrupts(void);
+extern void via_irq_enable(int);
+extern void via_irq_disable(int);
+extern void via_nubus_irq_startup(int irq);
+extern void via_nubus_irq_shutdown(int irq);
+extern void via1_irq(unsigned int irq, struct irq_desc *desc);
+extern void via1_set_head(int);
+extern int via2_scsi_drq_pending(void);
 
 static inline int rbv_set_video_bpp(int bpp)
 {

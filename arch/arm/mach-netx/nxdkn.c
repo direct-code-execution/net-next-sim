@@ -28,6 +28,7 @@
 #include <mach/hardware.h>
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
+#include <asm/hardware/vic.h>
 #include <mach/netx-regs.h>
 #include <mach/eth.h>
 
@@ -93,11 +94,11 @@ static void __init nxdkn_init(void)
 }
 
 MACHINE_START(NXDKN, "Hilscher nxdkn")
-	.phys_io	= 0x00100000,
-	.io_pg_offst	= (io_p2v(0x00100000) >> 18) & 0xfffc,
-	.boot_params	= 0x80000100,
+	.atag_offset	= 0x100,
 	.map_io		= netx_map_io,
 	.init_irq	= netx_init_irq,
+	.handle_irq	= vic_handle_irq,
 	.timer		= &netx_timer,
 	.init_machine	= nxdkn_init,
+	.restart	= netx_restart,
 MACHINE_END

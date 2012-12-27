@@ -1,5 +1,5 @@
 #define	USE_PCI_CLOCK
-static char rcsid[] = 
+static const char rcsid[] =
 "Revision: 3.4.5 Date: 2002/03/07 ";
 
 /*
@@ -212,6 +212,8 @@ static char rcsid[] =
  *
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -297,7 +299,6 @@ void cpc_tty_init(pc300dev_t * dev);
 void cpc_tty_unregister_service(pc300dev_t * pc300dev);
 void cpc_tty_receive(pc300dev_t * pc300dev);
 void cpc_tty_trigger_poll(pc300dev_t * pc300dev);
-void cpc_tty_reset_var(void);
 #endif
 
 /************************/
@@ -451,11 +452,11 @@ static int dma_get_rx_frame_size(pc300_t * card, int ch)
 		if ((status & DST_EOM) || (first_bd == card->chan[ch].rx_last_bd)) {
 			/* Return the size of a good frame or incomplete bad frame 
 			* (dma_buf_read will clean the buffer descriptors in this case). */
-			return (rcvd);
+			return rcvd;
 		}
 		ptdescr = (card->hw.rambase + cpc_readl(&ptdescr->next));
 	}
-	return (-1);
+	return -1;
 }
 
 /*
@@ -557,7 +558,7 @@ static int dma_buf_read(pc300_t * card, int ch, struct sk_buff *skb)
 		cpc_writel(card->hw.scabase + DRX_REG(EDAL, ch),
 			   RX_BD_ADDR(ch, chan->rx_last_bd));
 	}
-	return (rcvd);
+	return rcvd;
 }
 
 static void tx_dma_stop(pc300_t * card, int ch)
@@ -1445,7 +1446,7 @@ static void falc_update_stats(pc300_t * card, int ch)
  * Description:	In the remote loopback mode the clock and data recovered
  *		from the line inputs RL1/2 or RDIP/RDIN are routed back
  *		to the line outputs XL1/2 or XDOP/XDON via the analog
- *		transmitter. As in normal mode they are processsed by
+ *		transmitter. As in normal mode they are processed by
  *		the synchronizer and then sent to the system interface.
  *----------------------------------------------------------------------------
  */
@@ -1733,7 +1734,7 @@ static u16 falc_pattern_test_error(pc300_t * card, int ch)
 	pc300ch_t *chan = (pc300ch_t *) & card->chan[ch];
 	falc_t *pfalc = (falc_t *) & chan->falc;
 
-	return (pfalc->bec);
+	return pfalc->bec;
 }
 
 /**********************************/
@@ -2819,7 +2820,7 @@ static int clock_rate_calc(u32 rate, u32 clock, int *br_io)
 	*br_io = 0;
 
 	if (rate == 0)
-		return (0);
+		return 0;
 
 	for (br = 0, br_pwr = 1; br <= 9; br++, br_pwr <<= 1) {
 		if ((tc = clock / br_pwr / rate) <= 0xff) {
@@ -2832,11 +2833,11 @@ static int clock_rate_calc(u32 rate, u32 clock, int *br_io)
 		error = ((rate - (clock / br_pwr / rate)) / rate) * 1000;
 		/* Errors bigger than +/- 1% won't be tolerated */
 		if (error < -10 || error > 10)
-			return (-1);
+			return -1;
 		else
-			return (tc);
+			return tc;
 	} else {
-		return (-1);
+		return -1;
 	}
 }
 
@@ -3207,7 +3208,7 @@ static u32 detect_ram(pc300_t * card)
 			break;
 		}
 	}
-	return (i);
+	return i;
 }
 
 static void plx_init(pc300_t * card)
@@ -3230,7 +3231,7 @@ static void plx_init(pc300_t * card)
 
 }
 
-static inline void show_version(void)
+static void show_version(void)
 {
 	char *rcsvers, *rcsdate, *tmp;
 
@@ -3242,8 +3243,7 @@ static inline void show_version(void)
 	rcsdate++;
 	tmp = strrchr(rcsdate, ' ');
 	*tmp = '\0';
-	printk(KERN_INFO "Cyclades-PC300 driver %s %s (built %s %s)\n", 
-		rcsvers, rcsdate, __DATE__, __TIME__);
+	pr_info("Cyclades-PC300 driver %s %s\n", rcsvers, rcsdate);
 }				/* show_version */
 
 static const struct net_device_ops cpc_netdev_ops = {
@@ -3412,18 +3412,9 @@ static void cpc_init_card(pc300_t * card)
 static int __devinit
 cpc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
-	static int first_time = 1;
 	int err, eeprom_outdated = 0;
 	u16 device_id;
 	pc300_t *card;
-
-	if (first_time) {
-		first_time = 0;
-		show_version();
-#ifdef CONFIG_PC300_MLPPP
-		cpc_tty_reset_var();
-#endif
-	}
 
 	if ((err = pci_enable_device(pdev)) < 0)
 		return err;
@@ -3660,6 +3651,7 @@ static struct pci_driver cpc_driver = {
 
 static int __init cpc_init(void)
 {
+	show_version();
 	return pci_register_driver(&cpc_driver);
 }
 

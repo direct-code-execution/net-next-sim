@@ -8,22 +8,19 @@
 #include <linux/platform_device.h>
 #include <linux/amba/bus.h>
 #include <linux/amba/clcd.h>
+#include <linux/clkdev.h>
 
-#include <asm/clkdev.h>
-#include <asm/pgtable.h>
 #include <asm/hardware/arm_timer.h>
 #include <asm/hardware/cache-l2x0.h>
 #include <asm/hardware/gic.h>
-#include <asm/mach-types.h>
 #include <asm/pmu.h>
+#include <asm/smp_scu.h>
 #include <asm/smp_twd.h>
 
-#include <mach/clkdev.h>
 #include <mach/ct-ca9x4.h>
 
-#include <plat/timer-sp.h>
+#include <asm/hardware/timer-sp.h>
 
-#include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 #include <asm/mach/time.h>
 
@@ -31,79 +28,41 @@
 
 #include <mach/motherboard.h>
 
-#define V2M_PA_CS7	0x10000000
+#include <plat/clcd.h>
 
 static struct map_desc ct_ca9x4_io_desc[] __initdata = {
 	{
-		.virtual	= __MMIO_P2V(CT_CA9X4_MPIC),
-		.pfn		= __phys_to_pfn(CT_CA9X4_MPIC),
-		.length		= SZ_16K,
-		.type		= MT_DEVICE,
-	}, {
-		.virtual	= __MMIO_P2V(CT_CA9X4_SP804_TIMER),
-		.pfn		= __phys_to_pfn(CT_CA9X4_SP804_TIMER),
-		.length		= SZ_4K,
-		.type		= MT_DEVICE,
-	}, {
-		.virtual	= __MMIO_P2V(CT_CA9X4_L2CC),
-		.pfn		= __phys_to_pfn(CT_CA9X4_L2CC),
-		.length		= SZ_4K,
-		.type		= MT_DEVICE,
+		.virtual        = V2T_PERIPH,
+		.pfn            = __phys_to_pfn(CT_CA9X4_MPIC),
+		.length         = SZ_8K,
+		.type           = MT_DEVICE,
 	},
 };
 
 static void __init ct_ca9x4_map_io(void)
 {
-	twd_base = MMIO_P2V(A9_MPCORE_TWD);
-	v2m_map_io(ct_ca9x4_io_desc, ARRAY_SIZE(ct_ca9x4_io_desc));
+	iotable_init(ct_ca9x4_io_desc, ARRAY_SIZE(ct_ca9x4_io_desc));
 }
 
-void __iomem *gic_cpu_base_addr;
+#ifdef CONFIG_HAVE_ARM_TWD
+static DEFINE_TWD_LOCAL_TIMER(twd_local_timer, A9_MPCORE_TWD, IRQ_LOCALTIMER);
+
+static void __init ca9x4_twd_init(void)
+{
+	int err = twd_local_timer_register(&twd_local_timer);
+	if (err)
+		pr_err("twd_local_timer_register failed %d\n", err);
+}
+#else
+#define ca9x4_twd_init()	do {} while(0)
+#endif
 
 static void __init ct_ca9x4_init_irq(void)
 {
-	gic_cpu_base_addr = MMIO_P2V(A9_MPCORE_GIC_CPU);
-	gic_dist_init(0, MMIO_P2V(A9_MPCORE_GIC_DIST), 29);
-	gic_cpu_init(0, gic_cpu_base_addr);
+	gic_init(0, 29, ioremap(A9_MPCORE_GIC_DIST, SZ_4K),
+		 ioremap(A9_MPCORE_GIC_CPU, SZ_256));
+	ca9x4_twd_init();
 }
-
-#if 0
-static void __init ct_ca9x4_timer_init(void)
-{
-	writel(0, MMIO_P2V(CT_CA9X4_TIMER0) + TIMER_CTRL);
-	writel(0, MMIO_P2V(CT_CA9X4_TIMER1) + TIMER_CTRL);
-
-	sp804_clocksource_init(MMIO_P2V(CT_CA9X4_TIMER1));
-	sp804_clockevents_init(MMIO_P2V(CT_CA9X4_TIMER0), IRQ_CT_CA9X4_TIMER0);
-}
-
-static struct sys_timer ct_ca9x4_timer = {
-	.init	= ct_ca9x4_timer_init,
-};
-#endif
-
-static struct clcd_panel xvga_panel = {
-	.mode		= {
-		.name		= "XVGA",
-		.refresh	= 60,
-		.xres		= 1024,
-		.yres		= 768,
-		.pixclock	= 15384,
-		.left_margin	= 168,
-		.right_margin	= 8,
-		.upper_margin	= 29,
-		.lower_margin	= 3,
-		.hsync_len	= 144,
-		.vsync_len	= 6,
-		.sync		= 0,
-		.vmode		= FB_VMODE_NONINTERLACED,
-	},
-	.width		= -1,
-	.height		= -1,
-	.tim2		= TIM2_BCD | TIM2_IPC,
-	.cntl		= CNTL_LCDTFT | CNTL_BGR | CNTL_LCDVCOMP(1),
-	.bpp		= 16,
-};
 
 static void ct_ca9x4_clcd_enable(struct clcd_fb *fb)
 {
@@ -114,48 +73,29 @@ static void ct_ca9x4_clcd_enable(struct clcd_fb *fb)
 static int ct_ca9x4_clcd_setup(struct clcd_fb *fb)
 {
 	unsigned long framesize = 1024 * 768 * 2;
-	dma_addr_t dma;
 
-	fb->panel = &xvga_panel;
+	fb->panel = versatile_clcd_get_panel("XVGA");
+	if (!fb->panel)
+		return -EINVAL;
 
-	fb->fb.screen_base = dma_alloc_writecombine(&fb->dev->dev, framesize,
-				&dma, GFP_KERNEL);
-	if (!fb->fb.screen_base) {
-		printk(KERN_ERR "CLCD: unable to map frame buffer\n");
-		return -ENOMEM;
-	}
-	fb->fb.fix.smem_start = dma;
-	fb->fb.fix.smem_len = framesize;
-
-	return 0;
-}
-
-static int ct_ca9x4_clcd_mmap(struct clcd_fb *fb, struct vm_area_struct *vma)
-{
-	return dma_mmap_writecombine(&fb->dev->dev, vma, fb->fb.screen_base,
-		fb->fb.fix.smem_start, fb->fb.fix.smem_len);
-}
-
-static void ct_ca9x4_clcd_remove(struct clcd_fb *fb)
-{
-	dma_free_writecombine(&fb->dev->dev, fb->fb.fix.smem_len,
-		fb->fb.screen_base, fb->fb.fix.smem_start);
+	return versatile_clcd_setup_dma(fb, framesize);
 }
 
 static struct clcd_board ct_ca9x4_clcd_data = {
 	.name		= "CT-CA9X4",
+	.caps		= CLCD_CAP_5551 | CLCD_CAP_565,
 	.check		= clcdfb_check,
 	.decode		= clcdfb_decode,
 	.enable		= ct_ca9x4_clcd_enable,
 	.setup		= ct_ca9x4_clcd_setup,
-	.mmap		= ct_ca9x4_clcd_mmap,
-	.remove		= ct_ca9x4_clcd_remove,
+	.mmap		= versatile_clcd_mmap_dma,
+	.remove		= versatile_clcd_remove_dma,
 };
 
-static AMBA_DEVICE(clcd, "ct:clcd", CT_CA9X4_CLCDC, &ct_ca9x4_clcd_data);
-static AMBA_DEVICE(dmc, "ct:dmc", CT_CA9X4_DMC, NULL);
-static AMBA_DEVICE(smc, "ct:smc", CT_CA9X4_SMC, NULL);
-static AMBA_DEVICE(gpio, "ct:gpio", CT_CA9X4_GPIO, NULL);
+static AMBA_AHB_DEVICE(clcd, "ct:clcd", 0, CT_CA9X4_CLCDC, IRQ_CT_CA9X4_CLCDC, &ct_ca9x4_clcd_data);
+static AMBA_APB_DEVICE(dmc, "ct:dmc", 0, CT_CA9X4_DMC, IRQ_CT_CA9X4_DMC, NULL);
+static AMBA_APB_DEVICE(smc, "ct:smc", 0, CT_CA9X4_SMC, IRQ_CT_CA9X4_SMC, NULL);
+static AMBA_APB_DEVICE(gpio, "ct:gpio", 0, CT_CA9X4_GPIO, IRQ_CT_CA9X4_GPIO, NULL);
 
 static struct amba_device *ct_ca9x4_amba_devs[] __initdata = {
 	&clcd_device,
@@ -185,10 +125,22 @@ static struct clk osc1_clk = {
 	.rate	= 24000000,
 };
 
+static struct clk ct_sp804_clk = {
+	.rate	= 1000000,
+};
+
 static struct clk_lookup lookups[] = {
 	{	/* CLCD */
 		.dev_id		= "ct:clcd",
 		.clk		= &osc1_clk,
+	}, {	/* SP804 timers */
+		.dev_id		= "sp804",
+		.con_id		= "ct-timer0",
+		.clk		= &ct_sp804_clk,
+	}, {	/* SP804 timers */
+		.dev_id		= "sp804",
+		.con_id		= "ct-timer1",
+		.clk		= &ct_sp804_clk,
 	},
 };
 
@@ -222,12 +174,17 @@ static struct platform_device pmu_device = {
 	.resource	= pmu_resources,
 };
 
+static void __init ct_ca9x4_init_early(void)
+{
+	clkdev_add_table(lookups, ARRAY_SIZE(lookups));
+}
+
 static void __init ct_ca9x4_init(void)
 {
 	int i;
 
 #ifdef CONFIG_CACHE_L2X0
-	void __iomem *l2x0_base = MMIO_P2V(CT_CA9X4_L2CC);
+	void __iomem *l2x0_base = ioremap(CT_CA9X4_L2CC, SZ_4K);
 
 	/* set RAM latencies to 1 cycle for this core tile. */
 	writel(0, l2x0_base + L2X0_TAG_LATENCY_CTRL);
@@ -236,24 +193,52 @@ static void __init ct_ca9x4_init(void)
 	l2x0_init(l2x0_base, 0x00400000, 0xfe0fffff);
 #endif
 
-	clkdev_add_table(lookups, ARRAY_SIZE(lookups));
-
 	for (i = 0; i < ARRAY_SIZE(ct_ca9x4_amba_devs); i++)
 		amba_device_register(ct_ca9x4_amba_devs[i], &iomem_resource);
 
 	platform_device_register(&pmu_device);
 }
 
-MACHINE_START(VEXPRESS, "ARM-Versatile Express CA9x4")
-	.phys_io	= V2M_UART0 & SECTION_MASK,
-	.io_pg_offst	= (__MMIO_P2V(V2M_UART0) >> 18) & 0xfffc,
-	.boot_params	= PHYS_OFFSET + 0x00000100,
-	.map_io		= ct_ca9x4_map_io,
-	.init_irq	= ct_ca9x4_init_irq,
-#if 0
-	.timer		= &ct_ca9x4_timer,
-#else
-	.timer		= &v2m_timer,
+#ifdef CONFIG_SMP
+static void *ct_ca9x4_scu_base __initdata;
+
+static void __init ct_ca9x4_init_cpu_map(void)
+{
+	int i, ncores;
+
+	ct_ca9x4_scu_base = ioremap(A9_MPCORE_SCU, SZ_128);
+	if (WARN_ON(!ct_ca9x4_scu_base))
+		return;
+
+	ncores = scu_get_core_count(ct_ca9x4_scu_base);
+
+	if (ncores > nr_cpu_ids) {
+		pr_warn("SMP: %u cores greater than maximum (%u), clipping\n",
+			ncores, nr_cpu_ids);
+		ncores = nr_cpu_ids;
+	}
+
+	for (i = 0; i < ncores; ++i)
+		set_cpu_possible(i, true);
+
+	set_smp_cross_call(gic_raise_softirq);
+}
+
+static void __init ct_ca9x4_smp_enable(unsigned int max_cpus)
+{
+	scu_enable(ct_ca9x4_scu_base);
+}
 #endif
-	.init_machine	= ct_ca9x4_init,
-MACHINE_END
+
+struct ct_desc ct_ca9x4_desc __initdata = {
+	.id		= V2M_CT_ID_CA9,
+	.name		= "CA9x4",
+	.map_io		= ct_ca9x4_map_io,
+	.init_early	= ct_ca9x4_init_early,
+	.init_irq	= ct_ca9x4_init_irq,
+	.init_tile	= ct_ca9x4_init,
+#ifdef CONFIG_SMP
+	.init_cpu_map	= ct_ca9x4_init_cpu_map,
+	.smp_enable	= ct_ca9x4_smp_enable,
+#endif
+};

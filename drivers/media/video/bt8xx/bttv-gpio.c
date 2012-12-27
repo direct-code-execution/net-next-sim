@@ -3,7 +3,7 @@
     bttv-gpio.c  --  gpio sub drivers
 
     sysfs-based sub driver interface for bttv
-    mainly intented for gpio access
+    mainly intended for gpio access
 
 
     Copyright (C) 1996,97,98 Ralph  Metzler (rjkm@thp.uni-koeln.de)
@@ -25,6 +25,8 @@
     Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 
 */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/module.h>
 #include <linux/init.h>
@@ -99,7 +101,7 @@ int bttv_sub_add_device(struct bttv_core *core, char *name)
 		kfree(sub);
 		return err;
 	}
-	printk("bttv%d: add subdevice \"%s\"\n", core->nr, dev_name(&sub->dev));
+	pr_info("%d: add subdevice \"%s\"\n", core->nr, dev_name(&sub->dev));
 	list_add_tail(&sub->list,&core->subs);
 	return 0;
 }

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2010, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -105,11 +105,13 @@ void acpi_db_set_method_data(char *type_arg, char *index_arg, char *value_arg);
 acpi_status
 acpi_db_display_objects(char *obj_type_arg, char *display_count_arg);
 
+void acpi_db_display_interfaces(char *action_arg, char *interface_name_arg);
+
 acpi_status acpi_db_find_name_in_namespace(char *name_arg);
 
 void acpi_db_set_scope(char *name);
 
-acpi_status acpi_db_sleep(char *object_arg);
+ACPI_HW_DEPENDENT_RETURN_OK(acpi_status acpi_db_sleep(char *object_arg))
 
 void acpi_db_find_references(char *object_arg);
 
@@ -117,11 +119,13 @@ void acpi_db_display_locks(void);
 
 void acpi_db_display_resources(char *object_arg);
 
-void acpi_db_display_gpes(void);
+ACPI_HW_DEPENDENT_RETURN_VOID(void acpi_db_display_gpes(void))
 
 void acpi_db_check_integrity(void);
 
-void acpi_db_generate_gpe(char *gpe_arg, char *block_arg);
+ACPI_HW_DEPENDENT_RETURN_VOID(void
+			      acpi_db_generate_gpe(char *gpe_arg,
+						   char *block_arg))
 
 void acpi_db_check_predefined_names(void);
 

@@ -35,6 +35,7 @@
 #include <linux/kthread.h>
 #include <linux/delay.h>
 #include <linux/init.h>
+#include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/pci.h>
 #include <linux/slab.h>
@@ -926,7 +927,7 @@ static int snd_emu10k1_emu1010_init(struct snd_emu10k1 *emu)
 	snd_emu1010_fpga_write(emu, EMU_HANA_MIDI_IN, 0x19);
 	/* Unknown. */
 	snd_emu1010_fpga_write(emu, EMU_HANA_MIDI_OUT, 0x0c);
-	/* IRQ Enable: Alll on */
+	/* IRQ Enable: All on */
 	/* snd_emu1010_fpga_write(emu, 0x09, 0x0f ); */
 	/* IRQ Enable: All off */
 	snd_emu1010_fpga_write(emu, EMU_HANA_IRQ_ENABLE, 0x00);
@@ -1440,6 +1441,14 @@ static struct snd_emu_chip_details emu_chip_details[] = {
 	 .ca0102_chip = 1,
 	 .spk71 = 1,
 	 .emu_model = EMU_MODEL_EMU0404}, /* EMU 0404 */
+	/* EMU0404 PCIe */
+	{.vendor = 0x1102, .device = 0x0008, .subsystem = 0x40051102,
+	 .driver = "Audigy2", .name = "E-mu 0404 PCIe [MAEM8984]",
+	 .id = "EMU0404",
+	 .emu10k2_chip = 1,
+	 .ca0108_chip = 1,
+	 .spk71 = 1,
+	 .emu_model = EMU_MODEL_EMU0404}, /* EMU 0404 PCIe ver_03 */
 	/* Note that all E-mu cards require kernel 2.6 or newer. */
 	{.vendor = 0x1102, .device = 0x0008,
 	 .driver = "Audigy2", .name = "SB Audigy 2 Value [Unknown]",
@@ -1463,6 +1472,18 @@ static struct snd_emu_chip_details emu_chip_details[] = {
 	 */
 	{.vendor = 0x1102, .device = 0x0004, .subsystem = 0x20061102,
 	 .driver = "Audigy2", .name = "SB Audigy 2 [SB0350b]",
+	 .id = "Audigy2",
+	 .emu10k2_chip = 1,
+	 .ca0102_chip = 1,
+	 .ca0151_chip = 1,
+	 .spk71 = 1,
+	 .spdif_bug = 1,
+	 .invert_shared_spdif = 1,	/* digital/analog switch swapped */
+	 .ac97_chip = 1} ,
+	/* 0x20051102 also has SB0350 written on it, treated as Audigy 2 ZS by
+	   Creative's Windows driver */
+	{.vendor = 0x1102, .device = 0x0004, .subsystem = 0x20051102,
+	 .driver = "Audigy2", .name = "SB Audigy 2 ZS [SB0350a]",
 	 .id = "Audigy2",
 	 .emu10k2_chip = 1,
 	 .ca0102_chip = 1,
@@ -1904,7 +1925,7 @@ int __devinit snd_emu10k1_create(struct snd_card *card,
 
 	/* irq handler must be registered after I/O ports are activated */
 	if (request_irq(pci->irq, snd_emu10k1_interrupt, IRQF_SHARED,
-			"EMU10K1", emu)) {
+			KBUILD_MODNAME, emu)) {
 		err = -EBUSY;
 		goto error;
 	}

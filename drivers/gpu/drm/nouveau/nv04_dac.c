@@ -32,6 +32,7 @@
 #include "nouveau_connector.h"
 #include "nouveau_crtc.h"
 #include "nouveau_hw.h"
+#include "nouveau_gpio.h"
 #include "nvreg.h"
 
 int nv04_dac_output_offset(struct drm_encoder *encoder)
@@ -74,14 +75,14 @@ static int sample_load_twice(struct drm_device *dev, bool sense[2])
 		 * use a 10ms timeout (guards against crtc being inactive, in
 		 * which case blank state would never change)
 		 */
-		if (!nouveau_wait_until(dev, 10000000, NV_PRMCIO_INP0__COLOR,
-					0x00000001, 0x00000000))
+		if (!nouveau_wait_eq(dev, 10000000, NV_PRMCIO_INP0__COLOR,
+				     0x00000001, 0x00000000))
 			return -EBUSY;
-		if (!nouveau_wait_until(dev, 10000000, NV_PRMCIO_INP0__COLOR,
-					0x00000001, 0x00000001))
+		if (!nouveau_wait_eq(dev, 10000000, NV_PRMCIO_INP0__COLOR,
+				     0x00000001, 0x00000001))
 			return -EBUSY;
-		if (!nouveau_wait_until(dev, 10000000, NV_PRMCIO_INP0__COLOR,
-					0x00000001, 0x00000000))
+		if (!nouveau_wait_eq(dev, 10000000, NV_PRMCIO_INP0__COLOR,
+				     0x00000001, 0x00000000))
 			return -EBUSY;
 
 		udelay(100);
@@ -220,7 +221,6 @@ uint32_t nv17_dac_sample_load(struct drm_encoder *encoder)
 {
 	struct drm_device *dev = encoder->dev;
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
-	struct nouveau_gpio_engine *gpio = &dev_priv->engine.gpio;
 	struct dcb_entry *dcb = nouveau_encoder(encoder)->dcb;
 	uint32_t sample, testval, regoffset = nv04_dac_output_offset(encoder);
 	uint32_t saved_powerctrl_2 = 0, saved_powerctrl_4 = 0, saved_routput,
@@ -252,11 +252,11 @@ uint32_t nv17_dac_sample_load(struct drm_encoder *encoder)
 		nvWriteMC(dev, NV_PBUS_POWERCTRL_4, saved_powerctrl_4 & 0xffffffcf);
 	}
 
-	saved_gpio1 = gpio->get(dev, DCB_GPIO_TVDAC1);
-	saved_gpio0 = gpio->get(dev, DCB_GPIO_TVDAC0);
+	saved_gpio1 = nouveau_gpio_func_get(dev, DCB_GPIO_TVDAC1);
+	saved_gpio0 = nouveau_gpio_func_get(dev, DCB_GPIO_TVDAC0);
 
-	gpio->set(dev, DCB_GPIO_TVDAC1, dcb->type == OUTPUT_TV);
-	gpio->set(dev, DCB_GPIO_TVDAC0, dcb->type == OUTPUT_TV);
+	nouveau_gpio_func_set(dev, DCB_GPIO_TVDAC1, dcb->type == OUTPUT_TV);
+	nouveau_gpio_func_set(dev, DCB_GPIO_TVDAC0, dcb->type == OUTPUT_TV);
 
 	msleep(4);
 
@@ -291,6 +291,8 @@ uint32_t nv17_dac_sample_load(struct drm_encoder *encoder)
 	msleep(5);
 
 	sample = NVReadRAMDAC(dev, 0, NV_PRAMDAC_TEST_CONTROL + regoffset);
+	/* do it again just in case it's a residual current */
+	sample &= NVReadRAMDAC(dev, 0, NV_PRAMDAC_TEST_CONTROL + regoffset);
 
 	temp = NVReadRAMDAC(dev, head, NV_PRAMDAC_TEST_CONTROL);
 	NVWriteRAMDAC(dev, head, NV_PRAMDAC_TEST_CONTROL,
@@ -304,8 +306,8 @@ uint32_t nv17_dac_sample_load(struct drm_encoder *encoder)
 		nvWriteMC(dev, NV_PBUS_POWERCTRL_4, saved_powerctrl_4);
 	nvWriteMC(dev, NV_PBUS_POWERCTRL_2, saved_powerctrl_2);
 
-	gpio->set(dev, DCB_GPIO_TVDAC1, saved_gpio1);
-	gpio->set(dev, DCB_GPIO_TVDAC0, saved_gpio0);
+	nouveau_gpio_func_set(dev, DCB_GPIO_TVDAC1, saved_gpio1);
+	nouveau_gpio_func_set(dev, DCB_GPIO_TVDAC0, saved_gpio0);
 
 	return sample;
 }
@@ -343,21 +345,12 @@ static void nv04_dac_prepare(struct drm_encoder *encoder)
 {
 	struct drm_encoder_helper_funcs *helper = encoder->helper_private;
 	struct drm_device *dev = encoder->dev;
-	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	int head = nouveau_crtc(encoder->crtc)->index;
-	struct nv04_crtc_reg *crtcstate = dev_priv->mode_reg.crtc_reg;
 
 	helper->dpms(encoder, DRM_MODE_DPMS_OFF);
 
 	nv04_dfp_disable(dev, head);
-
-	/* Some NV4x have unknown values (0x3f, 0x50, 0x54, 0x6b, 0x79, 0x7f)
-	 * at LCD__INDEX which we don't alter
-	 */
-	if (!(crtcstate[head].CRTC[NV_CIO_CRE_LCD__INDEX] & 0x44))
-		crtcstate[head].CRTC[NV_CIO_CRE_LCD__INDEX] = 0;
 }
-
 
 static void nv04_dac_mode_set(struct drm_encoder *encoder,
 			      struct drm_display_mode *mode,

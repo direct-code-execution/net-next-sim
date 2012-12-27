@@ -2,7 +2,7 @@
 
   Broadcom B43 wireless driver
 
-  Copyright (c) 2007 Michael Buesch <mb@bu3sch.de>
+  Copyright (c) 2007 Michael Buesch <m@bues.ch>
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -25,15 +25,15 @@
 
 #include <linux/ssb/ssb.h>
 #include <linux/slab.h>
+#include <linux/module.h>
 
-#include <pcmcia/cs.h>
 #include <pcmcia/cistpl.h>
 #include <pcmcia/ciscode.h>
 #include <pcmcia/ds.h>
 #include <pcmcia/cisreg.h>
 
 
-static /*const */ struct pcmcia_device_id b43_pcmcia_tbl[] = {
+static const struct pcmcia_device_id b43_pcmcia_tbl[] = {
 	PCMCIA_DEVICE_MANF_CARD(0x2D0, 0x448),
 	PCMCIA_DEVICE_MANF_CARD(0x2D0, 0x476),
 	PCMCIA_DEVICE_NULL,
@@ -63,7 +63,6 @@ static int b43_pcmcia_resume(struct pcmcia_device *dev)
 static int __devinit b43_pcmcia_probe(struct pcmcia_device *dev)
 {
 	struct ssb_bus *ssb;
-	win_req_t win;
 	int err = -ENOMEM;
 	int res = 0;
 
@@ -73,30 +72,28 @@ static int __devinit b43_pcmcia_probe(struct pcmcia_device *dev)
 
 	err = -ENODEV;
 
-	dev->conf.Attributes = CONF_ENABLE_IRQ;
-	dev->conf.IntType = INT_MEMORY_AND_IO;
+	dev->config_flags |= CONF_ENABLE_IRQ;
 
-	win.Attributes =  WIN_ENABLE | WIN_DATA_WIDTH_16 |
+	dev->resource[2]->flags |=  WIN_ENABLE | WIN_DATA_WIDTH_16 |
 			 WIN_USE_WAIT;
-	win.Base = 0;
-	win.Size = SSB_CORE_SIZE;
-	win.AccessSpeed = 250;
-	res = pcmcia_request_window(dev, &win, &dev->win);
+	dev->resource[2]->start = 0;
+	dev->resource[2]->end = SSB_CORE_SIZE;
+	res = pcmcia_request_window(dev, dev->resource[2], 250);
 	if (res != 0)
 		goto err_kfree_ssb;
 
-	res = pcmcia_map_mem_page(dev, dev->win, 0);
+	res = pcmcia_map_mem_page(dev, dev->resource[2], 0);
 	if (res != 0)
 		goto err_disable;
 
 	if (!dev->irq)
 		goto err_disable;
 
-	res = pcmcia_request_configuration(dev, &dev->conf);
+	res = pcmcia_enable_device(dev);
 	if (res != 0)
 		goto err_disable;
 
-	err = ssb_bus_pcmciabus_register(ssb, dev, win.Base);
+	err = ssb_bus_pcmciabus_register(ssb, dev, dev->resource[2]->start);
 	if (err)
 		goto err_disable;
 	dev->priv = ssb;
@@ -125,9 +122,7 @@ static void __devexit b43_pcmcia_remove(struct pcmcia_device *dev)
 
 static struct pcmcia_driver b43_pcmcia_driver = {
 	.owner		= THIS_MODULE,
-	.drv		= {
-				.name = "b43-pcmcia",
-			},
+	.name		= "b43-pcmcia",
 	.id_table	= b43_pcmcia_tbl,
 	.probe		= b43_pcmcia_probe,
 	.remove		= __devexit_p(b43_pcmcia_remove),

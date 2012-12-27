@@ -17,54 +17,33 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
 #include <mach/common.h>
 
-int __init mxc_register_device(struct platform_device *pdev, void *data)
+struct device mxc_aips_bus = {
+	.init_name	= "mxc_aips",
+	.parent		= &platform_bus,
+};
+
+struct device mxc_ahb_bus = {
+	.init_name	= "mxc_ahb",
+	.parent		= &platform_bus,
+};
+
+static int __init mxc_device_init(void)
 {
 	int ret;
 
-	pdev->dev.platform_data = data;
+	ret = device_register(&mxc_aips_bus);
+	if (IS_ERR_VALUE(ret))
+		goto done;
 
-	ret = platform_device_register(pdev);
-	if (ret)
-		pr_debug("Unable to register platform device '%s': %d\n",
-			 pdev->name, ret);
+	ret = device_register(&mxc_ahb_bus);
 
+done:
 	return ret;
 }
-
-struct platform_device *__init imx_add_platform_device(const char *name, int id,
-		const struct resource *res, unsigned int num_resources,
-		const void *data, size_t size_data)
-{
-	int ret = -ENOMEM;
-	struct platform_device *pdev;
-
-	pdev = platform_device_alloc(name, id);
-	if (!pdev)
-		goto err;
-
-	if (res) {
-		ret = platform_device_add_resources(pdev, res, num_resources);
-		if (ret)
-			goto err;
-	}
-
-	if (data) {
-		ret = platform_device_add_data(pdev, data, size_data);
-		if (ret)
-			goto err;
-	}
-
-	ret = platform_device_add(pdev);
-	if (ret) {
-err:
-		platform_device_put(pdev);
-		return ERR_PTR(ret);
-	}
-
-	return pdev;
-}
+core_initcall(mxc_device_init);

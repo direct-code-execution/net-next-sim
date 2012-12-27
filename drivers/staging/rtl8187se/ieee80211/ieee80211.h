@@ -25,13 +25,13 @@
 #define IEEE80211_H
 #include <linux/if_ether.h> /* ETH_ALEN */
 #include <linux/kernel.h>   /* ARRAY_SIZE */
-#include <linux/version.h>
 #include <linux/jiffies.h>
 #include <linux/timer.h>
 #include <linux/sched.h>
 #include <linux/semaphore.h>
 #include <linux/wireless.h>
 #include <linux/ieee80211.h>
+#include <linux/interrupt.h>
 
 #define KEY_TYPE_NA		0x0
 #define KEY_TYPE_WEP40 		0x1
@@ -215,7 +215,6 @@ do { if (ieee80211_debug_level & (level)) \
 #define IEEE80211_DEBUG_TX(f, a...)  IEEE80211_DEBUG(IEEE80211_DL_TX, f, ## a)
 #define IEEE80211_DEBUG_RX(f, a...)  IEEE80211_DEBUG(IEEE80211_DL_RX, f, ## a)
 #include <linux/netdevice.h>
-#include <linux/wireless.h>
 #include <linux/if_arp.h> /* ARPHRD_ETHER */
 
 #ifndef WIRELESS_SPY
@@ -1100,7 +1099,7 @@ struct ieee80211_device {
 	 * not set. As some cards may have different HW queues that
 	 * one might want to use for data and management frames
 	 * the option to have two callbacks might be useful.
-	 * This fucntion can't sleep.
+	 * This function can't sleep.
 	 */
 	int (*softmac_hard_start_xmit)(struct sk_buff *skb,
 			       struct net_device *dev);
@@ -1139,9 +1138,9 @@ struct ieee80211_device {
 	 * it is called in a work_queue when swithcing to ad-hoc mode
 	 * or in behalf of iwlist scan when the card is associated
 	 * and root user ask for a scan.
-	 * the fucntion stop_scan should stop both the syncro and
+	 * the function stop_scan should stop both the syncro and
 	 * background scanning and can sleep.
-	 * The fucntion start_scan should initiate the background
+	 * The function start_scan should initiate the background
 	 * scanning and can't sleep.
 	 */
 	void (*scan_syncro)(struct net_device *dev);
@@ -1340,8 +1339,8 @@ int ieee80211_wx_set_mlme(struct ieee80211_device *ieee,
 
 int ieee80211_wx_set_gen_ie(struct ieee80211_device *ieee, u8 *ie, size_t len);
 /* ieee80211_softmac.c */
-extern short ieee80211_is_54g(struct ieee80211_network net);
-extern short ieee80211_is_shortslot(struct ieee80211_network net);
+extern short ieee80211_is_54g(const struct ieee80211_network *net);
+extern short ieee80211_is_shortslot(const struct ieee80211_network *net);
 extern int ieee80211_rx_frame_softmac(struct ieee80211_device *ieee, struct sk_buff *skb,
 			struct ieee80211_rx_stats *rx_stats, u16 type,
 			u16 stype);

@@ -31,6 +31,8 @@
 #include <linux/clockchips.h>
 #include <linux/sh_timer.h>
 #include <linux/slab.h>
+#include <linux/module.h>
+#include <linux/pm_domain.h>
 
 struct sh_tmu_priv {
 	void __iomem *mapbase;
@@ -199,8 +201,12 @@ static cycle_t sh_tmu_clocksource_read(struct clocksource *cs)
 static int sh_tmu_clocksource_enable(struct clocksource *cs)
 {
 	struct sh_tmu_priv *p = cs_to_sh_tmu(cs);
+	int ret;
 
-	return sh_tmu_enable(p);
+	ret = sh_tmu_enable(p);
+	if (!ret)
+		__clocksource_updatefreq_hz(cs, p->rate);
+	return ret;
 }
 
 static void sh_tmu_clocksource_disable(struct clocksource *cs)
@@ -221,17 +227,10 @@ static int sh_tmu_register_clocksource(struct sh_tmu_priv *p,
 	cs->mask = CLOCKSOURCE_MASK(32);
 	cs->flags = CLOCK_SOURCE_IS_CONTINUOUS;
 
-	/* clk_get_rate() needs an enabled clock */
-	clk_enable(p->clk);
-	/* channel will be configured at parent clock / 4 */
-	p->rate = clk_get_rate(p->clk) / 4;
-	clk_disable(p->clk);
-	/* TODO: calculate good shift from rate and counter bit width */
-	cs->shift = 10;
-	cs->mult = clocksource_hz2mult(p->rate, cs->shift);
-
 	dev_info(&p->pdev->dev, "used as clock source\n");
-	clocksource_register(cs);
+
+	/* Register with dummy 1 Hz value, gets updated in ->enable() */
+	clocksource_register_hz(cs, 1);
 	return 0;
 }
 
@@ -393,13 +392,9 @@ static int sh_tmu_setup(struct sh_tmu_priv *p, struct platform_device *pdev)
 	/* get hold of clock */
 	p->clk = clk_get(&p->pdev->dev, "tmu_fck");
 	if (IS_ERR(p->clk)) {
-		dev_warn(&p->pdev->dev, "using deprecated clock lookup\n");
-		p->clk = clk_get(&p->pdev->dev, cfg->clk);
-		if (IS_ERR(p->clk)) {
-			dev_err(&p->pdev->dev, "cannot get clock\n");
-			ret = PTR_ERR(p->clk);
-			goto err1;
-		}
+		dev_err(&p->pdev->dev, "cannot get clock\n");
+		ret = PTR_ERR(p->clk);
+		goto err1;
 	}
 
 	return sh_tmu_register(p, (char *)dev_name(&p->pdev->dev),
@@ -415,6 +410,9 @@ static int __devinit sh_tmu_probe(struct platform_device *pdev)
 {
 	struct sh_tmu_priv *p = platform_get_drvdata(pdev);
 	int ret;
+
+	if (!is_early_platform_device(pdev))
+		pm_genpd_dev_always_on(&pdev->dev, true);
 
 	if (p) {
 		dev_info(&pdev->dev, "kept as earlytimer\n");

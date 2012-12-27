@@ -11,7 +11,7 @@
 
 #include <linux/rculist.h>
 #include <linux/mmu_notifier.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/mm.h>
 #include <linux/err.h>
 #include <linux/rcupdate.h>
@@ -94,6 +94,26 @@ int __mmu_notifier_clear_flush_young(struct mm_struct *mm,
 	hlist_for_each_entry_rcu(mn, n, &mm->mmu_notifier_mm->list, hlist) {
 		if (mn->ops->clear_flush_young)
 			young |= mn->ops->clear_flush_young(mn, mm, address);
+	}
+	rcu_read_unlock();
+
+	return young;
+}
+
+int __mmu_notifier_test_young(struct mm_struct *mm,
+			      unsigned long address)
+{
+	struct mmu_notifier *mn;
+	struct hlist_node *n;
+	int young = 0;
+
+	rcu_read_lock();
+	hlist_for_each_entry_rcu(mn, n, &mm->mmu_notifier_mm->list, hlist) {
+		if (mn->ops->test_young) {
+			young = mn->ops->test_young(mn, mm, address);
+			if (young)
+				break;
+		}
 	}
 	rcu_read_unlock();
 

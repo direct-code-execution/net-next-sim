@@ -316,7 +316,7 @@ linux-kernel邮件列表中提供反馈，告诉大家你遇到了问题还是�
 	git.kernel.org:/pub/scm/linux/kernel/git/jejb/scsi-misc-2.6.git
 
   使用quilt管理的补丁集：
-    - USB, PCI, 驱动程序核心和I2C, Greg Kroah-Hartman <gregkh@suse.de>
+    - USB, PCI, 驱动程序核心和I2C, Greg Kroah-Hartman <gregkh@linuxfoundation.org>
 	kernel.org/pub/linux/kernel/people/gregkh/gregkh-2.6/
     - x86-64, 部分i386, Andi Kleen <ak@suse.de>
 	ftp.firstfloor.org:/pub/ak/x86_64/quilt/
@@ -347,8 +347,8 @@ bugzilla.kernel.org是Linux内核开发者们用来跟踪内核Bug的网站。�
 最新bug的通知，可以订阅bugme-new邮件列表（只有新的bug报告会被寄到这里）
 或者订阅bugme-janitor邮件列表（所有bugzilla的变动都会被寄到这里）。
 
-	http://lists.osdl.org/mailman/listinfo/bugme-new
-	http://lists.osdl.org/mailman/listinfo/bugme-janitors
+	https://lists.linux-foundation.org/mailman/listinfo/bugme-new
+	https://lists.linux-foundation.org/mailman/listinfo/bugme-janitors
 
 
 邮件列表

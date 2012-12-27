@@ -23,6 +23,7 @@
 #include <linux/rtc.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
+#include <linux/module.h>
 
 #define DRV_VERSION "0.6"
 
@@ -397,29 +398,12 @@ static int ds1511_rtc_alarm_irq_enable(struct device *dev, unsigned int enabled)
 	return 0;
 }
 
-static int ds1511_rtc_update_irq_enable(struct device *dev,
-	unsigned int enabled)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
-
-	if (pdata->irq <= 0)
-		return -EINVAL;
-	if (enabled)
-		pdata->irqen |= RTC_UF;
-	else
-		pdata->irqen &= ~RTC_UF;
-	ds1511_rtc_update_alarm(pdata);
-	return 0;
-}
-
 static const struct rtc_class_ops ds1511_rtc_ops = {
 	.read_time		= ds1511_rtc_read_time,
 	.set_time		= ds1511_rtc_set_time,
 	.read_alarm		= ds1511_rtc_read_alarm,
 	.set_alarm		= ds1511_rtc_set_alarm,
 	.alarm_irq_enable	= ds1511_rtc_alarm_irq_enable,
-	.update_irq_enable	= ds1511_rtc_update_irq_enable,
 };
 
  static ssize_t
@@ -485,7 +469,7 @@ ds1511_nvram_write(struct file *filp, struct kobject *kobj,
 static struct bin_attribute ds1511_nvram_attr = {
 	.attr = {
 		.name = "nvram",
-		.mode = S_IRUGO | S_IWUGO,
+		.mode = S_IRUGO | S_IWUSR,
 	},
 	.size = DS1511_RAM_MAX,
 	.read = ds1511_nvram_read,
@@ -507,7 +491,7 @@ ds1511_rtc_probe(struct platform_device *pdev)
 	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
 	if (!pdata)
 		return -ENOMEM;
-	pdata->size = res->end - res->start + 1;
+	pdata->size = resource_size(res);
 	if (!devm_request_mem_region(&pdev->dev, res->start, pdata->size,
 			pdev->name))
 		return -EBUSY;
@@ -548,7 +532,7 @@ ds1511_rtc_probe(struct platform_device *pdev)
 	if (pdata->irq > 0) {
 		rtc_read(RTC_CMD1);
 		if (devm_request_irq(&pdev->dev, pdata->irq, ds1511_interrupt,
-			IRQF_DISABLED | IRQF_SHARED, pdev->name, pdev) < 0) {
+			IRQF_SHARED, pdev->name, pdev) < 0) {
 
 			dev_warn(&pdev->dev, "interrupt not available.\n");
 			pdata->irq = 0;
@@ -596,20 +580,7 @@ static struct platform_driver ds1511_rtc_driver = {
 	},
 };
 
- static int __init
-ds1511_rtc_init(void)
-{
-	return platform_driver_register(&ds1511_rtc_driver);
-}
-
- static void __exit
-ds1511_rtc_exit(void)
-{
-	platform_driver_unregister(&ds1511_rtc_driver);
-}
-
-module_init(ds1511_rtc_init);
-module_exit(ds1511_rtc_exit);
+module_platform_driver(ds1511_rtc_driver);
 
 MODULE_AUTHOR("Andrew Sharp <andy.sharp@lsi.com>");
 MODULE_DESCRIPTION("Dallas DS1511 RTC driver");

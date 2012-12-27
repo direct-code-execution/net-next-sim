@@ -4,6 +4,10 @@ menu "Integrator Options"
 
 config ARCH_INTEGRATOR_AP
 	bool "Support Integrator/AP and Integrator/PP2 platforms"
+	select CLKSRC_MMIO
+	select MIGHT_HAVE_PCI
+	select SERIAL_AMBA_PL010
+	select SERIAL_AMBA_PL010_CONSOLE
 	help
 	  Include support for the ARM(R) Integrator/AP and
 	  Integrator/PP2 platforms.
@@ -12,6 +16,9 @@ config ARCH_INTEGRATOR_CP
 	bool "Support Integrator/CP platform"
 	select ARCH_CINTEGRATOR
 	select ARM_TIMER_SP804
+	select PLAT_VERSATILE_CLCD
+	select SERIAL_AMBA_PL011
+	select SERIAL_AMBA_PL011_CONSOLE
 	help
 	  Include support for the ARM(R) Integrator CP platform.
 

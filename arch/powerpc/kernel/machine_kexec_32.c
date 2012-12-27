@@ -16,10 +16,10 @@
 #include <asm/hw_irq.h>
 #include <asm/io.h>
 
-typedef NORET_TYPE void (*relocate_new_kernel_t)(
+typedef void (*relocate_new_kernel_t)(
 				unsigned long indirection_page,
 				unsigned long reboot_code_buffer,
-				unsigned long start_address) ATTRIB_NORET;
+				unsigned long start_address) __noreturn;
 
 /*
  * This is a generic machine_kexec function suitable at least for
@@ -38,6 +38,10 @@ void default_machine_kexec(struct kimage *image)
 
 	/* Interrupts aren't acceptable while we reboot */
 	local_irq_disable();
+
+	/* mask each interrupt so we are in a more sane state for the
+	 * kexec kernel */
+	machine_kexec_mask_interrupts();
 
 	page_list = image->head;
 

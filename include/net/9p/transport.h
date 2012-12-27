@@ -31,8 +31,10 @@
  * @list: used to maintain a list of currently available transports
  * @name: the human-readable name of the transport
  * @maxsize: transport provided maximum packet size
+ * @pref: Preferences of this transport
  * @def: set if this transport should be considered the default
  * @create: member function to create a new connection on this transport
+ * @close: member function to discard a connection on this transport
  * @request: member function to issue a request to the transport
  * @cancel: member function to cancel a request (if it hasn't been sent)
  *
@@ -40,7 +42,7 @@
  * transport module with the 9P core network module and used by the client
  * to instantiate a new connection on a transport.
  *
- * BUGS: the transport module list isn't protected.
+ * The transport module list is protected by v9fs_trans_lock.
  */
 
 struct p9_trans_module {
@@ -53,11 +55,13 @@ struct p9_trans_module {
 	void (*close) (struct p9_client *);
 	int (*request) (struct p9_client *, struct p9_req_t *req);
 	int (*cancel) (struct p9_client *, struct p9_req_t *req);
+	int (*zc_request)(struct p9_client *, struct p9_req_t *,
+			  char *, char *, int , int, int, int);
 };
 
 void v9fs_register_trans(struct p9_trans_module *m);
 void v9fs_unregister_trans(struct p9_trans_module *m);
-struct p9_trans_module *v9fs_get_trans_by_name(const substring_t *name);
+struct p9_trans_module *v9fs_get_trans_by_name(char *s);
 struct p9_trans_module *v9fs_get_default_trans(void);
 void v9fs_put_trans(struct p9_trans_module *m);
 #endif /* NET_9P_TRANSPORT_H */

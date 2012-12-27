@@ -17,6 +17,7 @@
 #include <asm/trace.h>
 #include <asm/fixed_code.h>
 #include <asm/pseudo_instructions.h>
+#include <asm/pda.h>
 
 #ifdef CONFIG_KGDB
 # include <linux/kgdb.h>
@@ -98,7 +99,7 @@ asmlinkage notrace void trap_c(struct pt_regs *fp)
 	/* send the appropriate signal to the user program */
 	switch (trapnr) {
 
-	/* This table works in conjuction with the one in ./mach-common/entry.S
+	/* This table works in conjunction with the one in ./mach-common/entry.S
 	 * Some exceptions are handled there (in assembly, in exception space)
 	 * Some are handled here, (in C, in interrupt space)
 	 * Some, like CPLB, are handled in both, where the normal path is

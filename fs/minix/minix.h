@@ -34,7 +34,6 @@ struct minix_sb_info {
 	unsigned long s_max_size;
 	int s_dirsize;
 	int s_namelen;
-	int s_link_max;
 	struct buffer_head ** s_imap;
 	struct buffer_head ** s_zmap;
 	struct buffer_head * s_sbh;
@@ -46,12 +45,12 @@ struct minix_sb_info {
 extern struct inode *minix_iget(struct super_block *, unsigned long);
 extern struct minix_inode * minix_V1_raw_inode(struct super_block *, ino_t, struct buffer_head **);
 extern struct minix2_inode * minix_V2_raw_inode(struct super_block *, ino_t, struct buffer_head **);
-extern struct inode * minix_new_inode(const struct inode *, int, int *);
+extern struct inode * minix_new_inode(const struct inode *, umode_t, int *);
 extern void minix_free_inode(struct inode * inode);
-extern unsigned long minix_count_free_inodes(struct minix_sb_info *sbi);
+extern unsigned long minix_count_free_inodes(struct super_block *sb);
 extern int minix_new_block(struct inode * inode);
 extern void minix_free_block(struct inode *inode, unsigned long block);
-extern unsigned long minix_count_free_blocks(struct minix_sb_info *sbi);
+extern unsigned long minix_count_free_blocks(struct super_block *sb);
 extern int minix_getattr(struct vfsmount *, struct dentry *, struct kstat *);
 extern int minix_prepare_chunk(struct page *page, loff_t pos, unsigned len);
 
@@ -87,5 +86,84 @@ static inline struct minix_inode_info *minix_i(struct inode *inode)
 {
 	return list_entry(inode, struct minix_inode_info, vfs_inode);
 }
+
+static inline unsigned minix_blocks_needed(unsigned bits, unsigned blocksize)
+{
+	return DIV_ROUND_UP(bits, blocksize * 8);
+}
+
+#if defined(CONFIG_MINIX_FS_NATIVE_ENDIAN) && \
+	defined(CONFIG_MINIX_FS_BIG_ENDIAN_16BIT_INDEXED)
+
+#error Minix file system byte order broken
+
+#elif defined(CONFIG_MINIX_FS_NATIVE_ENDIAN)
+
+/*
+ * big-endian 32 or 64 bit indexed bitmaps on big-endian system or
+ * little-endian bitmaps on little-endian system
+ */
+
+#define minix_test_and_set_bit(nr, addr)	\
+	__test_and_set_bit((nr), (unsigned long *)(addr))
+#define minix_set_bit(nr, addr)		\
+	__set_bit((nr), (unsigned long *)(addr))
+#define minix_test_and_clear_bit(nr, addr) \
+	__test_and_clear_bit((nr), (unsigned long *)(addr))
+#define minix_test_bit(nr, addr)		\
+	test_bit((nr), (unsigned long *)(addr))
+#define minix_find_first_zero_bit(addr, size) \
+	find_first_zero_bit((unsigned long *)(addr), (size))
+
+#elif defined(CONFIG_MINIX_FS_BIG_ENDIAN_16BIT_INDEXED)
+
+/*
+ * big-endian 16bit indexed bitmaps
+ */
+
+static inline int minix_find_first_zero_bit(const void *vaddr, unsigned size)
+{
+	const unsigned short *p = vaddr, *addr = vaddr;
+	unsigned short num;
+
+	if (!size)
+		return 0;
+
+	size >>= 4;
+	while (*p++ == 0xffff) {
+		if (--size == 0)
+			return (p - addr) << 4;
+	}
+
+	num = *--p;
+	return ((p - addr) << 4) + ffz(num);
+}
+
+#define minix_test_and_set_bit(nr, addr)	\
+	__test_and_set_bit((nr) ^ 16, (unsigned long *)(addr))
+#define minix_set_bit(nr, addr)	\
+	__set_bit((nr) ^ 16, (unsigned long *)(addr))
+#define minix_test_and_clear_bit(nr, addr)	\
+	__test_and_clear_bit((nr) ^ 16, (unsigned long *)(addr))
+
+static inline int minix_test_bit(int nr, const void *vaddr)
+{
+	const unsigned short *p = vaddr;
+	return (p[nr >> 4] & (1U << (nr & 15))) != 0;
+}
+
+#else
+
+/*
+ * little-endian bitmaps
+ */
+
+#define minix_test_and_set_bit	__test_and_set_bit_le
+#define minix_set_bit		__set_bit_le
+#define minix_test_and_clear_bit	__test_and_clear_bit_le
+#define minix_test_bit	test_bit_le
+#define minix_find_first_zero_bit	find_first_zero_bit_le
+
+#endif
 
 #endif /* FS_MINIX_H */

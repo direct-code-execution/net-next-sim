@@ -365,7 +365,7 @@ static int __devinit xenfb_probe(struct xenbus_device *dev,
 	struct fb_info *fb_info;
 	int fb_size;
 	int val;
-	int ret;
+	int ret = 0;
 
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (info == NULL) {
@@ -395,10 +395,9 @@ static int __devinit xenfb_probe(struct xenbus_device *dev,
 	spin_lock_init(&info->dirty_lock);
 	spin_lock_init(&info->resize_lock);
 
-	info->fb = vmalloc(fb_size);
+	info->fb = vzalloc(fb_size);
 	if (info->fb == NULL)
 		goto error_nomem;
-	memset(info->fb, 0, fb_size);
 
 	info->nr_pages = (fb_size + PAGE_SIZE - 1) >> PAGE_SHIFT;
 
@@ -459,26 +458,31 @@ static int __devinit xenfb_probe(struct xenbus_device *dev,
 	xenfb_init_shared_page(info, fb_info);
 
 	ret = xenfb_connect_backend(dev, info);
-	if (ret < 0)
-		goto error;
+	if (ret < 0) {
+		xenbus_dev_fatal(dev, ret, "xenfb_connect_backend");
+		goto error_fb;
+	}
 
 	ret = register_framebuffer(fb_info);
 	if (ret) {
-		fb_deferred_io_cleanup(fb_info);
-		fb_dealloc_cmap(&fb_info->cmap);
-		framebuffer_release(fb_info);
 		xenbus_dev_fatal(dev, ret, "register_framebuffer");
-		goto error;
+		goto error_fb;
 	}
 	info->fb_info = fb_info;
 
 	xenfb_make_preferred_console();
 	return 0;
 
- error_nomem:
-	ret = -ENOMEM;
-	xenbus_dev_fatal(dev, ret, "allocating device memory");
- error:
+error_fb:
+	fb_deferred_io_cleanup(fb_info);
+	fb_dealloc_cmap(&fb_info->cmap);
+	framebuffer_release(fb_info);
+error_nomem:
+	if (!ret) {
+		ret = -ENOMEM;
+		xenbus_dev_fatal(dev, ret, "allocating device memory");
+	}
+error:
 	xenfb_remove(dev);
 	return ret;
 }
@@ -491,12 +495,12 @@ xenfb_make_preferred_console(void)
 	if (console_set_on_cmdline)
 		return;
 
-	acquire_console_sem();
-	for (c = console_drivers; c; c = c->next) {
+	console_lock();
+	for_each_console(c) {
 		if (!strcmp(c->name, "tty") && c->index == 0)
 			break;
 	}
-	release_console_sem();
+	console_unlock();
 	if (c) {
 		unregister_console(c);
 		c->flags |= CON_CONSDEV;
@@ -562,26 +566,24 @@ static void xenfb_init_shared_page(struct xenfb_info *info,
 static int xenfb_connect_backend(struct xenbus_device *dev,
 				 struct xenfb_info *info)
 {
-	int ret, evtchn;
+	int ret, evtchn, irq;
 	struct xenbus_transaction xbt;
 
 	ret = xenbus_alloc_evtchn(dev, &evtchn);
 	if (ret)
 		return ret;
-	ret = bind_evtchn_to_irqhandler(evtchn, xenfb_event_handler,
+	irq = bind_evtchn_to_irqhandler(evtchn, xenfb_event_handler,
 					0, dev->devicetype, info);
-	if (ret < 0) {
+	if (irq < 0) {
 		xenbus_free_evtchn(dev, evtchn);
 		xenbus_dev_fatal(dev, ret, "bind_evtchn_to_irqhandler");
-		return ret;
+		return irq;
 	}
-	info->irq = ret;
-
  again:
 	ret = xenbus_transaction_start(&xbt);
 	if (ret) {
 		xenbus_dev_fatal(dev, ret, "starting transaction");
-		return ret;
+		goto unbind_irq;
 	}
 	ret = xenbus_printf(xbt, dev->nodename, "page-ref", "%lu",
 			    virt_to_mfn(info->page));
@@ -603,20 +605,25 @@ static int xenfb_connect_backend(struct xenbus_device *dev,
 		if (ret == -EAGAIN)
 			goto again;
 		xenbus_dev_fatal(dev, ret, "completing transaction");
-		return ret;
+		goto unbind_irq;
 	}
 
 	xenbus_switch_state(dev, XenbusStateInitialised);
+	info->irq = irq;
 	return 0;
 
  error_xenbus:
 	xenbus_transaction_end(xbt, 1);
 	xenbus_dev_fatal(dev, ret, "writing xenstore");
+ unbind_irq:
+	unbind_from_irqhandler(irq, info);
 	return ret;
 }
 
 static void xenfb_disconnect_backend(struct xenfb_info *info)
 {
+	/* Prevent xenfb refresh */
+	info->update_wanted = 0;
 	if (info->irq >= 0)
 		unbind_from_irqhandler(info->irq, info);
 	info->irq = -1;
@@ -631,6 +638,8 @@ static void xenfb_backend_changed(struct xenbus_device *dev,
 	switch (backend_state) {
 	case XenbusStateInitialising:
 	case XenbusStateInitialised:
+	case XenbusStateReconfiguring:
+	case XenbusStateReconfigured:
 	case XenbusStateUnknown:
 	case XenbusStateClosed:
 		break;
@@ -667,20 +676,17 @@ InitWait:
 	}
 }
 
-static struct xenbus_device_id xenfb_ids[] = {
+static const struct xenbus_device_id xenfb_ids[] = {
 	{ "vfb" },
 	{ "" }
 };
 
-static struct xenbus_driver xenfb_driver = {
-	.name = "vfb",
-	.owner = THIS_MODULE,
-	.ids = xenfb_ids,
+static DEFINE_XENBUS_DRIVER(xenfb, ,
 	.probe = xenfb_probe,
 	.remove = xenfb_remove,
 	.resume = xenfb_resume,
 	.otherend_changed = xenfb_backend_changed,
-};
+);
 
 static int __init xenfb_init(void)
 {

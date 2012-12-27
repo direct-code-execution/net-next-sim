@@ -21,8 +21,9 @@
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/module.h>
+#include <linux/clkdev.h>
+#include <linux/of.h>
 
-#include <asm/clkdev.h>
 #include <asm/div64.h>
 
 #include <mach/clock.h>
@@ -125,7 +126,7 @@ static int clk_cpu_set_parent(struct clk *clk, struct clk *parent)
 	if (clk->parent == parent)
 		return 0;
 
-	if (mx27_revision() >= CHIP_REV_2_0) {
+	if (mx27_revision() >= IMX_CHIP_REVISION_2_0) {
 		if (parent == &mpll_main1_clk) {
 			cscr |= CCM_CSCR_ARM_SRC;
 		} else {
@@ -174,7 +175,7 @@ static int set_rate_cpu(struct clk *clk, unsigned long rate)
 	div--;
 
 	reg = __raw_readl(CCM_CSCR);
-	if (mx27_revision() >= CHIP_REV_2_0) {
+	if (mx27_revision() >= IMX_CHIP_REVISION_2_0) {
 		reg &= ~(3 << 12);
 		reg |= div << 12;
 		reg &= ~(CCM_CSCR_FPM | CCM_CSCR_SPEN);
@@ -244,7 +245,7 @@ static unsigned long get_rate_ssix(struct clk *clk, unsigned long pdf)
 
 	parent_rate = clk_get_rate(clk->parent);
 
-	if (mx27_revision() >= CHIP_REV_2_0)
+	if (mx27_revision() >= IMX_CHIP_REVISION_2_0)
 		pdf += 4;  /* MX27 TO2+ */
 	else
 		pdf = (pdf < 2) ? 124UL : pdf;  /* MX21 & MX27 TO1 */
@@ -269,7 +270,7 @@ static unsigned long get_rate_nfc(struct clk *clk)
 
 	parent_rate = clk_get_rate(clk->parent);
 
-	if (mx27_revision() >= CHIP_REV_2_0)
+	if (mx27_revision() >= IMX_CHIP_REVISION_2_0)
 		nfc_pdf = (__raw_readl(CCM_PCDR0) >> 6) & 0xf;
 	else
 		nfc_pdf = (__raw_readl(CCM_PCDR0) >> 12) & 0xf;
@@ -284,7 +285,7 @@ static unsigned long get_rate_vpu(struct clk *clk)
 
 	parent_rate = clk_get_rate(clk->parent);
 
-	if (mx27_revision() >= CHIP_REV_2_0) {
+	if (mx27_revision() >= IMX_CHIP_REVISION_2_0) {
 		vpu_pdf = (__raw_readl(CCM_PCDR0) >> 10) & 0x3f;
 		vpu_pdf += 4;
 	} else {
@@ -347,7 +348,7 @@ static unsigned long get_rate_mpll_main(struct clk *clk)
 	 * clk->id == 0: arm clock source path 1 which is from 2 * MPLL / 2
 	 * clk->id == 1: arm clock source path 2 which is from 2 * MPLL / 3
 	 */
-	if (mx27_revision() >= CHIP_REV_2_0 && clk->id == 1)
+	if (mx27_revision() >= IMX_CHIP_REVISION_2_0 && clk->id == 1)
 		return 2UL * parent_rate / 3UL;
 
 	return parent_rate;
@@ -365,7 +366,7 @@ static unsigned long get_rate_spll(struct clk *clk)
 	/* On TO2 we have to write the value back. Otherwise we
 	 * read 0 from this register the next time.
 	 */
-	if (mx27_revision() >= CHIP_REV_2_0)
+	if (mx27_revision() >= IMX_CHIP_REVISION_2_0)
 		__raw_writel(reg, CCM_SPCTL0);
 
 	return mxc_decode_pll(reg, rate);
@@ -376,7 +377,7 @@ static unsigned long get_rate_cpu(struct clk *clk)
 	u32 div;
 	unsigned long rate;
 
-	if (mx27_revision() >= CHIP_REV_2_0)
+	if (mx27_revision() >= IMX_CHIP_REVISION_2_0)
 		div = (__raw_readl(CCM_CSCR) >> 12) & 0x3;
 	else
 		div = (__raw_readl(CCM_CSCR) >> 13) & 0x7;
@@ -389,7 +390,7 @@ static unsigned long get_rate_ahb(struct clk *clk)
 {
 	unsigned long rate, bclk_pdf;
 
-	if (mx27_revision() >= CHIP_REV_2_0)
+	if (mx27_revision() >= IMX_CHIP_REVISION_2_0)
 		bclk_pdf = (__raw_readl(CCM_CSCR) >> 8) & 0x3;
 	else
 		bclk_pdf = (__raw_readl(CCM_CSCR) >> 9) & 0xf;
@@ -402,7 +403,7 @@ static unsigned long get_rate_ipg(struct clk *clk)
 {
 	unsigned long rate, ipg_pdf;
 
-	if (mx27_revision() >= CHIP_REV_2_0)
+	if (mx27_revision() >= IMX_CHIP_REVISION_2_0)
 		return clk_get_rate(clk->parent);
 	else
 		ipg_pdf = (__raw_readl(CCM_CSCR) >> 8) & 1;
@@ -583,7 +584,7 @@ DEFINE_CLOCK(emi_clk,      0, PCCR1, 19, NULL, NULL, &ahb_clk);
 DEFINE_CLOCK(dma_clk1,     0, PCCR1, 20, NULL, NULL, &ahb_clk);
 DEFINE_CLOCK(csi_clk1,     0, PCCR1, 21, NULL, NULL, &ahb_clk);
 DEFINE_CLOCK(brom_clk,     0, PCCR1, 22, NULL, NULL, &ahb_clk);
-DEFINE_CLOCK(ata_clk,      0, PCCR1, 23, NULL, NULL, &ahb_clk);
+DEFINE_CLOCK(pata_clk,      0, PCCR1, 23, NULL, NULL, &ahb_clk);
 DEFINE_CLOCK(wdog_clk,     0, PCCR1, 24, NULL, NULL, &ipg_clk);
 DEFINE_CLOCK(usb_clk,      0, PCCR1, 25, get_rate_usb, &usb_clk1, &spll_clk);
 DEFINE_CLOCK(uart6_clk1,   0, PCCR1, 26, NULL, NULL, &ipg_clk);
@@ -594,27 +595,27 @@ DEFINE_CLOCK(uart2_clk1,   0, PCCR1, 30, NULL, NULL, &ipg_clk);
 DEFINE_CLOCK(uart1_clk1,   0, PCCR1, 31, NULL, NULL, &ipg_clk);
 
 /* Clocks we cannot directly gate, but drivers need their rates */
-DEFINE_CLOCK(cspi1_clk,    0, 0,      0, NULL, &cspi1_clk1, &per2_clk);
-DEFINE_CLOCK(cspi2_clk,    1, 0,      0, NULL, &cspi2_clk1, &per2_clk);
-DEFINE_CLOCK(cspi3_clk,    2, 0,      0, NULL, &cspi13_clk1, &per2_clk);
-DEFINE_CLOCK(sdhc1_clk,    0, 0,      0, NULL, &sdhc1_clk1, &per2_clk);
-DEFINE_CLOCK(sdhc2_clk,    1, 0,      0, NULL, &sdhc2_clk1, &per2_clk);
-DEFINE_CLOCK(sdhc3_clk,    2, 0,      0, NULL, &sdhc3_clk1, &per2_clk);
-DEFINE_CLOCK(pwm_clk,      0, 0,      0, NULL, &pwm_clk1, &per1_clk);
-DEFINE_CLOCK(gpt1_clk,     0, 0,      0, NULL, &gpt1_clk1, &per1_clk);
-DEFINE_CLOCK(gpt2_clk,     1, 0,      0, NULL, &gpt2_clk1, &per1_clk);
-DEFINE_CLOCK(gpt3_clk,     2, 0,      0, NULL, &gpt3_clk1, &per1_clk);
-DEFINE_CLOCK(gpt4_clk,     3, 0,      0, NULL, &gpt4_clk1, &per1_clk);
-DEFINE_CLOCK(gpt5_clk,     4, 0,      0, NULL, &gpt5_clk1, &per1_clk);
-DEFINE_CLOCK(gpt6_clk,     5, 0,      0, NULL, &gpt6_clk1, &per1_clk);
-DEFINE_CLOCK(uart1_clk,    0, 0,      0, NULL, &uart1_clk1, &per1_clk);
-DEFINE_CLOCK(uart2_clk,    1, 0,      0, NULL, &uart2_clk1, &per1_clk);
-DEFINE_CLOCK(uart3_clk,    2, 0,      0, NULL, &uart3_clk1, &per1_clk);
-DEFINE_CLOCK(uart4_clk,    3, 0,      0, NULL, &uart4_clk1, &per1_clk);
-DEFINE_CLOCK(uart5_clk,    4, 0,      0, NULL, &uart5_clk1, &per1_clk);
-DEFINE_CLOCK(uart6_clk,    5, 0,      0, NULL, &uart6_clk1, &per1_clk);
-DEFINE_CLOCK1(lcdc_clk,    0, 0,      0, parent, &lcdc_clk1, &per3_clk);
-DEFINE_CLOCK1(csi_clk,     0, 0,      0, parent, &csi_clk1, &per4_clk);
+DEFINE_CLOCK(cspi1_clk,    0, NULL,   0, NULL, &cspi1_clk1, &per2_clk);
+DEFINE_CLOCK(cspi2_clk,    1, NULL,   0, NULL, &cspi2_clk1, &per2_clk);
+DEFINE_CLOCK(cspi3_clk,    2, NULL,   0, NULL, &cspi13_clk1, &per2_clk);
+DEFINE_CLOCK(sdhc1_clk,    0, NULL,   0, NULL, &sdhc1_clk1, &per2_clk);
+DEFINE_CLOCK(sdhc2_clk,    1, NULL,   0, NULL, &sdhc2_clk1, &per2_clk);
+DEFINE_CLOCK(sdhc3_clk,    2, NULL,   0, NULL, &sdhc3_clk1, &per2_clk);
+DEFINE_CLOCK(pwm_clk,      0, NULL,   0, NULL, &pwm_clk1, &per1_clk);
+DEFINE_CLOCK(gpt1_clk,     0, NULL,   0, NULL, &gpt1_clk1, &per1_clk);
+DEFINE_CLOCK(gpt2_clk,     1, NULL,   0, NULL, &gpt2_clk1, &per1_clk);
+DEFINE_CLOCK(gpt3_clk,     2, NULL,   0, NULL, &gpt3_clk1, &per1_clk);
+DEFINE_CLOCK(gpt4_clk,     3, NULL,   0, NULL, &gpt4_clk1, &per1_clk);
+DEFINE_CLOCK(gpt5_clk,     4, NULL,   0, NULL, &gpt5_clk1, &per1_clk);
+DEFINE_CLOCK(gpt6_clk,     5, NULL,   0, NULL, &gpt6_clk1, &per1_clk);
+DEFINE_CLOCK(uart1_clk,    0, NULL,   0, NULL, &uart1_clk1, &per1_clk);
+DEFINE_CLOCK(uart2_clk,    1, NULL,   0, NULL, &uart2_clk1, &per1_clk);
+DEFINE_CLOCK(uart3_clk,    2, NULL,   0, NULL, &uart3_clk1, &per1_clk);
+DEFINE_CLOCK(uart4_clk,    3, NULL,   0, NULL, &uart4_clk1, &per1_clk);
+DEFINE_CLOCK(uart5_clk,    4, NULL,   0, NULL, &uart5_clk1, &per1_clk);
+DEFINE_CLOCK(uart6_clk,    5, NULL,   0, NULL, &uart6_clk1, &per1_clk);
+DEFINE_CLOCK1(lcdc_clk,    0, NULL,   0, parent, &lcdc_clk1, &per3_clk);
+DEFINE_CLOCK1(csi_clk,     0, NULL,   0, parent, &csi_clk1, &per4_clk);
 
 #define _REGISTER_CLOCK(d, n, c) \
 	{ \
@@ -624,12 +625,13 @@ DEFINE_CLOCK1(csi_clk,     0, 0,      0, parent, &csi_clk1, &per4_clk);
 	},
 
 static struct clk_lookup lookups[] = {
-	_REGISTER_CLOCK("imx-uart.0", NULL, uart1_clk)
-	_REGISTER_CLOCK("imx-uart.1", NULL, uart2_clk)
-	_REGISTER_CLOCK("imx-uart.2", NULL, uart3_clk)
-	_REGISTER_CLOCK("imx-uart.3", NULL, uart4_clk)
-	_REGISTER_CLOCK("imx-uart.4", NULL, uart5_clk)
-	_REGISTER_CLOCK("imx-uart.5", NULL, uart6_clk)
+	/* i.mx27 has the i.mx21 type uart */
+	_REGISTER_CLOCK("imx21-uart.0", NULL, uart1_clk)
+	_REGISTER_CLOCK("imx21-uart.1", NULL, uart2_clk)
+	_REGISTER_CLOCK("imx21-uart.2", NULL, uart3_clk)
+	_REGISTER_CLOCK("imx21-uart.3", NULL, uart4_clk)
+	_REGISTER_CLOCK("imx21-uart.4", NULL, uart5_clk)
+	_REGISTER_CLOCK("imx21-uart.5", NULL, uart6_clk)
 	_REGISTER_CLOCK(NULL, "gpt1", gpt1_clk)
 	_REGISTER_CLOCK(NULL, "gpt2", gpt2_clk)
 	_REGISTER_CLOCK(NULL, "gpt3", gpt3_clk)
@@ -640,9 +642,9 @@ static struct clk_lookup lookups[] = {
 	_REGISTER_CLOCK("mxc-mmc.0", NULL, sdhc1_clk)
 	_REGISTER_CLOCK("mxc-mmc.1", NULL, sdhc2_clk)
 	_REGISTER_CLOCK("mxc-mmc.2", NULL, sdhc3_clk)
-	_REGISTER_CLOCK("spi_imx.0", NULL, cspi1_clk)
-	_REGISTER_CLOCK("spi_imx.1", NULL, cspi2_clk)
-	_REGISTER_CLOCK("spi_imx.2", NULL, cspi3_clk)
+	_REGISTER_CLOCK("imx27-cspi.0", NULL, cspi1_clk)
+	_REGISTER_CLOCK("imx27-cspi.1", NULL, cspi2_clk)
+	_REGISTER_CLOCK("imx27-cspi.2", NULL, cspi3_clk)
 	_REGISTER_CLOCK("imx-fb.0", NULL, lcdc_clk)
 	_REGISTER_CLOCK("mx2-camera.0", NULL, csi_clk)
 	_REGISTER_CLOCK("fsl-usb2-udc", "usb", usb_clk)
@@ -661,13 +663,14 @@ static struct clk_lookup lookups[] = {
 	_REGISTER_CLOCK(NULL, "rtic", rtic_clk)
 	_REGISTER_CLOCK(NULL, "brom", brom_clk)
 	_REGISTER_CLOCK(NULL, "emma", emma_clk)
+	_REGISTER_CLOCK("m2m-emmaprp.0", NULL, emma_clk)
 	_REGISTER_CLOCK(NULL, "slcdc", slcdc_clk)
-	_REGISTER_CLOCK("fec.0", NULL, fec_clk)
+	_REGISTER_CLOCK("imx27-fec.0", NULL, fec_clk)
 	_REGISTER_CLOCK(NULL, "emi", emi_clk)
 	_REGISTER_CLOCK(NULL, "sahara2", sahara2_clk)
-	_REGISTER_CLOCK(NULL, "ata", ata_clk)
+	_REGISTER_CLOCK("pata_imx", NULL, pata_clk)
 	_REGISTER_CLOCK(NULL, "mstick", mstick_clk)
-	_REGISTER_CLOCK("imx-wdt.0", NULL, wdog_clk)
+	_REGISTER_CLOCK("imx2-wdt.0", NULL, wdog_clk)
 	_REGISTER_CLOCK(NULL, "gpio", gpio_clk)
 	_REGISTER_CLOCK("imx-i2c.0", NULL, i2c1_clk)
 	_REGISTER_CLOCK("imx-i2c.1", NULL, i2c2_clk)
@@ -683,7 +686,7 @@ static void __init to2_adjust_clocks(void)
 {
 	unsigned long cscr = __raw_readl(CCM_CSCR);
 
-	if (mx27_revision() >= CHIP_REV_2_0) {
+	if (mx27_revision() >= IMX_CHIP_REVISION_2_0) {
 		if (cscr & CCM_CSCR_ARM_SRC)
 			cpu_clk.parent = &mpll_main1_clk;
 
@@ -750,6 +753,8 @@ int __init mx27_clocks_init(unsigned long fref)
 	clk_enable(&gpio_clk);
 	clk_enable(&emi_clk);
 	clk_enable(&iim_clk);
+	imx_print_silicon_rev("i.MX27", mx27_revision());
+	clk_disable(&iim_clk);
 
 #if defined(CONFIG_DEBUG_LL) && !defined(CONFIG_DEBUG_ICEDCC)
 	clk_enable(&uart1_clk);
@@ -761,3 +766,20 @@ int __init mx27_clocks_init(unsigned long fref)
 	return 0;
 }
 
+#ifdef CONFIG_OF
+int __init mx27_clocks_init_dt(void)
+{
+	struct device_node *np;
+	u32 fref = 26000000; /* default */
+
+	for_each_compatible_node(np, NULL, "fixed-clock") {
+		if (!of_device_is_compatible(np, "fsl,imx-osc26m"))
+			continue;
+
+		if (!of_property_read_u32(np, "clock-frequency", &fref))
+			break;
+	}
+
+	return mx27_clocks_init(fref);
+}
+#endif

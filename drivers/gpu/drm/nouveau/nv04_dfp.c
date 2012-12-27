@@ -104,6 +104,8 @@ void nv04_dfp_disable(struct drm_device *dev, int head)
 	}
 	/* don't inadvertently turn it on when state written later */
 	crtcstate[head].fp_control = FP_TG_CONTROL_OFF;
+	crtcstate[head].CRTC[NV_CIO_CRE_LCD__INDEX] &=
+		~NV_CIO_CRE_LCD_ROUTE_MASK;
 }
 
 void nv04_dfp_update_fp_control(struct drm_encoder *encoder, int mode)
@@ -183,14 +185,15 @@ static bool nv04_dfp_mode_fixup(struct drm_encoder *encoder,
 	struct nouveau_encoder *nv_encoder = nouveau_encoder(encoder);
 	struct nouveau_connector *nv_connector = nouveau_encoder_connector_get(nv_encoder);
 
-	/* For internal panels and gpu scaling on DVI we need the native mode */
-	if (nv_connector->scaling_mode != DRM_MODE_SCALE_NONE) {
-		if (!nv_connector->native_mode)
-			return false;
+	if (!nv_connector->native_mode ||
+	    nv_connector->scaling_mode == DRM_MODE_SCALE_NONE ||
+	    mode->hdisplay > nv_connector->native_mode->hdisplay ||
+	    mode->vdisplay > nv_connector->native_mode->vdisplay) {
+		nv_encoder->mode = *adjusted_mode;
+
+	} else {
 		nv_encoder->mode = *nv_connector->native_mode;
 		adjusted_mode->clock = nv_connector->native_mode->clock;
-	} else {
-		nv_encoder->mode = *adjusted_mode;
 	}
 
 	return true;
@@ -253,26 +256,21 @@ static void nv04_dfp_prepare(struct drm_encoder *encoder)
 
 	nv04_dfp_prepare_sel_clk(dev, nv_encoder, head);
 
-	/* Some NV4x have unknown values (0x3f, 0x50, 0x54, 0x6b, 0x79, 0x7f)
-	 * at LCD__INDEX which we don't alter
-	 */
-	if (!(*cr_lcd & 0x44)) {
-		*cr_lcd = 0x3;
+	*cr_lcd = (*cr_lcd & ~NV_CIO_CRE_LCD_ROUTE_MASK) | 0x3;
 
-		if (nv_two_heads(dev)) {
-			if (nv_encoder->dcb->location == DCB_LOC_ON_CHIP)
-				*cr_lcd |= head ? 0x0 : 0x8;
-			else {
-				*cr_lcd |= (nv_encoder->dcb->or << 4) & 0x30;
-				if (nv_encoder->dcb->type == OUTPUT_LVDS)
-					*cr_lcd |= 0x30;
-				if ((*cr_lcd & 0x30) == (*cr_lcd_oth & 0x30)) {
-					/* avoid being connected to both crtcs */
-					*cr_lcd_oth &= ~0x30;
-					NVWriteVgaCrtc(dev, head ^ 1,
-						       NV_CIO_CRE_LCD__INDEX,
-						       *cr_lcd_oth);
-				}
+	if (nv_two_heads(dev)) {
+		if (nv_encoder->dcb->location == DCB_LOC_ON_CHIP)
+			*cr_lcd |= head ? 0x0 : 0x8;
+		else {
+			*cr_lcd |= (nv_encoder->dcb->or << 4) & 0x30;
+			if (nv_encoder->dcb->type == OUTPUT_LVDS)
+				*cr_lcd |= 0x30;
+			if ((*cr_lcd & 0x30) == (*cr_lcd_oth & 0x30)) {
+				/* avoid being connected to both crtcs */
+				*cr_lcd_oth &= ~0x30;
+				NVWriteVgaCrtc(dev, head ^ 1,
+					       NV_CIO_CRE_LCD__INDEX,
+					       *cr_lcd_oth);
 			}
 		}
 	}
@@ -291,6 +289,7 @@ static void nv04_dfp_mode_set(struct drm_encoder *encoder,
 	struct nouveau_connector *nv_connector = nouveau_crtc_connector_get(nv_crtc);
 	struct nouveau_encoder *nv_encoder = nouveau_encoder(encoder);
 	struct drm_display_mode *output_mode = &nv_encoder->mode;
+	struct drm_connector *connector = &nv_connector->base;
 	uint32_t mode_ratio, panel_ratio;
 
 	NV_DEBUG_KMS(dev, "Output mode on CRTC %d:\n", nv_crtc->index);
@@ -342,10 +341,15 @@ static void nv04_dfp_mode_set(struct drm_encoder *encoder,
 	    output_mode->clock > 165000)
 		regp->fp_control |= (2 << 24);
 	if (nv_encoder->dcb->type == OUTPUT_LVDS) {
-		bool duallink, dummy;
+		bool duallink = false, dummy;
+		if (nv_connector->edid &&
+		    nv_connector->type == DCB_CONNECTOR_LVDS_SPWG) {
+			duallink = (((u8 *)nv_connector->edid)[121] == 2);
+		} else {
+			nouveau_bios_parse_lvds_table(dev, output_mode->clock,
+						      &duallink, &dummy);
+		}
 
-		nouveau_bios_parse_lvds_table(dev, nv_connector->native_mode->
-					      clock, &duallink, &dummy);
 		if (duallink)
 			regp->fp_control |= (8 << 28);
 	} else
@@ -409,7 +413,9 @@ static void nv04_dfp_mode_set(struct drm_encoder *encoder,
 	}
 
 	/* Output property. */
-	if (nv_connector->use_dithering) {
+	if ((nv_connector->dithering_mode == DITHERING_MODE_ON) ||
+	    (nv_connector->dithering_mode == DITHERING_MODE_AUTO &&
+	     encoder->crtc->fb->depth > connector->display_info.bpc * 3)) {
 		if (dev_priv->chipset == 0x11)
 			regp->dither = savep->dither | 0x00010000;
 		else {
@@ -520,8 +526,6 @@ static void nv04_lvds_dpms(struct drm_encoder *encoder, int mode)
 		return;
 
 	if (nv_encoder->dcb->lvdsconf.use_power_scripts) {
-		struct nouveau_connector *nv_connector = nouveau_encoder_connector_get(nv_encoder);
-
 		/* when removing an output, crtc may not be set, but PANEL_OFF
 		 * must still be run
 		 */
@@ -529,12 +533,8 @@ static void nv04_lvds_dpms(struct drm_encoder *encoder, int mode)
 			   nv04_dfp_get_bound_head(dev, nv_encoder->dcb);
 
 		if (mode == DRM_MODE_DPMS_ON) {
-			if (!nv_connector->native_mode) {
-				NV_ERROR(dev, "Not turning on LVDS without native mode\n");
-				return;
-			}
 			call_lvds_script(dev, nv_encoder->dcb, head,
-					 LVDS_PANEL_ON, nv_connector->native_mode->clock);
+					 LVDS_PANEL_ON, nv_encoder->mode.clock);
 		} else
 			/* pxclk of 0 is fine for PANEL_OFF, and for a
 			 * disconnected LVDS encoder there is no native_mode
@@ -589,12 +589,13 @@ static void nv04_dfp_restore(struct drm_encoder *encoder)
 	int head = nv_encoder->restore.head;
 
 	if (nv_encoder->dcb->type == OUTPUT_LVDS) {
-		struct drm_display_mode *native_mode = nouveau_encoder_connector_get(nv_encoder)->native_mode;
-		if (native_mode)
-			call_lvds_script(dev, nv_encoder->dcb, head, LVDS_PANEL_ON,
-					 native_mode->clock);
-		else
-			NV_ERROR(dev, "Not restoring LVDS without native mode\n");
+		struct nouveau_connector *connector =
+			nouveau_encoder_connector_get(nv_encoder);
+
+		if (connector && connector->native_mode)
+			call_lvds_script(dev, nv_encoder->dcb, head,
+					 LVDS_PANEL_ON,
+					 connector->native_mode->clock);
 
 	} else if (nv_encoder->dcb->type == OUTPUT_TMDS) {
 		int clock = nouveau_hw_pllvals_to_clk
@@ -640,7 +641,7 @@ static void nv04_tmds_slave_init(struct drm_encoder *encoder)
 	    get_tmds_slave(encoder))
 		return;
 
-	type = nouveau_i2c_identify(dev, "TMDS transmitter", info, 2);
+	type = nouveau_i2c_identify(dev, "TMDS transmitter", info, NULL, 2);
 	if (type < 0)
 		return;
 

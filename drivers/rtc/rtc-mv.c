@@ -12,8 +12,10 @@
 #include <linux/bcd.h>
 #include <linux/io.h>
 #include <linux/platform_device.h>
+#include <linux/of.h>
 #include <linux/delay.h>
 #include <linux/gfp.h>
+#include <linux/module.h>
 
 
 #define RTC_TIME_REG_OFFS	0
@@ -169,25 +171,19 @@ static int mv_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alm)
 	return 0;
 }
 
-static int mv_rtc_ioctl(struct device *dev, unsigned int cmd,
-			unsigned long arg)
+static int mv_rtc_alarm_irq_enable(struct device *dev, unsigned int enabled)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
 	void __iomem *ioaddr = pdata->ioaddr;
 
 	if (pdata->irq < 0)
-		return -ENOIOCTLCMD; /* fall back into rtc-dev's emulation */
-	switch (cmd) {
-	case RTC_AIE_OFF:
-		writel(0, ioaddr + RTC_ALARM_INTERRUPT_MASK_REG_OFFS);
-		break;
-	case RTC_AIE_ON:
+		return -EINVAL; /* fall back into rtc-dev's emulation */
+
+	if (enabled)
 		writel(1, ioaddr + RTC_ALARM_INTERRUPT_MASK_REG_OFFS);
-		break;
-	default:
-		return -ENOIOCTLCMD;
-	}
+	else
+		writel(0, ioaddr + RTC_ALARM_INTERRUPT_MASK_REG_OFFS);
 	return 0;
 }
 
@@ -216,7 +212,7 @@ static const struct rtc_class_ops mv_rtc_alarm_ops = {
 	.set_time	= mv_rtc_set_time,
 	.read_alarm	= mv_rtc_read_alarm,
 	.set_alarm	= mv_rtc_set_alarm,
-	.ioctl		= mv_rtc_ioctl,
+	.alarm_irq_enable = mv_rtc_alarm_irq_enable,
 };
 
 static int __devinit mv_rtc_probe(struct platform_device *pdev)
@@ -278,7 +274,7 @@ static int __devinit mv_rtc_probe(struct platform_device *pdev)
 	if (pdata->irq >= 0) {
 		writel(0, pdata->ioaddr + RTC_ALARM_INTERRUPT_MASK_REG_OFFS);
 		if (devm_request_irq(&pdev->dev, pdata->irq, mv_rtc_interrupt,
-				     IRQF_DISABLED | IRQF_SHARED,
+				     IRQF_SHARED,
 				     pdev->name, pdata) < 0) {
 			dev_warn(&pdev->dev, "interrupt not available.\n");
 			pdata->irq = -1;
@@ -299,11 +295,19 @@ static int __exit mv_rtc_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_OF
+static struct of_device_id rtc_mv_of_match_table[] = {
+	{ .compatible = "mrvl,orion-rtc", },
+	{}
+};
+#endif
+
 static struct platform_driver mv_rtc_driver = {
 	.remove		= __exit_p(mv_rtc_remove),
 	.driver		= {
 		.name	= "rtc-mv",
 		.owner	= THIS_MODULE,
+		.of_match_table = of_match_ptr(rtc_mv_of_match_table),
 	},
 };
 

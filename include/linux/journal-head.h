@@ -41,6 +41,13 @@ struct journal_head {
 	unsigned b_modified;
 
 	/*
+	 * This feild tracks the last transaction id in which this buffer
+	 * has been cowed
+	 * [jbd_lock_bh_state()]
+	 */
+	tid_t b_cow_tid;
+
+	/*
 	 * Copy of the buffer data frozen for writing to the log.
 	 * [jbd_lock_bh_state()]
 	 */
@@ -59,6 +66,8 @@ struct journal_head {
 	 * transaction (if there is one).  Only applies to buffers on a
 	 * transaction's data or metadata journaling list.
 	 * [j_list_lock] [jbd_lock_bh_state()]
+	 * Either of these locks is enough for reading, both are needed for
+	 * changes.
 	 */
 	transaction_t *b_transaction;
 

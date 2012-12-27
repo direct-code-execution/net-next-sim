@@ -36,6 +36,7 @@
 #include <linux/vmalloc.h>
 #include <linux/slab.h>
 #include <linux/log2.h>
+#include <linux/export.h>
 #include <asm/shmparam.h>
 #include "drmP.h"
 
@@ -46,10 +47,11 @@ static struct drm_map_list *drm_find_matching_map(struct drm_device *dev,
 	list_for_each_entry(entry, &dev->maplist, head) {
 		/*
 		 * Because the kernel-userspace ABI is fixed at a 32-bit offset
-		 * while PCI resources may live above that, we ignore the map
-		 * offset for maps of type _DRM_FRAMEBUFFER or _DRM_REGISTERS.
-		 * It is assumed that each driver will have only one resource of
-		 * each type.
+		 * while PCI resources may live above that, we only compare the
+		 * lower 32 bits of the map offset for maps of type
+		 * _DRM_FRAMEBUFFER or _DRM_REGISTERS.
+		 * It is assumed that if a driver have more than one resource
+		 * of each type, the lower 32 bits are different.
 		 */
 		if (!entry->map ||
 		    map->type != entry->map->type ||
@@ -59,9 +61,12 @@ static struct drm_map_list *drm_find_matching_map(struct drm_device *dev,
 		case _DRM_SHM:
 			if (map->flags != _DRM_CONTAINS_LOCK)
 				break;
+			return entry;
 		case _DRM_REGISTERS:
 		case _DRM_FRAME_BUFFER:
-			return entry;
+			if ((entry->map->offset & 0xffffffff) ==
+			    (map->offset & 0xffffffff))
+				return entry;
 		default: /* Make gcc happy */
 			;
 		}
@@ -182,9 +187,6 @@ static int drm_addmap_core(struct drm_device * dev, resource_size_t offset,
 			kfree(map);
 			return -EINVAL;
 		}
-#endif
-#ifdef __alpha__
-		map->offset += dev->hose->mem_space->start;
 #endif
 		/* Some drivers preinitialize some maps, without the X Server
 		 * needing to be aware of it.  Therefore, we just return success
@@ -1508,8 +1510,8 @@ int drm_freebufs(struct drm_device *dev, void *data,
  * \param arg pointer to a drm_buf_map structure.
  * \return zero on success or a negative number on failure.
  *
- * Maps the AGP, SG or PCI buffer region with do_mmap(), and copies information
- * about each buffer into user space. For PCI buffers, it calls do_mmap() with
+ * Maps the AGP, SG or PCI buffer region with vm_mmap(), and copies information
+ * about each buffer into user space. For PCI buffers, it calls vm_mmap() with
  * offset equal to 0, which drm_mmap() interpretes as PCI buffers and calls
  * drm_mmap_dma().
  */
@@ -1551,18 +1553,14 @@ int drm_mapbufs(struct drm_device *dev, void *data,
 				retcode = -EINVAL;
 				goto done;
 			}
-			down_write(&current->mm->mmap_sem);
-			virtual = do_mmap(file_priv->filp, 0, map->size,
+			virtual = vm_mmap(file_priv->filp, 0, map->size,
 					  PROT_READ | PROT_WRITE,
 					  MAP_SHARED,
 					  token);
-			up_write(&current->mm->mmap_sem);
 		} else {
-			down_write(&current->mm->mmap_sem);
-			virtual = do_mmap(file_priv->filp, 0, dma->byte_count,
+			virtual = vm_mmap(file_priv->filp, 0, dma->byte_count,
 					  PROT_READ | PROT_WRITE,
 					  MAP_SHARED, 0);
-			up_write(&current->mm->mmap_sem);
 		}
 		if (virtual > -1024UL) {
 			/* Real error */

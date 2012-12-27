@@ -49,6 +49,7 @@ unsigned long totalram_pages = 0;
 // XXX figure out initial value
 unsigned int interrupt_pending = 0;
 static unsigned long g_irqflags = 0;
+static unsigned long local_irqflags = 0;
 int overflowgid = 0;
 int overflowuid = 0;
 int fs_overflowgid = 0;
@@ -58,11 +59,14 @@ unsigned long __raw_local_save_flags(void)
 {
   return g_irqflags;
 }
-void raw_local_irq_restore(unsigned long flags)
+unsigned long arch_local_save_flags(void)
 {
-  g_irqflags = flags;
+	return local_irqflags;
 }
-
+void arch_local_irq_restore(unsigned long flags)
+{
+	local_irqflags = flags;
+}
 
 int in_egroup_p(gid_t grp)
 {
@@ -289,3 +293,4 @@ unsigned long get_taint(void)
 void add_taint(unsigned flag)
 {}
 struct pid *cad_pid = 0;
+

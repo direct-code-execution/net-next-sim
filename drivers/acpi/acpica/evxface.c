@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2010, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,6 +41,7 @@
  * POSSIBILITY OF SUCH DAMAGES.
  */
 
+#include <linux/export.h>
 #include <acpi/acpi.h>
 #include "accommon.h"
 #include "acnamesp.h"
@@ -50,171 +51,6 @@
 #define _COMPONENT          ACPI_EVENTS
 ACPI_MODULE_NAME("evxface")
 
-/*******************************************************************************
- *
- * FUNCTION:    acpi_install_exception_handler
- *
- * PARAMETERS:  Handler         - Pointer to the handler function for the
- *                                event
- *
- * RETURN:      Status
- *
- * DESCRIPTION: Saves the pointer to the handler function
- *
- ******************************************************************************/
-#ifdef ACPI_FUTURE_USAGE
-acpi_status acpi_install_exception_handler(acpi_exception_handler handler)
-{
-	acpi_status status;
-
-	ACPI_FUNCTION_TRACE(acpi_install_exception_handler);
-
-	status = acpi_ut_acquire_mutex(ACPI_MTX_EVENTS);
-	if (ACPI_FAILURE(status)) {
-		return_ACPI_STATUS(status);
-	}
-
-	/* Don't allow two handlers. */
-
-	if (acpi_gbl_exception_handler) {
-		status = AE_ALREADY_EXISTS;
-		goto cleanup;
-	}
-
-	/* Install the handler */
-
-	acpi_gbl_exception_handler = handler;
-
-      cleanup:
-	(void)acpi_ut_release_mutex(ACPI_MTX_EVENTS);
-	return_ACPI_STATUS(status);
-}
-
-ACPI_EXPORT_SYMBOL(acpi_install_exception_handler)
-#endif				/*  ACPI_FUTURE_USAGE  */
-/*******************************************************************************
- *
- * FUNCTION:    acpi_install_fixed_event_handler
- *
- * PARAMETERS:  Event           - Event type to enable.
- *              Handler         - Pointer to the handler function for the
- *                                event
- *              Context         - Value passed to the handler on each GPE
- *
- * RETURN:      Status
- *
- * DESCRIPTION: Saves the pointer to the handler function and then enables the
- *              event.
- *
- ******************************************************************************/
-acpi_status
-acpi_install_fixed_event_handler(u32 event,
-				 acpi_event_handler handler, void *context)
-{
-	acpi_status status;
-
-	ACPI_FUNCTION_TRACE(acpi_install_fixed_event_handler);
-
-	/* Parameter validation */
-
-	if (event > ACPI_EVENT_MAX) {
-		return_ACPI_STATUS(AE_BAD_PARAMETER);
-	}
-
-	status = acpi_ut_acquire_mutex(ACPI_MTX_EVENTS);
-	if (ACPI_FAILURE(status)) {
-		return_ACPI_STATUS(status);
-	}
-
-	/* Don't allow two handlers. */
-
-	if (NULL != acpi_gbl_fixed_event_handlers[event].handler) {
-		status = AE_ALREADY_EXISTS;
-		goto cleanup;
-	}
-
-	/* Install the handler before enabling the event */
-
-	acpi_gbl_fixed_event_handlers[event].handler = handler;
-	acpi_gbl_fixed_event_handlers[event].context = context;
-
-	status = acpi_clear_event(event);
-	if (ACPI_SUCCESS(status))
-		status = acpi_enable_event(event, 0);
-	if (ACPI_FAILURE(status)) {
-		ACPI_WARNING((AE_INFO, "Could not enable fixed event 0x%X",
-			      event));
-
-		/* Remove the handler */
-
-		acpi_gbl_fixed_event_handlers[event].handler = NULL;
-		acpi_gbl_fixed_event_handlers[event].context = NULL;
-	} else {
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO,
-				  "Enabled fixed event %X, Handler=%p\n", event,
-				  handler));
-	}
-
-      cleanup:
-	(void)acpi_ut_release_mutex(ACPI_MTX_EVENTS);
-	return_ACPI_STATUS(status);
-}
-
-ACPI_EXPORT_SYMBOL(acpi_install_fixed_event_handler)
-
-/*******************************************************************************
- *
- * FUNCTION:    acpi_remove_fixed_event_handler
- *
- * PARAMETERS:  Event           - Event type to disable.
- *              Handler         - Address of the handler
- *
- * RETURN:      Status
- *
- * DESCRIPTION: Disables the event and unregisters the event handler.
- *
- ******************************************************************************/
-acpi_status
-acpi_remove_fixed_event_handler(u32 event, acpi_event_handler handler)
-{
-	acpi_status status = AE_OK;
-
-	ACPI_FUNCTION_TRACE(acpi_remove_fixed_event_handler);
-
-	/* Parameter validation */
-
-	if (event > ACPI_EVENT_MAX) {
-		return_ACPI_STATUS(AE_BAD_PARAMETER);
-	}
-
-	status = acpi_ut_acquire_mutex(ACPI_MTX_EVENTS);
-	if (ACPI_FAILURE(status)) {
-		return_ACPI_STATUS(status);
-	}
-
-	/* Disable the event before removing the handler */
-
-	status = acpi_disable_event(event, 0);
-
-	/* Always Remove the handler */
-
-	acpi_gbl_fixed_event_handlers[event].handler = NULL;
-	acpi_gbl_fixed_event_handlers[event].context = NULL;
-
-	if (ACPI_FAILURE(status)) {
-		ACPI_WARNING((AE_INFO,
-			      "Could not write to fixed event enable register 0x%X",
-			      event));
-	} else {
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Disabled fixed event %X\n",
-				  event));
-	}
-
-	(void)acpi_ut_release_mutex(ACPI_MTX_EVENTS);
-	return_ACPI_STATUS(status);
-}
-
-ACPI_EXPORT_SYMBOL(acpi_remove_fixed_event_handler)
 
 /*******************************************************************************
  *
@@ -281,6 +117,7 @@ acpi_add_handler_object(struct acpi_object_notify_handler *parent_obj,
 
 	return AE_OK;
 }
+
 
 /*******************************************************************************
  *
@@ -653,6 +490,224 @@ ACPI_EXPORT_SYMBOL(acpi_remove_notify_handler)
 
 /*******************************************************************************
  *
+ * FUNCTION:    acpi_install_exception_handler
+ *
+ * PARAMETERS:  Handler         - Pointer to the handler function for the
+ *                                event
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Saves the pointer to the handler function
+ *
+ ******************************************************************************/
+#ifdef ACPI_FUTURE_USAGE
+acpi_status acpi_install_exception_handler(acpi_exception_handler handler)
+{
+	acpi_status status;
+
+	ACPI_FUNCTION_TRACE(acpi_install_exception_handler);
+
+	status = acpi_ut_acquire_mutex(ACPI_MTX_EVENTS);
+	if (ACPI_FAILURE(status)) {
+		return_ACPI_STATUS(status);
+	}
+
+	/* Don't allow two handlers. */
+
+	if (acpi_gbl_exception_handler) {
+		status = AE_ALREADY_EXISTS;
+		goto cleanup;
+	}
+
+	/* Install the handler */
+
+	acpi_gbl_exception_handler = handler;
+
+      cleanup:
+	(void)acpi_ut_release_mutex(ACPI_MTX_EVENTS);
+	return_ACPI_STATUS(status);
+}
+
+ACPI_EXPORT_SYMBOL(acpi_install_exception_handler)
+#endif				/*  ACPI_FUTURE_USAGE  */
+
+#if (!ACPI_REDUCED_HARDWARE)
+/*******************************************************************************
+ *
+ * FUNCTION:    acpi_install_global_event_handler
+ *
+ * PARAMETERS:  Handler         - Pointer to the global event handler function
+ *              Context         - Value passed to the handler on each event
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Saves the pointer to the handler function. The global handler
+ *              is invoked upon each incoming GPE and Fixed Event. It is
+ *              invoked at interrupt level at the time of the event dispatch.
+ *              Can be used to update event counters, etc.
+ *
+ ******************************************************************************/
+acpi_status
+acpi_install_global_event_handler(ACPI_GBL_EVENT_HANDLER handler, void *context)
+{
+	acpi_status status;
+
+	ACPI_FUNCTION_TRACE(acpi_install_global_event_handler);
+
+	/* Parameter validation */
+
+	if (!handler) {
+		return_ACPI_STATUS(AE_BAD_PARAMETER);
+	}
+
+	status = acpi_ut_acquire_mutex(ACPI_MTX_EVENTS);
+	if (ACPI_FAILURE(status)) {
+		return_ACPI_STATUS(status);
+	}
+
+	/* Don't allow two handlers. */
+
+	if (acpi_gbl_global_event_handler) {
+		status = AE_ALREADY_EXISTS;
+		goto cleanup;
+	}
+
+	acpi_gbl_global_event_handler = handler;
+	acpi_gbl_global_event_handler_context = context;
+
+      cleanup:
+	(void)acpi_ut_release_mutex(ACPI_MTX_EVENTS);
+	return_ACPI_STATUS(status);
+}
+
+ACPI_EXPORT_SYMBOL(acpi_install_global_event_handler)
+
+/*******************************************************************************
+ *
+ * FUNCTION:    acpi_install_fixed_event_handler
+ *
+ * PARAMETERS:  Event           - Event type to enable.
+ *              Handler         - Pointer to the handler function for the
+ *                                event
+ *              Context         - Value passed to the handler on each GPE
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Saves the pointer to the handler function and then enables the
+ *              event.
+ *
+ ******************************************************************************/
+acpi_status
+acpi_install_fixed_event_handler(u32 event,
+				 acpi_event_handler handler, void *context)
+{
+	acpi_status status;
+
+	ACPI_FUNCTION_TRACE(acpi_install_fixed_event_handler);
+
+	/* Parameter validation */
+
+	if (event > ACPI_EVENT_MAX) {
+		return_ACPI_STATUS(AE_BAD_PARAMETER);
+	}
+
+	status = acpi_ut_acquire_mutex(ACPI_MTX_EVENTS);
+	if (ACPI_FAILURE(status)) {
+		return_ACPI_STATUS(status);
+	}
+
+	/* Don't allow two handlers. */
+
+	if (NULL != acpi_gbl_fixed_event_handlers[event].handler) {
+		status = AE_ALREADY_EXISTS;
+		goto cleanup;
+	}
+
+	/* Install the handler before enabling the event */
+
+	acpi_gbl_fixed_event_handlers[event].handler = handler;
+	acpi_gbl_fixed_event_handlers[event].context = context;
+
+	status = acpi_clear_event(event);
+	if (ACPI_SUCCESS(status))
+		status = acpi_enable_event(event, 0);
+	if (ACPI_FAILURE(status)) {
+		ACPI_WARNING((AE_INFO, "Could not enable fixed event 0x%X",
+			      event));
+
+		/* Remove the handler */
+
+		acpi_gbl_fixed_event_handlers[event].handler = NULL;
+		acpi_gbl_fixed_event_handlers[event].context = NULL;
+	} else {
+		ACPI_DEBUG_PRINT((ACPI_DB_INFO,
+				  "Enabled fixed event %X, Handler=%p\n", event,
+				  handler));
+	}
+
+      cleanup:
+	(void)acpi_ut_release_mutex(ACPI_MTX_EVENTS);
+	return_ACPI_STATUS(status);
+}
+
+ACPI_EXPORT_SYMBOL(acpi_install_fixed_event_handler)
+
+/*******************************************************************************
+ *
+ * FUNCTION:    acpi_remove_fixed_event_handler
+ *
+ * PARAMETERS:  Event           - Event type to disable.
+ *              Handler         - Address of the handler
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Disables the event and unregisters the event handler.
+ *
+ ******************************************************************************/
+acpi_status
+acpi_remove_fixed_event_handler(u32 event, acpi_event_handler handler)
+{
+	acpi_status status = AE_OK;
+
+	ACPI_FUNCTION_TRACE(acpi_remove_fixed_event_handler);
+
+	/* Parameter validation */
+
+	if (event > ACPI_EVENT_MAX) {
+		return_ACPI_STATUS(AE_BAD_PARAMETER);
+	}
+
+	status = acpi_ut_acquire_mutex(ACPI_MTX_EVENTS);
+	if (ACPI_FAILURE(status)) {
+		return_ACPI_STATUS(status);
+	}
+
+	/* Disable the event before removing the handler */
+
+	status = acpi_disable_event(event, 0);
+
+	/* Always Remove the handler */
+
+	acpi_gbl_fixed_event_handlers[event].handler = NULL;
+	acpi_gbl_fixed_event_handlers[event].context = NULL;
+
+	if (ACPI_FAILURE(status)) {
+		ACPI_WARNING((AE_INFO,
+			      "Could not write to fixed event enable register 0x%X",
+			      event));
+	} else {
+		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Disabled fixed event %X\n",
+				  event));
+	}
+
+	(void)acpi_ut_release_mutex(ACPI_MTX_EVENTS);
+	return_ACPI_STATUS(status);
+}
+
+ACPI_EXPORT_SYMBOL(acpi_remove_fixed_event_handler)
+
+/*******************************************************************************
+ *
  * FUNCTION:    acpi_install_gpe_handler
  *
  * PARAMETERS:  gpe_device      - Namespace node for the GPE (NULL for FADT
@@ -671,10 +726,10 @@ ACPI_EXPORT_SYMBOL(acpi_remove_notify_handler)
 acpi_status
 acpi_install_gpe_handler(acpi_handle gpe_device,
 			 u32 gpe_number,
-			 u32 type, acpi_event_handler address, void *context)
+			 u32 type, acpi_gpe_handler address, void *context)
 {
 	struct acpi_gpe_event_info *gpe_event_info;
-	struct acpi_handler_info *handler;
+	struct acpi_gpe_handler_info *handler;
 	acpi_status status;
 	acpi_cpu_flags flags;
 
@@ -693,7 +748,7 @@ acpi_install_gpe_handler(acpi_handle gpe_device,
 
 	/* Allocate memory for the handler object */
 
-	handler = ACPI_ALLOCATE_ZEROED(sizeof(struct acpi_handler_info));
+	handler = ACPI_ALLOCATE_ZEROED(sizeof(struct acpi_gpe_handler_info));
 	if (!handler) {
 		status = AE_NO_MEMORY;
 		goto unlock_and_exit;
@@ -722,19 +777,20 @@ acpi_install_gpe_handler(acpi_handle gpe_device,
 	handler->address = address;
 	handler->context = context;
 	handler->method_node = gpe_event_info->dispatch.method_node;
-	handler->orig_flags = gpe_event_info->flags &
+	handler->original_flags = gpe_event_info->flags &
 			(ACPI_GPE_XRUPT_TYPE_MASK | ACPI_GPE_DISPATCH_MASK);
 
 	/*
-	 * If the GPE is associated with a method and it cannot wake up the
-	 * system from sleep states, it was enabled automatically during
-	 * initialization, so it has to be disabled now to avoid spurious
-	 * execution of the handler.
+	 * If the GPE is associated with a method, it might have been enabled
+	 * automatically during initialization, in which case it has to be
+	 * disabled now to avoid spurious execution of the handler.
 	 */
 
-	if ((handler->orig_flags & ACPI_GPE_DISPATCH_METHOD)
-	    && !(gpe_event_info->flags & ACPI_GPE_CAN_WAKE))
-		(void)acpi_raw_disable_gpe(gpe_event_info);
+	if ((handler->original_flags & ACPI_GPE_DISPATCH_METHOD)
+	    && gpe_event_info->runtime_count) {
+		handler->originally_enabled = 1;
+		(void)acpi_ev_remove_gpe_reference(gpe_event_info);
+	}
 
 	/* Install the handler */
 
@@ -776,10 +832,10 @@ ACPI_EXPORT_SYMBOL(acpi_install_gpe_handler)
  ******************************************************************************/
 acpi_status
 acpi_remove_gpe_handler(acpi_handle gpe_device,
-			u32 gpe_number, acpi_event_handler address)
+			u32 gpe_number, acpi_gpe_handler address)
 {
 	struct acpi_gpe_event_info *gpe_event_info;
-	struct acpi_handler_info *handler;
+	struct acpi_gpe_handler_info *handler;
 	acpi_status status;
 	acpi_cpu_flags flags;
 
@@ -834,17 +890,17 @@ acpi_remove_gpe_handler(acpi_handle gpe_device,
 	gpe_event_info->dispatch.method_node = handler->method_node;
 	gpe_event_info->flags &=
 		~(ACPI_GPE_XRUPT_TYPE_MASK | ACPI_GPE_DISPATCH_MASK);
-	gpe_event_info->flags |= handler->orig_flags;
+	gpe_event_info->flags |= handler->original_flags;
 
 	/*
-	 * If the GPE was previously associated with a method and it cannot wake
-	 * up the system from sleep states, it should be enabled at this point
-	 * to restore the post-initialization configuration.
+	 * If the GPE was previously associated with a method and it was
+	 * enabled, it should be enabled at this point to restore the
+	 * post-initialization configuration.
 	 */
 
-	if ((handler->orig_flags & ACPI_GPE_DISPATCH_METHOD)
-	    && !(gpe_event_info->flags & ACPI_GPE_CAN_WAKE))
-		(void)acpi_raw_enable_gpe(gpe_event_info);
+	if ((handler->original_flags & ACPI_GPE_DISPATCH_METHOD)
+	    && handler->originally_enabled)
+		(void)acpi_ev_add_gpe_reference(gpe_event_info);
 
 	/* Now we can free the handler object */
 
@@ -931,3 +987,4 @@ acpi_status acpi_release_global_lock(u32 handle)
 }
 
 ACPI_EXPORT_SYMBOL(acpi_release_global_lock)
+#endif				/* !ACPI_REDUCED_HARDWARE */

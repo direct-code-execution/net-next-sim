@@ -28,6 +28,7 @@ pvr2_device_desc structures.
 
 #include "pvrusb2-devattr.h"
 #include <linux/usb.h>
+#include <linux/module.h>
 /* This is needed in order to pull in tuner type ids... */
 #include <linux/i2c.h>
 #include <media/tuner.h>
@@ -152,6 +153,28 @@ static const struct pvr2_device_desc pvr2_device_gotview_2d = {
 		.flag_has_composite = !0,
 		.flag_has_svideo = !0,
 		.signal_routing_scheme = PVR2_ROUTING_SCHEME_GOTVIEW,
+};
+
+
+
+/*------------------------------------------------------------------------*/
+/* Terratec Grabster AV400 */
+
+static const struct pvr2_device_client_desc pvr2_cli_av400[] = {
+	{ .module_id = PVR2_CLIENT_ID_CX25840 },
+};
+
+static const struct pvr2_device_desc pvr2_device_av400 = {
+		.description = "Terratec Grabster AV400",
+		.shortname = "av400",
+		.flag_is_experimental = 1,
+		.client_table.lst = pvr2_cli_av400,
+		.client_table.cnt = ARRAY_SIZE(pvr2_cli_av400),
+		.flag_has_cx25840 = !0,
+		.flag_has_analogtuner = 0,
+		.flag_has_composite = !0,
+		.flag_has_svideo = !0,
+		.signal_routing_scheme = PVR2_ROUTING_SCHEME_AV400,
 };
 
 
@@ -297,7 +320,17 @@ static struct tda829x_config tda829x_no_probe = {
 	.probe_tuner = TDA829X_DONT_PROBE,
 };
 
+static struct tda18271_std_map hauppauge_tda18271_dvbt_std_map = {
+        .dvbt_6   = { .if_freq = 3300, .agc_mode = 3, .std = 4,
+                      .if_lvl = 1, .rfagc_top = 0x37, },
+        .dvbt_7   = { .if_freq = 3800, .agc_mode = 3, .std = 5,
+                      .if_lvl = 1, .rfagc_top = 0x37, },
+        .dvbt_8   = { .if_freq = 4300, .agc_mode = 3, .std = 6,
+                      .if_lvl = 1, .rfagc_top = 0x37, },
+};
+
 static struct tda18271_config hauppauge_tda18271_dvb_config = {
+	.std_map = &hauppauge_tda18271_dvbt_std_map,
 	.gate    = TDA18271_GATE_ANALOG,
 	.output_opt = TDA18271_OUTPUT_LT_OFF,
 };
@@ -517,6 +550,8 @@ struct usb_device_id pvr2_device_table[] = {
 	  .driver_info = (kernel_ulong_t)&pvr2_device_750xx},
 	{ USB_DEVICE(0x2040, 0x7501),
 	  .driver_info = (kernel_ulong_t)&pvr2_device_751xx},
+	{ USB_DEVICE(0x0ccd, 0x0039),
+	  .driver_info = (kernel_ulong_t)&pvr2_device_av400},
 	{ }
 };
 

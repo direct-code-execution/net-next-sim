@@ -64,6 +64,7 @@ struct stv0299_state {
 	fe_code_rate_t fec_inner;
 	int errmode;
 	u32 ucblocks;
+	u8 mcr_reg;
 };
 
 #define STATUS_BER 0
@@ -92,7 +93,7 @@ static int stv0299_writeregI (struct stv0299_state* state, u8 reg, u8 data)
 	return (ret != 1) ? -EREMOTEIO : 0;
 }
 
-static int stv0299_write(struct dvb_frontend* fe, u8 *buf, int len)
+static int stv0299_write(struct dvb_frontend* fe, const u8 buf[], int len)
 {
 	struct stv0299_state* state = fe->demodulator_priv;
 
@@ -457,6 +458,9 @@ static int stv0299_init (struct dvb_frontend* fe)
 
 	dprintk("stv0299: init chip\n");
 
+	stv0299_writeregI(state, 0x02, 0x30 | state->mcr_reg);
+	msleep(50);
+
 	for (i = 0; ; i += 2)  {
 		reg = state->config->inittab[i];
 		val = state->config->inittab[i+1];
@@ -464,6 +468,8 @@ static int stv0299_init (struct dvb_frontend* fe)
 			break;
 		if (reg == 0x0c && state->config->op0_off)
 			val &= ~0x10;
+		if (reg == 0x2)
+			state->mcr_reg = val & 0xf;
 		stv0299_writeregI(state, reg, val);
 	}
 
@@ -553,8 +559,9 @@ static int stv0299_read_ucblocks(struct dvb_frontend* fe, u32* ucblocks)
 	return 0;
 }
 
-static int stv0299_set_frontend(struct dvb_frontend* fe, struct dvb_frontend_parameters * p)
+static int stv0299_set_frontend(struct dvb_frontend *fe)
 {
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
 	struct stv0299_state* state = fe->demodulator_priv;
 	int invval = 0;
 
@@ -573,24 +580,25 @@ static int stv0299_set_frontend(struct dvb_frontend* fe, struct dvb_frontend_par
 	stv0299_writeregI(state, 0x0c, (stv0299_readreg(state, 0x0c) & 0xfe) | invval);
 
 	if (fe->ops.tuner_ops.set_params) {
-		fe->ops.tuner_ops.set_params(fe, p);
+		fe->ops.tuner_ops.set_params(fe);
 		if (fe->ops.i2c_gate_ctrl) fe->ops.i2c_gate_ctrl(fe, 0);
 	}
 
-	stv0299_set_FEC (state, p->u.qpsk.fec_inner);
-	stv0299_set_symbolrate (fe, p->u.qpsk.symbol_rate);
+	stv0299_set_FEC(state, p->fec_inner);
+	stv0299_set_symbolrate(fe, p->symbol_rate);
 	stv0299_writeregI(state, 0x22, 0x00);
 	stv0299_writeregI(state, 0x23, 0x00);
 
 	state->tuner_frequency = p->frequency;
-	state->fec_inner = p->u.qpsk.fec_inner;
-	state->symbol_rate = p->u.qpsk.symbol_rate;
+	state->fec_inner = p->fec_inner;
+	state->symbol_rate = p->symbol_rate;
 
 	return 0;
 }
 
-static int stv0299_get_frontend(struct dvb_frontend* fe, struct dvb_frontend_parameters * p)
+static int stv0299_get_frontend(struct dvb_frontend *fe)
 {
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
 	struct stv0299_state* state = fe->demodulator_priv;
 	s32 derot_freq;
 	int invval;
@@ -608,8 +616,8 @@ static int stv0299_get_frontend(struct dvb_frontend* fe, struct dvb_frontend_par
 	if (state->config->invert) invval = (~invval) & 1;
 	p->inversion = invval ? INVERSION_ON : INVERSION_OFF;
 
-	p->u.qpsk.fec_inner = stv0299_get_fec (state);
-	p->u.qpsk.symbol_rate = stv0299_get_symbolrate (state);
+	p->fec_inner = stv0299_get_fec(state);
+	p->symbol_rate = stv0299_get_symbolrate(state);
 
 	return 0;
 }
@@ -618,7 +626,7 @@ static int stv0299_sleep(struct dvb_frontend* fe)
 {
 	struct stv0299_state* state = fe->demodulator_priv;
 
-	stv0299_writeregI(state, 0x02, 0x80);
+	stv0299_writeregI(state, 0x02, 0xb0 | state->mcr_reg);
 	state->initialised = 0;
 
 	return 0;
@@ -640,14 +648,15 @@ static int stv0299_i2c_gate_ctrl(struct dvb_frontend* fe, int enable)
 static int stv0299_get_tune_settings(struct dvb_frontend* fe, struct dvb_frontend_tune_settings* fesettings)
 {
 	struct stv0299_state* state = fe->demodulator_priv;
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
 
 	fesettings->min_delay_ms = state->config->min_delay_ms;
-	if (fesettings->parameters.u.qpsk.symbol_rate < 10000000) {
-		fesettings->step_size = fesettings->parameters.u.qpsk.symbol_rate / 32000;
+	if (p->symbol_rate < 10000000) {
+		fesettings->step_size = p->symbol_rate / 32000;
 		fesettings->max_drift = 5000;
 	} else {
-		fesettings->step_size = fesettings->parameters.u.qpsk.symbol_rate / 16000;
-		fesettings->max_drift = fesettings->parameters.u.qpsk.symbol_rate / 2000;
+		fesettings->step_size = p->symbol_rate / 16000;
+		fesettings->max_drift = p->symbol_rate / 2000;
 	}
 	return 0;
 }
@@ -680,7 +689,7 @@ struct dvb_frontend* stv0299_attach(const struct stv0299_config* config,
 	state->errmode = STATUS_BER;
 
 	/* check if the demod is there */
-	stv0299_writeregI(state, 0x02, 0x34); /* standby off */
+	stv0299_writeregI(state, 0x02, 0x30); /* standby off */
 	msleep(200);
 	id = stv0299_readreg(state, 0x00);
 
@@ -699,10 +708,9 @@ error:
 }
 
 static struct dvb_frontend_ops stv0299_ops = {
-
+	.delsys = { SYS_DVBS },
 	.info = {
 		.name			= "ST STV0299 DVB-S",
-		.type			= FE_QPSK,
 		.frequency_min		= 950000,
 		.frequency_max		= 2150000,
 		.frequency_stepsize	= 125,	 /* kHz for QPSK frontends */

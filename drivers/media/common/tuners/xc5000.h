@@ -27,10 +27,16 @@
 struct dvb_frontend;
 struct i2c_adapter;
 
+#define XC5000A 1
+#define XC5000C 2
+
 struct xc5000_config {
 	u8   i2c_address;
 	u32  if_khz;
 	u8   radio_input;
+	u32  xtal_khz;
+
+	int chip_id;
 };
 
 /* xc5000 callback command */
@@ -40,6 +46,7 @@ struct xc5000_config {
 #define XC5000_RADIO_NOT_CONFIGURED		0
 #define XC5000_RADIO_FM1			1
 #define XC5000_RADIO_FM2			2
+#define XC5000_RADIO_FM1_MONO			3
 
 /* For each bridge framework, when it attaches either analog or digital,
  * it has to store a reference back to its _core equivalent structure,
@@ -53,11 +60,11 @@ struct xc5000_config {
     (defined(CONFIG_MEDIA_TUNER_XC5000_MODULE) && defined(MODULE))
 extern struct dvb_frontend *xc5000_attach(struct dvb_frontend *fe,
 					  struct i2c_adapter *i2c,
-					  struct xc5000_config *cfg);
+					  const struct xc5000_config *cfg);
 #else
 static inline struct dvb_frontend *xc5000_attach(struct dvb_frontend *fe,
 						 struct i2c_adapter *i2c,
-						 struct xc5000_config *cfg)
+						 const struct xc5000_config *cfg)
 {
 	printk(KERN_WARNING "%s: driver disabled by Kconfig\n", __func__);
 	return NULL;

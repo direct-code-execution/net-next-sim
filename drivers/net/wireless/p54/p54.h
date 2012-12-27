@@ -116,7 +116,8 @@ struct p54_edcf_queue_param {
 	__le16 txop;
 } __packed;
 
-struct p54_rssi_linear_approximation {
+struct p54_rssi_db_entry {
+	u16 freq;
 	s16 mul;
 	s16 add;
 	s16 longbow_unkn;
@@ -197,24 +198,46 @@ struct p54_common {
 	u8 rx_diversity_mask;
 	u8 tx_diversity_mask;
 	unsigned int output_power;
+	struct p54_rssi_db_entry *cur_rssi;
+	struct ieee80211_channel *curchan;
+	struct survey_info *survey;
+	unsigned int chan_num;
+	struct completion stat_comp;
+	bool update_stats;
+	struct {
+		unsigned int timestamp;
+		unsigned int cached_cca;
+		unsigned int cached_tx;
+		unsigned int cached_rssi;
+		u64 active;
+		u64 cca;
+		u64 tx;
+		u64 rssi;
+	} survey_raw;
+
 	int noise;
 	/* calibration, output power limit and rssi<->dBm conversation data */
 	struct pda_iq_autocal_entry *iq_autocal;
 	unsigned int iq_autocal_len;
 	struct p54_cal_database *curve_data;
 	struct p54_cal_database *output_limit;
-	struct p54_rssi_linear_approximation rssical_db[IEEE80211_NUM_BANDS];
+	struct p54_cal_database *rssi_db;
 	struct ieee80211_supported_band *band_table[IEEE80211_NUM_BANDS];
 
 	/* BBP/MAC state */
 	u8 mac_addr[ETH_ALEN];
 	u8 bssid[ETH_ALEN];
+	u8 mc_maclist[4][ETH_ALEN];
 	u16 wakeup_timer;
 	unsigned int filter_flags;
+	int mc_maclist_num;
 	int mode;
 	u32 tsf_low32, tsf_high32;
 	u32 basic_rate_mask;
 	u16 aid;
+	u8 coverage_class;
+	bool phy_idle;
+	bool phy_ps;
 	bool powersave_override;
 	__le32 beacon_req_id;
 	struct completion beacon_comp;

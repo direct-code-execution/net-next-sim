@@ -31,6 +31,7 @@
 #ifdef CONFIG_XFRM
 static void nat_decode_session(struct sk_buff *skb, struct flowi *fl)
 {
+	struct flowi4 *fl4 = &fl->u.ip4;
 	const struct nf_conn *ct;
 	const struct nf_conntrack_tuple *t;
 	enum ip_conntrack_info ctinfo;
@@ -49,25 +50,25 @@ static void nat_decode_session(struct sk_buff *skb, struct flowi *fl)
 		statusbit = IPS_SRC_NAT;
 
 	if (ct->status & statusbit) {
-		fl->fl4_dst = t->dst.u3.ip;
+		fl4->daddr = t->dst.u3.ip;
 		if (t->dst.protonum == IPPROTO_TCP ||
 		    t->dst.protonum == IPPROTO_UDP ||
 		    t->dst.protonum == IPPROTO_UDPLITE ||
 		    t->dst.protonum == IPPROTO_DCCP ||
 		    t->dst.protonum == IPPROTO_SCTP)
-			fl->fl_ip_dport = t->dst.u.tcp.port;
+			fl4->fl4_dport = t->dst.u.tcp.port;
 	}
 
 	statusbit ^= IPS_NAT_MASK;
 
 	if (ct->status & statusbit) {
-		fl->fl4_src = t->src.u3.ip;
+		fl4->saddr = t->src.u3.ip;
 		if (t->dst.protonum == IPPROTO_TCP ||
 		    t->dst.protonum == IPPROTO_UDP ||
 		    t->dst.protonum == IPPROTO_UDPLITE ||
 		    t->dst.protonum == IPPROTO_DCCP ||
 		    t->dst.protonum == IPPROTO_SCTP)
-			fl->fl_ip_sport = t->src.u.tcp.port;
+			fl4->fl4_sport = t->src.u.tcp.port;
 	}
 }
 #endif
@@ -87,7 +88,7 @@ nf_nat_fn(unsigned int hooknum,
 
 	/* We never see fragments: conntrack defrags on pre-routing
 	   and local-out, and nf_nat_out protects post-routing. */
-	NF_CT_ASSERT(!(ip_hdr(skb)->frag_off & htons(IP_MF | IP_OFFSET)));
+	NF_CT_ASSERT(!ip_is_fragment(ip_hdr(skb)));
 
 	ct = nf_ct_get(skb, &ctinfo);
 	/* Can't track?  It's not due to stress, or conntrack would
@@ -115,7 +116,7 @@ nf_nat_fn(unsigned int hooknum,
 
 	switch (ctinfo) {
 	case IP_CT_RELATED:
-	case IP_CT_RELATED+IP_CT_IS_REPLY:
+	case IP_CT_RELATED_REPLY:
 		if (ip_hdr(skb)->protocol == IPPROTO_ICMP) {
 			if (!nf_nat_icmp_reply_translation(ct, ctinfo,
 							   hooknum, skb))
@@ -136,14 +137,14 @@ nf_nat_fn(unsigned int hooknum,
 				return ret;
 		} else
 			pr_debug("Already setup manip %s for ct %p\n",
-				 maniptype == IP_NAT_MANIP_SRC ? "SRC" : "DST",
+				 maniptype == NF_NAT_MANIP_SRC ? "SRC" : "DST",
 				 ct);
 		break;
 
 	default:
 		/* ESTABLISHED */
 		NF_CT_ASSERT(ctinfo == IP_CT_ESTABLISHED ||
-			     ctinfo == (IP_CT_ESTABLISHED+IP_CT_IS_REPLY));
+			     ctinfo == IP_CT_ESTABLISHED_REPLY);
 	}
 
 	return nf_nat_packet(ct, ctinfo, hooknum, skb);
@@ -283,7 +284,7 @@ static int __init nf_nat_standalone_init(void)
 
 #ifdef CONFIG_XFRM
 	BUG_ON(ip_nat_decode_session != NULL);
-	rcu_assign_pointer(ip_nat_decode_session, nat_decode_session);
+	RCU_INIT_POINTER(ip_nat_decode_session, nat_decode_session);
 #endif
 	ret = nf_nat_rule_init();
 	if (ret < 0) {
@@ -301,7 +302,7 @@ static int __init nf_nat_standalone_init(void)
 	nf_nat_rule_cleanup();
  cleanup_decode_session:
 #ifdef CONFIG_XFRM
-	rcu_assign_pointer(ip_nat_decode_session, NULL);
+	RCU_INIT_POINTER(ip_nat_decode_session, NULL);
 	synchronize_net();
 #endif
 	return ret;
@@ -312,7 +313,7 @@ static void __exit nf_nat_standalone_fini(void)
 	nf_unregister_hooks(nf_nat_ops, ARRAY_SIZE(nf_nat_ops));
 	nf_nat_rule_cleanup();
 #ifdef CONFIG_XFRM
-	rcu_assign_pointer(ip_nat_decode_session, NULL);
+	RCU_INIT_POINTER(ip_nat_decode_session, NULL);
 	synchronize_net();
 #endif
 	/* Conntrack caches are unregistered in nf_conntrack_cleanup */

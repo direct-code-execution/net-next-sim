@@ -6,6 +6,7 @@
 #include <linux/bootmem.h>
 #include <linux/compat.h>
 #include <asm/i387.h>
+#include <asm/fpu-internal.h>
 #ifdef CONFIG_IA32_EMULATION
 #include <asm/sigcontext32.h>
 #endif
@@ -47,13 +48,13 @@ void __sanitize_i387_state(struct task_struct *tsk)
 	if (!fx)
 		return;
 
-	BUG_ON(task_thread_info(tsk)->status & TS_USEDFPU);
+	BUG_ON(__thread_has_fpu(tsk));
 
 	xstate_bv = tsk->thread.fpu.state->xsave.xsave_hdr.xstate_bv;
 
 	/*
 	 * None of the feature bits are in init state. So nothing else
-	 * to do for us, as the memory layout is upto date.
+	 * to do for us, as the memory layout is up to date.
 	 */
 	if ((xstate_bv & pcntxt_mask) == pcntxt_mask)
 		return;
@@ -168,7 +169,7 @@ int save_i387_xstate(void __user *buf)
 	if (!used_math())
 		return 0;
 
-	if (task_thread_info(tsk)->status & TS_USEDFPU) {
+	if (user_has_fpu()) {
 		if (use_xsave())
 			err = xsave_user(buf);
 		else
@@ -176,8 +177,7 @@ int save_i387_xstate(void __user *buf)
 
 		if (err)
 			return err;
-		task_thread_info(tsk)->status &= ~TS_USEDFPU;
-		stts();
+		user_fpu_end();
 	} else {
 		sanitize_i387_state(tsk);
 		if (__copy_to_user(buf, &tsk->thread.fpu.state->fxsave,
@@ -292,10 +292,7 @@ int restore_i387_xstate(void __user *buf)
 			return err;
 	}
 
-	if (!(task_thread_info(current)->status & TS_USEDFPU)) {
-		clts();
-		task_thread_info(current)->status |= TS_USEDFPU;
-	}
+	user_fpu_begin();
 	if (use_xsave())
 		err = restore_user_xstate(buf);
 	else
@@ -394,7 +391,8 @@ static void __init setup_xstate_init(void)
 	 * Setup init_xstate_buf to represent the init state of
 	 * all the features managed by the xsave
 	 */
-	init_xstate_buf = alloc_bootmem(xstate_size);
+	init_xstate_buf = alloc_bootmem_align(xstate_size,
+					      __alignof__(struct xsave_struct));
 	init_xstate_buf->i387.mxcsr = MXCSR_DEFAULT;
 
 	clts();

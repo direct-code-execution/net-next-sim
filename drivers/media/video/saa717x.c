@@ -39,7 +39,6 @@
 #include <linux/i2c.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
-#include <media/v4l2-i2c-drv.h>
 
 MODULE_DESCRIPTION("Philips SAA717x audio/video decoder driver");
 MODULE_AUTHOR("K. Ohta, T. Adachi, Hans Verkuil");
@@ -1366,9 +1365,14 @@ static const struct i2c_device_id saa717x_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, saa717x_id);
 
-static struct v4l2_i2c_driver_data v4l2_i2c_data = {
-	.name = "saa717x",
-	.probe = saa717x_probe,
-	.remove = saa717x_remove,
-	.id_table = saa717x_id,
+static struct i2c_driver saa717x_driver = {
+	.driver = {
+		.owner	= THIS_MODULE,
+		.name	= "saa717x",
+	},
+	.probe		= saa717x_probe,
+	.remove		= saa717x_remove,
+	.id_table	= saa717x_id,
 };
+
+module_i2c_driver(saa717x_driver);

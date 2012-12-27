@@ -37,7 +37,6 @@ Status: experimental
 #include <linux/delay.h>
 #include <linux/pci.h>
 
-#include <pcmcia/cs.h>
 #include <pcmcia/cistpl.h>
 #include <pcmcia/ds.h>
 
@@ -100,7 +99,7 @@ static struct comedi_driver driver_das16cs = {
 	.detach = das16cs_detach,
 };
 
-static struct pcmcia_device *cur_dev = NULL;
+static struct pcmcia_device *cur_dev;
 
 static const struct comedi_lrange das16cs_ai_range = { 4, {
 							   RANGE(-10, 10),
@@ -151,7 +150,7 @@ static const struct das16cs_board *das16cs_probe(struct comedi_device *dev,
 			return das16cs_boards + i;
 	}
 
-	printk("unknown board!\n");
+	dev_dbg(dev->hw_dev, "unknown board!\n");
 
 	return NULL;
 }
@@ -164,20 +163,19 @@ static int das16cs_attach(struct comedi_device *dev,
 	int ret;
 	int i;
 
-	printk("comedi%d: cb_das16_cs: ", dev->minor);
+	dev_dbg(dev->hw_dev, "comedi%d: cb_das16_cs: attached\n", dev->minor);
 
 	link = cur_dev;		/* XXX hack */
 	if (!link)
 		return -EIO;
 
-	dev->iobase = link->resource[0]->start;;
-	printk("I/O base=0x%04lx ", dev->iobase);
+	dev->iobase = link->resource[0]->start;
+	dev_dbg(dev->hw_dev, "I/O base=0x%04lx\n", dev->iobase);
 
-	printk("fingerprint:\n");
+	dev_dbg(dev->hw_dev, "fingerprint:\n");
 	for (i = 0; i < 48; i += 2)
-		printk("%04x ", inw(dev->iobase + i));
+		dev_dbg(dev->hw_dev, "%04x\n", inw(dev->iobase + i));
 
-	printk("\n");
 
 	ret = request_irq(link->irq, das16cs_interrupt,
 			  IRQF_SHARED, "cb_das16_cs", dev);
@@ -186,7 +184,7 @@ static int das16cs_attach(struct comedi_device *dev,
 
 	dev->irq = link->irq;
 
-	printk("irq=%u ", dev->irq);
+	dev_dbg(dev->hw_dev, "irq=%u\n", dev->irq);
 
 	dev->board_ptr = das16cs_probe(dev, link);
 	if (!dev->board_ptr)
@@ -253,14 +251,13 @@ static int das16cs_attach(struct comedi_device *dev,
 		s->type = COMEDI_SUBD_UNUSED;
 	}
 
-	printk("attached\n");
 
 	return 1;
 }
 
 static int das16cs_detach(struct comedi_device *dev)
 {
-	printk("comedi%d: das16cs: remove\n", dev->minor);
+	dev_dbg(dev->hw_dev, "comedi%d: das16cs: remove\n", dev->minor);
 
 	if (dev->irq)
 		free_irq(dev->irq, dev);
@@ -313,7 +310,7 @@ static int das16cs_ai_rinsn(struct comedi_device *dev,
 				break;
 		}
 		if (to == TIMEOUT) {
-			printk("cb_das16_cs: ai timeout\n");
+			dev_dbg(dev->hw_dev, "cb_das16_cs: ai timeout\n");
 			return -ETIME;
 		}
 		data[i] = (unsigned short)inw(dev->iobase + 0);
@@ -371,7 +368,8 @@ static int das16cs_ai_cmdtest(struct comedi_device *dev,
 	if (err)
 		return 1;
 
-	/* step 2: make sure trigger sources are unique and mutually compatible */
+	/* step 2: make sure trigger sources are unique and
+	 * mutually compatible */
 
 	/* note that mutual compatibility is not an issue here */
 	if (cmd->scan_begin_src != TRIG_TIMER &&
@@ -509,7 +507,7 @@ static int das16cs_ao_winsn(struct comedi_device *dev,
 		else
 			status1 |= 0x0008;
 
-/* 		printk("0x%04x\n",status1);*/
+/*		printk("0x%04x\n",status1);*/
 		outw(status1, dev->iobase + 4);
 		udelay(1);
 
@@ -692,10 +690,6 @@ static int das16cs_pcmcia_attach(struct pcmcia_device *link)
 	local->link = link;
 	link->priv = local;
 
-	/* Initialize the pcmcia_device structure */
-	link->conf.Attributes = 0;
-	link->conf.IntType = INT_MEMORY_AND_IO;
-
 	cur_dev = link;
 
 	das16cs_pcmcia_config(link);
@@ -715,37 +709,12 @@ static void das16cs_pcmcia_detach(struct pcmcia_device *link)
 
 
 static int das16cs_pcmcia_config_loop(struct pcmcia_device *p_dev,
-				cistpl_cftable_entry_t *cfg,
-				cistpl_cftable_entry_t *dflt,
-				unsigned int vcc,
 				void *priv_data)
 {
-	if (cfg->index == 0)
+	if (p_dev->config_index == 0)
 		return -EINVAL;
 
-	/* Do we need to allocate an interrupt? */
-	p_dev->conf.Attributes |= CONF_ENABLE_IRQ;
-
-	/* IO window settings */
-	p_dev->resource[0]->end = p_dev->resource[1]->end = 0;
-	if ((cfg->io.nwin > 0) || (dflt->io.nwin > 0)) {
-		cistpl_io_t *io = (cfg->io.nwin) ? &cfg->io : &dflt->io;
-		p_dev->io_lines = io->flags & CISTPL_IO_LINES_MASK;
-		p_dev->resource[0]->flags &= ~IO_DATA_PATH_WIDTH;
-		p_dev->resource[0]->flags |=
-			pcmcia_io_cfg_data_width(io->flags);
-		p_dev->resource[0]->start = io->win[0].base;
-		p_dev->resource[0]->end = io->win[0].len;
-		if (io->nwin > 1) {
-			p_dev->resource[1]->flags = p_dev->resource[0]->flags;
-			p_dev->resource[1]->start = io->win[1].base;
-			p_dev->resource[1]->end = io->win[1].len;
-		}
-		/* This reserves IO space but doesn't actually enable it */
-		return pcmcia_request_io(p_dev);
-	}
-
-	return 0;
+	return pcmcia_request_io(p_dev);
 }
 
 static void das16cs_pcmcia_config(struct pcmcia_device *link)
@@ -753,6 +722,9 @@ static void das16cs_pcmcia_config(struct pcmcia_device *link)
 	int ret;
 
 	dev_dbg(&link->dev, "das16cs_pcmcia_config\n");
+
+	/* Do we need to allocate an interrupt? */
+	link->config_flags |= CONF_ENABLE_IRQ | CONF_AUTO_SET_IO;
 
 	ret = pcmcia_loop_config(link, das16cs_pcmcia_config_loop, NULL);
 	if (ret) {
@@ -763,24 +735,9 @@ static void das16cs_pcmcia_config(struct pcmcia_device *link)
 	if (!link->irq)
 		goto failed;
 
-	/*
-	   This actually configures the PCMCIA socket -- setting up
-	   the I/O windows and the interrupt mapping, and putting the
-	   card and host interface into "Memory and IO" mode.
-	 */
-	ret = pcmcia_request_configuration(link, &link->conf);
+	ret = pcmcia_enable_device(link);
 	if (ret)
 		goto failed;
-
-	/* Finally, report what we've done */
-	dev_info(&link->dev, "index 0x%02x", link->conf.ConfigIndex);
-	if (link->conf.Attributes & CONF_ENABLE_IRQ)
-		printk(", irq %u", link->irq);
-	if (link->resource[0])
-		printk(", io %pR", link->resource[0]);
-	if (link->resource[1])
-		printk(", io %pR", link->resource[1]);
-	printk("\n");
 
 	return;
 
@@ -814,7 +771,7 @@ static int das16cs_pcmcia_resume(struct pcmcia_device *link)
 
 /*====================================================================*/
 
-static struct pcmcia_device_id das16cs_id_table[] = {
+static const struct pcmcia_device_id das16cs_id_table[] = {
 	PCMCIA_DEVICE_MANF_CARD(0x01c5, 0x0039),
 	PCMCIA_DEVICE_MANF_CARD(0x01c5, 0x4009),
 	PCMCIA_DEVICE_NULL
@@ -832,9 +789,7 @@ struct pcmcia_driver das16cs_driver = {
 	.resume = das16cs_pcmcia_resume,
 	.id_table = das16cs_id_table,
 	.owner = THIS_MODULE,
-	.drv = {
-		.name = "cb_das16_cs",
-		},
+	.name = "cb_das16_cs",
 };
 
 static int __init init_das16cs_pcmcia_cs(void)

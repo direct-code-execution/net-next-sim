@@ -26,6 +26,7 @@
  * Send feedback to <colpatch@us.ibm.com>
  */
 #include <linux/nodemask.h>
+#include <linux/export.h>
 #include <linux/mmzone.h>
 #include <linux/init.h>
 #include <linux/smp.h>
@@ -39,7 +40,7 @@ int __ref arch_register_cpu(int num)
 	/*
 	 * CPU0 cannot be offlined due to several
 	 * restrictions and assumptions in kernel. This basically
-	 * doesnt add a control file, one cannot attempt to offline
+	 * doesn't add a control file, one cannot attempt to offline
 	 * BSP.
 	 *
 	 * Also certain PCI quirks require not to enable hotplug control

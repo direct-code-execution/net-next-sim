@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Atheros Communications Inc.
+ * Copyright (c) 2010-2011 Atheros Communications Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -65,7 +65,7 @@ struct ar9003_rxs {
 	u32 status9;
 	u32 status10;
 	u32 status11;
-} __packed;
+} __packed __aligned(4);
 
 /* Transmit Control Descriptor */
 struct ar9003_txc {
@@ -92,8 +92,9 @@ struct ar9003_txc {
 	u32 ctl20;  /* DMA control 20 */
 	u32 ctl21;  /* DMA control 21 */
 	u32 ctl22;  /* DMA control 22 */
-	u32 pad[9]; /* pad to cache line (128 bytes/32 dwords) */
-} __packed;
+	u32 ctl23;  /* DMA control 23 */
+	u32 pad[8]; /* pad to cache line (128 bytes/32 dwords) */
+} __packed __aligned(4);
 
 struct ar9003_txs {
 	u32 ds_info;
@@ -105,7 +106,7 @@ struct ar9003_txs {
 	u32 status6;
 	u32 status7;
 	u32 status8;
-} __packed;
+} __packed __aligned(4);
 
 void ar9003_hw_attach_mac_ops(struct ath_hw *hw);
 void ath9k_hw_set_rx_bufsize(struct ath_hw *ah, u16 buf_size);
@@ -118,5 +119,5 @@ int ath9k_hw_process_rxdesc_edma(struct ath_hw *ah,
 void ath9k_hw_reset_txstatus_ring(struct ath_hw *ah);
 void ath9k_hw_setup_statusring(struct ath_hw *ah, void *ts_start,
 			       u32 ts_paddr_start,
-			       u8 size);
+			       u16 size);
 #endif

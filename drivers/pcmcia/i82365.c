@@ -48,10 +48,8 @@
 #include <linux/bitops.h>
 #include <asm/irq.h>
 #include <asm/io.h>
-#include <asm/system.h>
 
 #include <pcmcia/ss.h>
-#include <pcmcia/cs.h>
 
 #include <linux/isapnp.h>
 

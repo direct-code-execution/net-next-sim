@@ -137,7 +137,7 @@ DEVICE_PARAM(TxDescriptors1,"Number of transmit descriptors1");
 /* IP_byte_align[] is used for IP header unsigned long byte aligned
    0: indicate the IP header won't be unsigned long byte aligned.(Default) .
    1: indicate the IP header will be unsigned long byte aligned.
-      In some enviroment, the IP header should be unsigned long byte aligned,
+      In some environment, the IP header should be unsigned long byte aligned,
       or the packet will be droped when we receive it. (eg: IPVS)
 */
 DEVICE_PARAM(IP_byte_align,"Enable IP header dword aligned");
@@ -312,9 +312,9 @@ static int device_notify_reboot(struct notifier_block *, unsigned long event, vo
 static int viawget_suspend(struct pci_dev *pcid, pm_message_t state);
 static int viawget_resume(struct pci_dev *pcid);
 struct notifier_block device_notifier = {
-        notifier_call:  device_notify_reboot,
-        next:           NULL,
-        priority:       0
+	.notifier_call = device_notify_reboot,
+	.next = NULL,
+	.priority = 0,
 };
 #endif
 
@@ -815,14 +815,8 @@ else  CARDbRadioPowerOn(pDevice);
             pMgmt->eScanType = WMAC_SCAN_PASSIVE;
     // get Permanent network address
     SROMvReadEtherAddress(pDevice->PortOffset, pDevice->abyCurrentNetAddr);
-    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Network address = %02x-%02x-%02x=%02x-%02x-%02x\n",
-        pDevice->abyCurrentNetAddr[0],
-        pDevice->abyCurrentNetAddr[1],
-        pDevice->abyCurrentNetAddr[2],
-        pDevice->abyCurrentNetAddr[3],
-        pDevice->abyCurrentNetAddr[4],
-        pDevice->abyCurrentNetAddr[5]);
-
+	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Network address = %pM\n",
+		pDevice->abyCurrentNetAddr);
 
     // reset Tx pointer
     CARDvSafeResetRx(pDevice);
@@ -900,7 +894,7 @@ static bool device_release_WPADEV(PSDevice pDevice)
 	        if(ii>20)
 		  break;
               }
-           };
+           }
     return true;
 }
 
@@ -911,7 +905,7 @@ static const struct net_device_ops device_netdev_ops = {
     .ndo_do_ioctl           = device_ioctl,
     .ndo_get_stats          = device_get_stats,
     .ndo_start_xmit         = device_xmit,
-    .ndo_set_multicast_list = device_set_multi,
+    .ndo_set_rx_mode	    = device_set_multi,
 };
 
 
@@ -955,12 +949,13 @@ vt6655_probe(struct pci_dev *pcid, const struct pci_device_id *ent)
     pDevice->dev = dev;
     pDevice->next_module = root_device_dev;
     root_device_dev = dev;
-    dev->irq = pcid->irq;
 
     if (pci_enable_device(pcid)) {
         device_free_info(pDevice);
         return -ENODEV;
     }
+    dev->irq = pcid->irq;
+
 #ifdef	DEBUG
 	printk("Before get pci_info memaddr is %x\n",pDevice->memaddr);
 #endif
@@ -1445,7 +1440,7 @@ static void device_init_defrag_cb(PSDevice pDevice) {
         if (!device_alloc_frag_buf(pDevice, pDeF)) {
             DBG_PRT(MSG_LEVEL_ERR,KERN_ERR "%s: can not alloc frag bufs\n",
                 pDevice->dev->name);
-        };
+        }
     }
     pDevice->cbDFCB = CB_MAX_RX_FRAG;
     pDevice->cbFreeDFCB = pDevice->cbDFCB;
@@ -2103,7 +2098,7 @@ static int device_dma0_tx_80211(struct sk_buff *skb, struct net_device *dev) {
         dev_kfree_skb_irq(skb);
         spin_unlock_irq(&pDevice->lock);
         return 0;
-    };
+    }
 
     cbMPDULen = skb->len;
     pbMPDU = skb->data;
@@ -2135,7 +2130,7 @@ bool device_dma0_xmit(PSDevice pDevice, struct sk_buff *skb, unsigned int uNodeI
     if (pDevice->bStopTx0Pkt == true) {
         dev_kfree_skb_irq(skb);
         return false;
-    };
+    }
 
     if (AVAIL_TD(pDevice, TYPE_TXDMA0) <= 0) {
         dev_kfree_skb_irq(skb);
@@ -2864,7 +2859,7 @@ static  irqreturn_t  device_intr(int irq,  void *dev_instance) {
             pDevice->bBeaconSent = false;
             if (pDevice->bEnablePSMode) {
                 PSbIsNextTBTTWakeUp((void *)pDevice);
-            };
+            }
 
             if ((pDevice->eOPMode == OP_MODE_AP) ||
                 (pDevice->eOPMode == OP_MODE_ADHOC)) {
@@ -2875,7 +2870,7 @@ static  irqreturn_t  device_intr(int irq,  void *dev_instance) {
 
             if (pDevice->eOPMode == OP_MODE_ADHOC && pDevice->pMgmt->wCurrATIMWindow > 0) {
                 // todo adhoc PS mode
-            };
+            }
 
         }
 
@@ -2884,7 +2879,7 @@ static  irqreturn_t  device_intr(int irq,  void *dev_instance) {
             if (pDevice->eOPMode == OP_MODE_ADHOC) {
                 pDevice->bIsBeaconBufReadySet = false;
                 pDevice->cbBeaconBufReadySetCnt = 0;
-            };
+            }
 
             if (pDevice->eOPMode == OP_MODE_AP) {
                 if(pMgmt->byDTIMCount > 0) {
@@ -3031,7 +3026,7 @@ int Config_FileOperation(PSDevice pDevice,bool fwrite,unsigned char *Parameter) 
 
 buffer = kmalloc(1024, GFP_KERNEL);
 if(buffer==NULL) {
-  printk("alllocate mem for file fail?\n");
+  printk("allocate mem for file fail?\n");
   result = -1;
   goto error1;
 }
@@ -3063,8 +3058,7 @@ else {
 }
 
 error1:
-  if(buffer)
-  	 kfree(buffer);
+  kfree(buffer);
 
   if(filp_close(filp,NULL))
        printk("Config_FileOperation:close file fail\n");
@@ -3159,11 +3153,7 @@ static int  device_ioctl(struct net_device *dev, struct ifreq *rq, int cmd) {
 		break;
 
 	case SIOCGIWNWID:     //0x8b03  support
-	#ifdef  WPA_SUPPLICANT_DRIVER_WEXT_SUPPORT
-          rc = iwctl_giwnwid(dev, NULL, &(wrq->u.nwid), NULL);
-	#else
-        rc = -EOPNOTSUPP;
-	#endif
+		rc = -EOPNOTSUPP;
 		break;
 
 		// Set frequency/channel
@@ -3605,13 +3595,13 @@ static int ethtool_ioctl(struct net_device *dev, void *useraddr)
 MODULE_DEVICE_TABLE(pci, vt6655_pci_id_table);
 
 static struct pci_driver device_driver = {
-        name:       DEVICE_NAME,
-        id_table:   vt6655_pci_id_table,
-        probe:      vt6655_probe,
-        remove:     vt6655_remove,
+	.name = DEVICE_NAME,
+	.id_table = vt6655_pci_id_table,
+	.probe = vt6655_probe,
+	.remove = vt6655_remove,
 #ifdef CONFIG_PM
-        suspend:    viawget_suspend,
-        resume:     viawget_resume,
+	.suspend = viawget_suspend,
+	.resume = viawget_resume,
 #endif
 };
 

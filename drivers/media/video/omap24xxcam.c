@@ -31,18 +31,19 @@
 #include <linux/interrupt.h>
 #include <linux/videodev2.h>
 #include <linux/pci.h>		/* needed for videobufs */
-#include <linux/version.h>
 #include <linux/platform_device.h>
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/slab.h>
+#include <linux/sched.h>
+#include <linux/module.h>
 
 #include <media/v4l2-common.h>
 #include <media/v4l2-ioctl.h>
 
 #include "omap24xxcam.h"
 
-#define OMAP24XXCAM_VERSION KERNEL_VERSION(0, 0, 0)
+#define OMAP24XXCAM_VERSION "0.0.1"
 
 #define RESET_TIMEOUT_NS 10000
 
@@ -308,11 +309,11 @@ static int omap24xxcam_vbq_alloc_mmap_buffer(struct videobuf_buffer *vb)
 			order--;
 
 		/* try to allocate as many contiguous pages as possible */
-		page = alloc_pages(GFP_KERNEL | GFP_DMA, order);
+		page = alloc_pages(GFP_KERNEL, order);
 		/* if allocation fails, try to allocate smaller amount */
 		while (page == NULL) {
 			order--;
-			page = alloc_pages(GFP_KERNEL | GFP_DMA, order);
+			page = alloc_pages(GFP_KERNEL, order);
 			if (page == NULL && !order) {
 				err = -ENOMEM;
 				goto out;
@@ -420,7 +421,7 @@ static void omap24xxcam_vbq_release(struct videobuf_queue *vbq,
 	struct videobuf_dmabuf *dma = videobuf_to_dma(vb);
 
 	/* wait for buffer, especially to get out of the sgdma queue */
-	videobuf_waiton(vb, 0, 0);
+	videobuf_waiton(vbq, vb, 0, 0);
 	if (vb->memory == V4L2_MEMORY_MMAP) {
 		dma_unmap_sg(vbq->dev, dma->sglist, dma->sglen,
 			     dma->direction);
@@ -992,7 +993,6 @@ static int vidioc_querycap(struct file *file, void *fh,
 
 	strlcpy(cap->driver, CAM_NAME, sizeof(cap->driver));
 	strlcpy(cap->card, cam->vfd->name, sizeof(cap->card));
-	cap->version = OMAP24XXCAM_VERSION;
 	cap->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
 
 	return 0;
@@ -1198,7 +1198,7 @@ static int vidioc_streamoff(struct file *file, void *fh, enum v4l2_buf_type i)
 
 	atomic_inc(&cam->reset_disable);
 
-	flush_scheduled_work();
+	flush_work_sync(&cam->sensor_reset_work);
 
 	rval = videobuf_streamoff(q);
 	if (!rval) {
@@ -1491,7 +1491,7 @@ static int omap24xxcam_open(struct file *file)
 	videobuf_queue_sg_init(&fh->vbq, &omap24xxcam_vbq_ops, NULL,
 				&fh->vbq_lock, V4L2_BUF_TYPE_VIDEO_CAPTURE,
 				V4L2_FIELD_NONE,
-				sizeof(struct videobuf_buffer), fh);
+				sizeof(struct videobuf_buffer), fh, NULL);
 
 	return 0;
 
@@ -1512,7 +1512,7 @@ static int omap24xxcam_release(struct file *file)
 
 	atomic_inc(&cam->reset_disable);
 
-	flush_scheduled_work();
+	flush_work_sync(&cam->sensor_reset_work);
 
 	/* stop streaming capture */
 	videobuf_streamoff(&fh->vbq);
@@ -1536,7 +1536,7 @@ static int omap24xxcam_release(struct file *file)
 	 * not be scheduled anymore since streaming is already
 	 * disabled.)
 	 */
-	flush_scheduled_work();
+	flush_work_sync(&cam->sensor_reset_work);
 
 	mutex_lock(&cam->mutex);
 	if (atomic_dec_return(&cam->users) == 0) {
@@ -1767,14 +1767,13 @@ static int __devinit omap24xxcam_probe(struct platform_device *pdev)
 		dev_err(cam->dev, "no mem resource?\n");
 		goto err;
 	}
-	if (!request_mem_region(mem->start, (mem->end - mem->start) + 1,
-				pdev->name)) {
+	if (!request_mem_region(mem->start, resource_size(mem), pdev->name)) {
 		dev_err(cam->dev,
 			"cannot reserve camera register I/O region\n");
 		goto err;
 	}
 	cam->mmio_base_phys = mem->start;
-	cam->mmio_size = (mem->end - mem->start) + 1;
+	cam->mmio_size = resource_size(mem);
 
 	/* map the region */
 	cam->mmio_base = (unsigned long)
@@ -1869,31 +1868,15 @@ static struct platform_driver omap24xxcam_driver = {
 	},
 };
 
-/*
- *
- * Module initialisation and deinitialisation
- *
- */
-
-static int __init omap24xxcam_init(void)
-{
-	return platform_driver_register(&omap24xxcam_driver);
-}
-
-static void __exit omap24xxcam_cleanup(void)
-{
-	platform_driver_unregister(&omap24xxcam_driver);
-}
+module_platform_driver(omap24xxcam_driver);
 
 MODULE_AUTHOR("Sakari Ailus <sakari.ailus@nokia.com>");
 MODULE_DESCRIPTION("OMAP24xx Video for Linux camera driver");
 MODULE_LICENSE("GPL");
+MODULE_VERSION(OMAP24XXCAM_VERSION);
 module_param(video_nr, int, 0);
 MODULE_PARM_DESC(video_nr,
 		 "Minor number for video device (-1 ==> auto assign)");
 module_param(capture_mem, int, 0);
 MODULE_PARM_DESC(capture_mem, "Maximum amount of memory for capture "
 		 "buffers (default 4800kiB)");
-
-module_init(omap24xxcam_init);
-module_exit(omap24xxcam_cleanup);

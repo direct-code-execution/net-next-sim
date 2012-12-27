@@ -11,6 +11,7 @@
 #include <linux/pci.h>
 #include <linux/bitmap.h>
 #include <linux/slab.h>
+#include <linux/export.h>
 #include <asm/sn/sn_sal.h>
 #include <asm/sn/addrs.h>
 #include <asm/sn/io.h>
@@ -509,7 +510,7 @@ tioca_dma_unmap(struct pci_dev *pdev, dma_addr_t bus_addr, int dir)
  * use the GART mapped mode.
  */
 static u64
-tioca_dma_map(struct pci_dev *pdev, u64 paddr, size_t byte_count, int dma_flags)
+tioca_dma_map(struct pci_dev *pdev, unsigned long paddr, size_t byte_count, int dma_flags)
 {
 	u64 mapaddr;
 
@@ -599,11 +600,11 @@ tioca_bus_fixup(struct pcibus_bussoft *prom_bussoft, struct pci_controller *cont
 	 * Allocate kernel bus soft and copy from prom.
 	 */
 
-	tioca_common = kzalloc(sizeof(struct tioca_common), GFP_KERNEL);
+	tioca_common = kmemdup(prom_bussoft, sizeof(struct tioca_common),
+			       GFP_KERNEL);
 	if (!tioca_common)
 		return NULL;
 
-	memcpy(tioca_common, prom_bussoft, sizeof(struct tioca_common));
 	tioca_common->ca_common.bs_base = (unsigned long)
 		ioremap(REGION_OFFSET(tioca_common->ca_common.bs_base),
 			sizeof(struct tioca_common));
@@ -648,6 +649,7 @@ tioca_bus_fixup(struct pcibus_bussoft *prom_bussoft, struct pci_controller *cont
 		       __func__, SGI_TIOCA_ERROR,
 		       (int)tioca_common->ca_common.bs_persist_busnum);
 
+	irq_set_handler(SGI_TIOCA_ERROR, handle_level_irq);
 	sn_set_err_irq_affinity(SGI_TIOCA_ERROR);
 
 	/* Setup locality information */

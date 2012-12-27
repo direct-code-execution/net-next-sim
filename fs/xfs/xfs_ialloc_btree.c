@@ -31,7 +31,6 @@
 #include "xfs_dinode.h"
 #include "xfs_inode.h"
 #include "xfs_btree.h"
-#include "xfs_btree_trace.h"
 #include "xfs_ialloc.h"
 #include "xfs_alloc.h"
 #include "xfs_error.h"
@@ -183,38 +182,6 @@ xfs_inobt_key_diff(
 			  cur->bc_rec.i.ir_startino;
 }
 
-STATIC int
-xfs_inobt_kill_root(
-	struct xfs_btree_cur	*cur,
-	struct xfs_buf		*bp,
-	int			level,
-	union xfs_btree_ptr	*newroot)
-{
-	int			error;
-
-	XFS_BTREE_TRACE_CURSOR(cur, XBT_ENTRY);
-	XFS_BTREE_STATS_INC(cur, killroot);
-
-	/*
-	 * Update the root pointer, decreasing the level by 1 and then
-	 * free the old root.
-	 */
-	xfs_inobt_set_root(cur, newroot, -1);
-	error = xfs_inobt_free_block(cur, bp);
-	if (error) {
-		XFS_BTREE_TRACE_CURSOR(cur, XBT_ERROR);
-		return error;
-	}
-
-	XFS_BTREE_STATS_INC(cur, free);
-
-	cur->bc_bufs[level] = NULL;
-	cur->bc_nlevels--;
-
-	XFS_BTREE_TRACE_CURSOR(cur, XBT_EXIT);
-	return 0;
-}
-
 #ifdef DEBUG
 STATIC int
 xfs_inobt_keys_inorder(
@@ -237,79 +204,12 @@ xfs_inobt_recs_inorder(
 }
 #endif	/* DEBUG */
 
-#ifdef XFS_BTREE_TRACE
-ktrace_t	*xfs_inobt_trace_buf;
-
-STATIC void
-xfs_inobt_trace_enter(
-	struct xfs_btree_cur	*cur,
-	const char		*func,
-	char			*s,
-	int			type,
-	int			line,
-	__psunsigned_t		a0,
-	__psunsigned_t		a1,
-	__psunsigned_t		a2,
-	__psunsigned_t		a3,
-	__psunsigned_t		a4,
-	__psunsigned_t		a5,
-	__psunsigned_t		a6,
-	__psunsigned_t		a7,
-	__psunsigned_t		a8,
-	__psunsigned_t		a9,
-	__psunsigned_t		a10)
-{
-	ktrace_enter(xfs_inobt_trace_buf, (void *)(__psint_t)type,
-		(void *)func, (void *)s, NULL, (void *)cur,
-		(void *)a0, (void *)a1, (void *)a2, (void *)a3,
-		(void *)a4, (void *)a5, (void *)a6, (void *)a7,
-		(void *)a8, (void *)a9, (void *)a10);
-}
-
-STATIC void
-xfs_inobt_trace_cursor(
-	struct xfs_btree_cur	*cur,
-	__uint32_t		*s0,
-	__uint64_t		*l0,
-	__uint64_t		*l1)
-{
-	*s0 = cur->bc_private.a.agno;
-	*l0 = cur->bc_rec.i.ir_startino;
-	*l1 = cur->bc_rec.i.ir_free;
-}
-
-STATIC void
-xfs_inobt_trace_key(
-	struct xfs_btree_cur	*cur,
-	union xfs_btree_key	*key,
-	__uint64_t		*l0,
-	__uint64_t		*l1)
-{
-	*l0 = be32_to_cpu(key->inobt.ir_startino);
-	*l1 = 0;
-}
-
-STATIC void
-xfs_inobt_trace_record(
-	struct xfs_btree_cur	*cur,
-	union xfs_btree_rec	*rec,
-	__uint64_t		*l0,
-	__uint64_t		*l1,
-	__uint64_t		*l2)
-{
-	*l0 = be32_to_cpu(rec->inobt.ir_startino);
-	*l1 = be32_to_cpu(rec->inobt.ir_freecount);
-	*l2 = be64_to_cpu(rec->inobt.ir_free);
-}
-#endif /* XFS_BTREE_TRACE */
-
 static const struct xfs_btree_ops xfs_inobt_ops = {
 	.rec_len		= sizeof(xfs_inobt_rec_t),
 	.key_len		= sizeof(xfs_inobt_key_t),
 
 	.dup_cursor		= xfs_inobt_dup_cursor,
 	.set_root		= xfs_inobt_set_root,
-	.kill_root		= xfs_inobt_kill_root,
 	.alloc_block		= xfs_inobt_alloc_block,
 	.free_block		= xfs_inobt_free_block,
 	.get_minrecs		= xfs_inobt_get_minrecs,
@@ -319,17 +219,9 @@ static const struct xfs_btree_ops xfs_inobt_ops = {
 	.init_rec_from_cur	= xfs_inobt_init_rec_from_cur,
 	.init_ptr_from_cur	= xfs_inobt_init_ptr_from_cur,
 	.key_diff		= xfs_inobt_key_diff,
-
 #ifdef DEBUG
 	.keys_inorder		= xfs_inobt_keys_inorder,
 	.recs_inorder		= xfs_inobt_recs_inorder,
-#endif
-
-#ifdef XFS_BTREE_TRACE
-	.trace_enter		= xfs_inobt_trace_enter,
-	.trace_cursor		= xfs_inobt_trace_cursor,
-	.trace_key		= xfs_inobt_trace_key,
-	.trace_record		= xfs_inobt_trace_record,
 #endif
 };
 

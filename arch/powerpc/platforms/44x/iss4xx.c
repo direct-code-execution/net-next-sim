@@ -71,8 +71,7 @@ static void __init iss4xx_init_irq(void)
 		/* The MPIC driver will get everything it needs from the
 		 * device-tree, just pass 0 to all arguments
 		 */
-		struct mpic *mpic = mpic_alloc(np, 0, MPIC_PRIMARY, 0, 0,
-					       " MPIC     ");
+		struct mpic *mpic = mpic_alloc(np, 0, MPIC_NO_RESET, 0, 0, " MPIC     ");
 		BUG_ON(mpic == NULL);
 		mpic_init(mpic);
 		ppc_md.get_irq = mpic_get_irq;
@@ -87,7 +86,7 @@ static void __cpuinit smp_iss4xx_setup_cpu(int cpu)
 	mpic_setup_this_cpu();
 }
 
-static void __cpuinit smp_iss4xx_kick_cpu(int cpu)
+static int __cpuinit smp_iss4xx_kick_cpu(int cpu)
 {
 	struct device_node *cpunode = of_get_cpu_node(cpu, NULL);
 	const u64 *spin_table_addr_prop;
@@ -104,7 +103,7 @@ static void __cpuinit smp_iss4xx_kick_cpu(int cpu)
 					       NULL);
 	if (spin_table_addr_prop == NULL) {
 		pr_err("CPU%d: Can't start, missing cpu-release-addr !\n", cpu);
-		return;
+		return -ENOENT;
 	}
 
 	/* Assume it's mapped as part of the linear mapping. This is a bit
@@ -117,6 +116,8 @@ static void __cpuinit smp_iss4xx_kick_cpu(int cpu)
 	smp_wmb();
 	spin_table[1] = __pa(start_secondary_47x);
 	mb();
+
+	return 0;
 }
 
 static struct smp_ops_t iss_smp_ops = {

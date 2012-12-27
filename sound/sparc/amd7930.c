@@ -50,7 +50,7 @@
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
-static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;	/* Enable this card */
+static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;	/* Enable this card */
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for Sun AMD7930 soundcard.");
@@ -962,7 +962,7 @@ static int __devinit snd_amd7930_create(struct snd_card *card,
 	amd7930_idle(amd);
 
 	if (request_irq(irq, snd_amd7930_interrupt,
-			IRQF_DISABLED | IRQF_SHARED, "amd7930", amd)) {
+			IRQF_SHARED, "amd7930", amd)) {
 		snd_printk(KERN_ERR "amd7930-%d: Unable to grab IRQ %d\n",
 			   dev, irq);
 		snd_amd7930_free(amd);
@@ -1002,7 +1002,7 @@ static int __devinit snd_amd7930_create(struct snd_card *card,
 	return 0;
 }
 
-static int __devinit amd7930_sbus_probe(struct platform_device *op, const struct of_device_id *match)
+static int __devinit amd7930_sbus_probe(struct platform_device *op)
 {
 	struct resource *rp = &op->resource[0];
 	static int dev_num;
@@ -1064,7 +1064,7 @@ static const struct of_device_id amd7930_match[] = {
 	{},
 };
 
-static struct of_platform_driver amd7930_sbus_driver = {
+static struct platform_driver amd7930_sbus_driver = {
 	.driver = {
 		.name = "audio",
 		.owner = THIS_MODULE,
@@ -1075,7 +1075,7 @@ static struct of_platform_driver amd7930_sbus_driver = {
 
 static int __init amd7930_init(void)
 {
-	return of_register_platform_driver(&amd7930_sbus_driver);
+	return platform_driver_register(&amd7930_sbus_driver);
 }
 
 static void __exit amd7930_exit(void)
@@ -1092,7 +1092,7 @@ static void __exit amd7930_exit(void)
 
 	amd7930_list = NULL;
 
-	of_unregister_platform_driver(&amd7930_sbus_driver);
+	platform_driver_unregister(&amd7930_sbus_driver);
 }
 
 module_init(amd7930_init);

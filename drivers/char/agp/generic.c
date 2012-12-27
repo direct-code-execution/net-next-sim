@@ -81,13 +81,6 @@ static int agp_get_key(void)
 	return -1;
 }
 
-void agp_flush_chipset(struct agp_bridge_data *bridge)
-{
-	if (bridge->driver->chipset_flush)
-		bridge->driver->chipset_flush(bridge);
-}
-EXPORT_SYMBOL(agp_flush_chipset);
-
 /*
  * Use kmalloc if possible for the page list. Otherwise fall back to
  * vmalloc. This speeds things up and also saves memory for small AGP
@@ -121,6 +114,9 @@ static struct agp_memory *agp_create_user_memory(unsigned long num_agp_pages)
 {
 	struct agp_memory *new;
 	unsigned long alloc_size = num_agp_pages*sizeof(struct page *);
+
+	if (INT_MAX/sizeof(struct page *) < num_agp_pages)
+		return NULL;
 
 	new = kzalloc(sizeof(struct agp_memory), GFP_KERNEL);
 	if (new == NULL)
@@ -241,11 +237,14 @@ struct agp_memory *agp_allocate_memory(struct agp_bridge_data *bridge,
 	int scratch_pages;
 	struct agp_memory *new;
 	size_t i;
+	int cur_memory;
 
 	if (!bridge)
 		return NULL;
 
-	if ((atomic_read(&bridge->current_memory_agp) + page_count) > bridge->max_memory_agp)
+	cur_memory = atomic_read(&bridge->current_memory_agp);
+	if ((cur_memory + page_count > bridge->max_memory_agp) ||
+	    (cur_memory + page_count < page_count))
 		return NULL;
 
 	if (type >= AGP_USER_TYPES) {
@@ -437,11 +436,6 @@ int agp_bind_memory(struct agp_memory *curr, off_t pg_start)
 		curr->is_flushed = true;
 	}
 
-	if (curr->bridge->driver->agp_map_memory) {
-		ret_val = curr->bridge->driver->agp_map_memory(curr);
-		if (ret_val)
-			return ret_val;
-	}
 	ret_val = curr->bridge->driver->insert_memory(curr, pg_start, curr->type);
 
 	if (ret_val != 0)
@@ -483,9 +477,6 @@ int agp_unbind_memory(struct agp_memory *curr)
 	if (ret_val != 0)
 		return ret_val;
 
-	if (curr->bridge->driver->agp_unmap_memory)
-		curr->bridge->driver->agp_unmap_memory(curr);
-
 	curr->is_bound = false;
 	curr->pg_start = 0;
 	spin_lock(&curr->bridge->mapped_lock);
@@ -495,26 +486,6 @@ int agp_unbind_memory(struct agp_memory *curr)
 }
 EXPORT_SYMBOL(agp_unbind_memory);
 
-/**
- *	agp_rebind_emmory  -  Rewrite the entire GATT, useful on resume
- */
-int agp_rebind_memory(void)
-{
-	struct agp_memory *curr;
-	int ret_val = 0;
-
-	spin_lock(&agp_bridge->mapped_lock);
-	list_for_each_entry(curr, &agp_bridge->mapped_list, mapped_list) {
-		ret_val = curr->bridge->driver->insert_memory(curr,
-							      curr->pg_start,
-							      curr->type);
-		if (ret_val != 0)
-			break;
-	}
-	spin_unlock(&agp_bridge->mapped_lock);
-	return ret_val;
-}
-EXPORT_SYMBOL(agp_rebind_memory);
 
 /* End - Routines for handling swapping of agp_memory into the GATT */
 
@@ -543,12 +514,12 @@ static void agp_v2_parse_one(u32 *requested_mode, u32 *bridge_agpstat, u32 *vga_
 	switch (*bridge_agpstat & 7) {
 	case 4:
 		*bridge_agpstat |= (AGPSTAT2_2X | AGPSTAT2_1X);
-		printk(KERN_INFO PFX "BIOS bug. AGP bridge claims to only support x4 rate"
+		printk(KERN_INFO PFX "BIOS bug. AGP bridge claims to only support x4 rate. "
 			"Fixing up support for x2 & x1\n");
 		break;
 	case 2:
 		*bridge_agpstat |= AGPSTAT2_1X;
-		printk(KERN_INFO PFX "BIOS bug. AGP bridge claims to only support x2 rate"
+		printk(KERN_INFO PFX "BIOS bug. AGP bridge claims to only support x2 rate. "
 			"Fixing up support for x1\n");
 		break;
 	default:
@@ -722,7 +693,7 @@ static void agp_v3_parse_one(u32 *requested_mode, u32 *bridge_agpstat, u32 *vga_
 			*bridge_agpstat &= ~(AGPSTAT3_4X | AGPSTAT3_RSVD);
 			*vga_agpstat &= ~(AGPSTAT3_4X | AGPSTAT3_RSVD);
 		} else {
-			printk(KERN_INFO PFX "Fell back to AGPx4 mode because");
+			printk(KERN_INFO PFX "Fell back to AGPx4 mode because ");
 			if (!(*bridge_agpstat & AGPSTAT3_8X)) {
 				printk(KERN_INFO PFX "bridge couldn't do x8. bridge_agpstat:%x (orig=%x)\n",
 					*bridge_agpstat, origbridge);
@@ -984,7 +955,9 @@ int agp_generic_create_gatt_table(struct agp_bridge_data *bridge)
 
 	bridge->driver->cache_flush();
 #ifdef CONFIG_X86
-	set_memory_uc((unsigned long)table, 1 << page_order);
+	if (set_memory_uc((unsigned long)table, 1 << page_order))
+		printk(KERN_WARNING "Could not set GATT table memory to UC!\n");
+
 	bridge->gatt_table = (void *)table;
 #else
 	bridge->gatt_table = ioremap_nocache(virt_to_phys(table),
@@ -1122,8 +1095,8 @@ int agp_generic_insert_memory(struct agp_memory * mem, off_t pg_start, int type)
 		return -EINVAL;
 	}
 
-	/* AK: could wrap */
-	if ((pg_start + mem->page_count) > num_entries)
+	if (((pg_start + mem->page_count) > num_entries) ||
+	    ((pg_start + mem->page_count) < pg_start))
 		return -EINVAL;
 
 	j = pg_start;
@@ -1157,7 +1130,7 @@ int agp_generic_remove_memory(struct agp_memory *mem, off_t pg_start, int type)
 {
 	size_t i;
 	struct agp_bridge_data *bridge;
-	int mask_type;
+	int mask_type, num_entries;
 
 	bridge = mem->bridge;
 	if (!bridge)
@@ -1167,6 +1140,11 @@ int agp_generic_remove_memory(struct agp_memory *mem, off_t pg_start, int type)
 		return 0;
 
 	if (type != mem->type)
+		return -EINVAL;
+
+	num_entries = agp_num_entries();
+	if (((pg_start + mem->page_count) > num_entries) ||
+	    ((pg_start + mem->page_count) < pg_start))
 		return -EINVAL;
 
 	mask_type = bridge->driver->agp_type_to_mask_type(bridge, type);

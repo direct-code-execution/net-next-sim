@@ -1,8 +1,9 @@
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/sched.h>
 #include <linux/personality.h>
 #include <linux/binfmts.h>
 #include <linux/elf.h>
+#include <asm/system_info.h>
 
 int elf_check_arch(const struct elf32_hdr *x)
 {
@@ -40,15 +41,22 @@ EXPORT_SYMBOL(elf_check_arch);
 void elf_set_personality(const struct elf32_hdr *x)
 {
 	unsigned int eflags = x->e_flags;
-	unsigned int personality = PER_LINUX_32BIT;
+	unsigned int personality = current->personality & ~PER_MASK;
+
+	/*
+	 * We only support Linux ELF executables, so always set the
+	 * personality to LINUX.
+	 */
+	personality |= PER_LINUX;
 
 	/*
 	 * APCS-26 is only valid for OABI executables
 	 */
-	if ((eflags & EF_ARM_EABI_MASK) == EF_ARM_EABI_UNKNOWN) {
-		if (eflags & EF_ARM_APCS_26)
-			personality = PER_LINUX;
-	}
+	if ((eflags & EF_ARM_EABI_MASK) == EF_ARM_EABI_UNKNOWN &&
+	    (eflags & EF_ARM_APCS_26))
+		personality &= ~ADDR_LIMIT_32BIT;
+	else
+		personality |= ADDR_LIMIT_32BIT;
 
 	set_personality(personality);
 

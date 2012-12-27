@@ -39,7 +39,7 @@
 #define MSG_COUNT 4
 static DEFINE_PER_CPU(unsigned int [MSG_COUNT], ps3_ipi_virqs);
 
-static void do_message_pass(int target, int msg)
+static void ps3_smp_message_pass(int cpu, int msg)
 {
 	int result;
 	unsigned int virq;
@@ -49,72 +49,59 @@ static void do_message_pass(int target, int msg)
 		return;
 	}
 
-	virq = per_cpu(ps3_ipi_virqs, target)[msg];
+	virq = per_cpu(ps3_ipi_virqs, cpu)[msg];
 	result = ps3_send_event_locally(virq);
 
 	if (result)
 		DBG("%s:%d: ps3_send_event_locally(%d, %d) failed"
-			" (%d)\n", __func__, __LINE__, target, msg, result);
+			" (%d)\n", __func__, __LINE__, cpu, msg, result);
 }
 
-static void ps3_smp_message_pass(int target, int msg)
+static int __init ps3_smp_probe(void)
 {
 	int cpu;
 
-	if (target < NR_CPUS)
-		do_message_pass(target, msg);
-	else if (target == MSG_ALL_BUT_SELF) {
-		for_each_online_cpu(cpu)
-			if (cpu != smp_processor_id())
-				do_message_pass(cpu, msg);
-	} else {
-		for_each_online_cpu(cpu)
-			do_message_pass(cpu, msg);
-	}
-}
+	for (cpu = 0; cpu < 2; cpu++) {
+		int result;
+		unsigned int *virqs = per_cpu(ps3_ipi_virqs, cpu);
+		int i;
 
-static int ps3_smp_probe(void)
-{
+		DBG(" -> %s:%d: (%d)\n", __func__, __LINE__, cpu);
+
+		/*
+		* Check assumptions on ps3_ipi_virqs[] indexing. If this
+		* check fails, then a different mapping of PPC_MSG_
+		* to index needs to be setup.
+		*/
+
+		BUILD_BUG_ON(PPC_MSG_CALL_FUNCTION    != 0);
+		BUILD_BUG_ON(PPC_MSG_RESCHEDULE       != 1);
+		BUILD_BUG_ON(PPC_MSG_CALL_FUNC_SINGLE != 2);
+		BUILD_BUG_ON(PPC_MSG_DEBUGGER_BREAK   != 3);
+
+		for (i = 0; i < MSG_COUNT; i++) {
+			result = ps3_event_receive_port_setup(cpu, &virqs[i]);
+
+			if (result)
+				continue;
+
+			DBG("%s:%d: (%d, %d) => virq %u\n",
+				__func__, __LINE__, cpu, i, virqs[i]);
+
+			result = smp_request_message_ipi(virqs[i], i);
+
+			if (result)
+				virqs[i] = NO_IRQ;
+			else
+				ps3_register_ipi_irq(cpu, virqs[i]);
+		}
+
+		ps3_register_ipi_debug_brk(cpu, virqs[PPC_MSG_DEBUGGER_BREAK]);
+
+		DBG(" <- %s:%d: (%d)\n", __func__, __LINE__, cpu);
+	}
+
 	return 2;
-}
-
-static void __init ps3_smp_setup_cpu(int cpu)
-{
-	int result;
-	unsigned int *virqs = per_cpu(ps3_ipi_virqs, cpu);
-	int i;
-
-	DBG(" -> %s:%d: (%d)\n", __func__, __LINE__, cpu);
-
-	/*
-	 * Check assumptions on ps3_ipi_virqs[] indexing. If this
-	 * check fails, then a different mapping of PPC_MSG_
-	 * to index needs to be setup.
-	 */
-
-	BUILD_BUG_ON(PPC_MSG_CALL_FUNCTION    != 0);
-	BUILD_BUG_ON(PPC_MSG_RESCHEDULE       != 1);
-	BUILD_BUG_ON(PPC_MSG_CALL_FUNC_SINGLE != 2);
-	BUILD_BUG_ON(PPC_MSG_DEBUGGER_BREAK   != 3);
-
-	for (i = 0; i < MSG_COUNT; i++) {
-		result = ps3_event_receive_port_setup(cpu, &virqs[i]);
-
-		if (result)
-			continue;
-
-		DBG("%s:%d: (%d, %d) => virq %u\n",
-			__func__, __LINE__, cpu, i, virqs[i]);
-
-		result = smp_request_message_ipi(virqs[i], i);
-
-		if (result)
-			virqs[i] = NO_IRQ;
-	}
-
-	ps3_register_ipi_debug_brk(cpu, virqs[PPC_MSG_DEBUGGER_BREAK]);
-
-	DBG(" <- %s:%d: (%d)\n", __func__, __LINE__, cpu);
 }
 
 void ps3_smp_cleanup_cpu(int cpu)
@@ -137,7 +124,6 @@ static struct smp_ops_t ps3_smp_ops = {
 	.probe		= ps3_smp_probe,
 	.message_pass	= ps3_smp_message_pass,
 	.kick_cpu	= smp_generic_kick_cpu,
-	.setup_cpu	= ps3_smp_setup_cpu,
 };
 
 void smp_init_ps3(void)

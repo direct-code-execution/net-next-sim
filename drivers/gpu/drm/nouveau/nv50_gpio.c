@@ -25,73 +25,89 @@
 #include "drmP.h"
 #include "nouveau_drv.h"
 #include "nouveau_hw.h"
+#include "nouveau_gpio.h"
+
+#include "nv50_display.h"
 
 static int
-nv50_gpio_location(struct dcb_gpio_entry *gpio, uint32_t *reg, uint32_t *shift)
+nv50_gpio_location(int line, u32 *reg, u32 *shift)
 {
 	const uint32_t nv50_gpio_reg[4] = { 0xe104, 0xe108, 0xe280, 0xe284 };
 
-	if (gpio->line >= 32)
+	if (line >= 32)
 		return -EINVAL;
 
-	*reg = nv50_gpio_reg[gpio->line >> 3];
-	*shift = (gpio->line & 7) << 2;
+	*reg = nv50_gpio_reg[line >> 3];
+	*shift = (line & 7) << 2;
 	return 0;
 }
 
 int
-nv50_gpio_get(struct drm_device *dev, enum dcb_gpio_tag tag)
+nv50_gpio_drive(struct drm_device *dev, int line, int dir, int out)
 {
-	struct dcb_gpio_entry *gpio;
-	uint32_t r, s, v;
+	u32 reg, shift;
 
-	gpio = nouveau_bios_gpio_entry(dev, tag);
-	if (!gpio)
-		return -ENOENT;
-
-	if (nv50_gpio_location(gpio, &r, &s))
+	if (nv50_gpio_location(line, &reg, &shift))
 		return -EINVAL;
 
-	v = nv_rd32(dev, r) >> (s + 2);
-	return ((v & 1) == (gpio->state[1] & 1));
+	nv_mask(dev, reg, 7 << shift, (((dir ^ 1) << 1) | out) << shift);
+	return 0;
 }
 
 int
-nv50_gpio_set(struct drm_device *dev, enum dcb_gpio_tag tag, int state)
+nv50_gpio_sense(struct drm_device *dev, int line)
 {
-	struct dcb_gpio_entry *gpio;
-	uint32_t r, s, v;
+	u32 reg, shift;
 
-	gpio = nouveau_bios_gpio_entry(dev, tag);
-	if (!gpio)
-		return -ENOENT;
-
-	if (nv50_gpio_location(gpio, &r, &s))
+	if (nv50_gpio_location(line, &reg, &shift))
 		return -EINVAL;
 
-	v  = nv_rd32(dev, r) & ~(0x3 << s);
-	v |= (gpio->state[state] ^ 2) << s;
-	nv_wr32(dev, r, v);
-	return 0;
+	return !!(nv_rd32(dev, reg) & (4 << shift));
 }
 
 void
-nv50_gpio_irq_enable(struct drm_device *dev, enum dcb_gpio_tag tag, bool on)
+nv50_gpio_irq_enable(struct drm_device *dev, int line, bool on)
 {
-	struct dcb_gpio_entry *gpio;
-	u32 reg, mask;
-
-	gpio = nouveau_bios_gpio_entry(dev, tag);
-	if (!gpio) {
-		NV_ERROR(dev, "gpio tag 0x%02x not found\n", tag);
-		return;
-	}
-
-	reg  = gpio->line < 16 ? 0xe050 : 0xe070;
-	mask = 0x00010001 << (gpio->line & 0xf);
+	u32 reg  = line < 16 ? 0xe050 : 0xe070;
+	u32 mask = 0x00010001 << (line & 0xf);
 
 	nv_wr32(dev, reg + 4, mask);
 	nv_mask(dev, reg + 0, mask, on ? mask : 0);
+}
+
+int
+nvd0_gpio_drive(struct drm_device *dev, int line, int dir, int out)
+{
+	u32 data = ((dir ^ 1) << 13) | (out << 12);
+	nv_mask(dev, 0x00d610 + (line * 4), 0x00003000, data);
+	nv_mask(dev, 0x00d604, 0x00000001, 0x00000001); /* update? */
+	return 0;
+}
+
+int
+nvd0_gpio_sense(struct drm_device *dev, int line)
+{
+	return !!(nv_rd32(dev, 0x00d610 + (line * 4)) & 0x00004000);
+}
+
+static void
+nv50_gpio_isr(struct drm_device *dev)
+{
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	u32 intr0, intr1 = 0;
+	u32 hi, lo;
+
+	intr0 = nv_rd32(dev, 0xe054) & nv_rd32(dev, 0xe050);
+	if (dev_priv->chipset >= 0x90)
+		intr1 = nv_rd32(dev, 0xe074) & nv_rd32(dev, 0xe070);
+
+	hi = (intr0 & 0x0000ffff) | (intr1 << 16);
+	lo = (intr0 >> 16) | (intr1 & 0xffff0000);
+	nouveau_gpio_isr(dev, 0, hi | lo);
+
+	nv_wr32(dev, 0xe054, intr0);
+	if (dev_priv->chipset >= 0x90)
+		nv_wr32(dev, 0xe074, intr1);
 }
 
 int
@@ -107,5 +123,17 @@ nv50_gpio_init(struct drm_device *dev)
 		nv_wr32(dev, 0xe074, 0xffffffff);
 	}
 
+	nouveau_irq_register(dev, 21, nv50_gpio_isr);
 	return 0;
+}
+
+void
+nv50_gpio_fini(struct drm_device *dev)
+{
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+
+	nv_wr32(dev, 0xe050, 0x00000000);
+	if (dev_priv->chipset >= 0x90)
+		nv_wr32(dev, 0xe070, 0x00000000);
+	nouveau_irq_unregister(dev, 21);
 }

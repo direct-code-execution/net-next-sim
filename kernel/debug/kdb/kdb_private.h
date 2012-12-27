@@ -15,36 +15,12 @@
 #include <linux/kgdb.h>
 #include "../debug_core.h"
 
-/* Kernel Debugger Error codes.  Must not overlap with command codes. */
-#define KDB_NOTFOUND	(-1)
-#define KDB_ARGCOUNT	(-2)
-#define KDB_BADWIDTH	(-3)
-#define KDB_BADRADIX	(-4)
-#define KDB_NOTENV	(-5)
-#define KDB_NOENVVALUE	(-6)
-#define KDB_NOTIMP	(-7)
-#define KDB_ENVFULL	(-8)
-#define KDB_ENVBUFFULL	(-9)
-#define KDB_TOOMANYBPT	(-10)
-#define KDB_TOOMANYDBREGS (-11)
-#define KDB_DUPBPT	(-12)
-#define KDB_BPTNOTFOUND	(-13)
-#define KDB_BADMODE	(-14)
-#define KDB_BADINT	(-15)
-#define KDB_INVADDRFMT  (-16)
-#define KDB_BADREG      (-17)
-#define KDB_BADCPUNUM   (-18)
-#define KDB_BADLENGTH	(-19)
-#define KDB_NOBP	(-20)
-#define KDB_BADADDR	(-21)
-
 /* Kernel Debugger Command codes.  Must not overlap with error codes. */
 #define KDB_CMD_GO	(-1001)
 #define KDB_CMD_CPU	(-1002)
 #define KDB_CMD_SS	(-1003)
 #define KDB_CMD_SSB	(-1004)
 #define KDB_CMD_KGDB (-1005)
-#define KDB_CMD_KGDB2 (-1006)
 
 /* Internal debug flags */
 #define KDB_DEBUG_FLAG_BP	0x0002	/* Breakpoint subsystem debug */
@@ -93,17 +69,6 @@
  */
 #define KDB_MAXBPT	16
 
-/* Maximum number of arguments to a function  */
-#define KDB_MAXARGS    16
-
-typedef enum {
-	KDB_REPEAT_NONE = 0,	/* Do not repeat this command */
-	KDB_REPEAT_NO_ARGS,	/* Repeat the command without arguments */
-	KDB_REPEAT_WITH_ARGS,	/* Repeat the command including its arguments */
-} kdb_repeat_t;
-
-typedef int (*kdb_func_t)(int, const char **);
-
 /* Symbol table format returned by kallsyms. */
 typedef struct __ksymtab {
 		unsigned long value;	/* Address of symbol */
@@ -123,11 +88,6 @@ extern int kallsyms_symbol_next(char *prefix_name, int flag);
 extern int kallsyms_symbol_complete(char *prefix_name, int max_len);
 
 /* Exported Symbols for kernel loadable modules to use. */
-extern int kdb_register(char *, kdb_func_t, char *, char *, short);
-extern int kdb_register_repeat(char *, kdb_func_t, char *, char *,
-			       short, kdb_repeat_t);
-extern int kdb_unregister(char *);
-
 extern int kdb_getarea_size(void *, unsigned long, size_t);
 extern int kdb_putarea_size(unsigned long, void *, size_t);
 
@@ -144,6 +104,7 @@ extern int kdb_getword(unsigned long *, unsigned long, size_t);
 extern int kdb_putword(unsigned long, unsigned long, size_t);
 
 extern int kdbgetularg(const char *, unsigned long *);
+extern int kdbgetu64arg(const char *, u64 *);
 extern char *kdbgetenv(const char *);
 extern int kdbgetaddrarg(int, const char **, int*, unsigned long *,
 			 long *, char **);
@@ -184,7 +145,6 @@ extern int kdb_state;
 						 * keyboard on this cpu */
 #define KDB_STATE_KEXEC		0x00040000	/* kexec issued */
 #define KDB_STATE_DOING_KGDB	0x00080000	/* kgdb enter now issued */
-#define KDB_STATE_DOING_KGDB2	0x00100000	/* kgdb enter now issued */
 #define KDB_STATE_KGDB_TRANS	0x00200000	/* Transition to kgdb */
 #define KDB_STATE_ARCH		0xff000000	/* Reserved for arch
 						 * specific use */
@@ -255,15 +215,8 @@ extern void kdb_ps1(const struct task_struct *p);
 extern void kdb_print_nameval(const char *name, unsigned long val);
 extern void kdb_send_sig_info(struct task_struct *p, struct siginfo *info);
 extern void kdb_meminfo_proc_show(void);
-#ifdef CONFIG_KALLSYMS
-extern const char *kdb_walk_kallsyms(loff_t *pos);
-#else /* ! CONFIG_KALLSYMS */
-static inline const char *kdb_walk_kallsyms(loff_t *pos)
-{
-	return NULL;
-}
-#endif /* ! CONFIG_KALLSYMS */
 extern char *kdb_getstr(char *, size_t, char *);
+extern void kdb_gdb_state_pass(char *buf);
 
 /* Defines for kdb_symbol_print */
 #define KDB_SP_SPACEB	0x0001		/* Space before string */
@@ -293,6 +246,13 @@ extern void debug_kusage(void);
 
 extern void kdb_set_current_task(struct task_struct *);
 extern struct task_struct *kdb_current_task;
+
+#ifdef CONFIG_KDB_KEYBOARD
+extern void kdb_kbd_cleanup_state(void);
+#else /* ! CONFIG_KDB_KEYBOARD */
+#define kdb_kbd_cleanup_state()
+#endif /* ! CONFIG_KDB_KEYBOARD */
+
 #ifdef CONFIG_MODULES
 extern struct list_head *kdb_modules;
 #endif /* CONFIG_MODULES */

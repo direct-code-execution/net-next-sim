@@ -16,6 +16,8 @@
  *
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include "m5602_ov9650.h"
 
 static int ov9650_set_exposure(struct gspca_dev *gspca_dev, __s32 val);
@@ -121,8 +123,8 @@ static const struct ctrl ov9650_ctrls[] = {
 			.minimum	= 0x00,
 			.maximum	= 0x1ff,
 			.step		= 0x4,
-			.default_value 	= EXPOSURE_DEFAULT,
-			.flags         	= V4L2_CTRL_FLAG_SLIDER
+			.default_value	= EXPOSURE_DEFAULT,
+			.flags		= V4L2_CTRL_FLAG_SLIDER
 		},
 		.set = ov9650_set_exposure,
 		.get = ov9650_get_exposure
@@ -146,13 +148,13 @@ static const struct ctrl ov9650_ctrls[] = {
 	{
 		{
 			.id		= V4L2_CID_RED_BALANCE,
-			.type 		= V4L2_CTRL_TYPE_INTEGER,
-			.name 		= "red balance",
-			.minimum 	= 0x00,
-			.maximum 	= 0xff,
-			.step 		= 0x1,
-			.default_value 	= RED_GAIN_DEFAULT,
-			.flags         	= V4L2_CTRL_FLAG_SLIDER
+			.type		= V4L2_CTRL_TYPE_INTEGER,
+			.name		= "red balance",
+			.minimum	= 0x00,
+			.maximum	= 0xff,
+			.step		= 0x1,
+			.default_value	= RED_GAIN_DEFAULT,
+			.flags		= V4L2_CTRL_FLAG_SLIDER
 		},
 		.set = ov9650_set_red_balance,
 		.get = ov9650_get_red_balance
@@ -161,13 +163,13 @@ static const struct ctrl ov9650_ctrls[] = {
 	{
 		{
 			.id		= V4L2_CID_BLUE_BALANCE,
-			.type 		= V4L2_CTRL_TYPE_INTEGER,
-			.name 		= "blue balance",
-			.minimum 	= 0x00,
-			.maximum 	= 0xff,
-			.step 		= 0x1,
-			.default_value 	= BLUE_GAIN_DEFAULT,
-			.flags         	= V4L2_CTRL_FLAG_SLIDER
+			.type		= V4L2_CTRL_TYPE_INTEGER,
+			.name		= "blue balance",
+			.minimum	= 0x00,
+			.maximum	= 0xff,
+			.step		= 0x1,
+			.default_value	= BLUE_GAIN_DEFAULT,
+			.flags		= V4L2_CTRL_FLAG_SLIDER
 		},
 		.set = ov9650_set_blue_balance,
 		.get = ov9650_get_blue_balance
@@ -175,13 +177,13 @@ static const struct ctrl ov9650_ctrls[] = {
 #define HFLIP_IDX 4
 	{
 		{
-			.id 		= V4L2_CID_HFLIP,
-			.type 		= V4L2_CTRL_TYPE_BOOLEAN,
-			.name 		= "horizontal flip",
-			.minimum 	= 0,
-			.maximum 	= 1,
-			.step 		= 1,
-			.default_value 	= 0
+			.id		= V4L2_CID_HFLIP,
+			.type		= V4L2_CTRL_TYPE_BOOLEAN,
+			.name		= "horizontal flip",
+			.minimum	= 0,
+			.maximum	= 1,
+			.step		= 1,
+			.default_value	= 0
 		},
 		.set = ov9650_set_hflip,
 		.get = ov9650_get_hflip
@@ -189,13 +191,13 @@ static const struct ctrl ov9650_ctrls[] = {
 #define VFLIP_IDX 5
 	{
 		{
-			.id 		= V4L2_CID_VFLIP,
-			.type 		= V4L2_CTRL_TYPE_BOOLEAN,
-			.name 		= "vertical flip",
-			.minimum 	= 0,
-			.maximum 	= 1,
-			.step 		= 1,
-			.default_value 	= 0
+			.id		= V4L2_CID_VFLIP,
+			.type		= V4L2_CTRL_TYPE_BOOLEAN,
+			.name		= "vertical flip",
+			.minimum	= 0,
+			.maximum	= 1,
+			.step		= 1,
+			.default_value	= 0
 		},
 		.set = ov9650_set_vflip,
 		.get = ov9650_get_vflip
@@ -203,13 +205,13 @@ static const struct ctrl ov9650_ctrls[] = {
 #define AUTO_WHITE_BALANCE_IDX 6
 	{
 		{
-			.id 		= V4L2_CID_AUTO_WHITE_BALANCE,
-			.type 		= V4L2_CTRL_TYPE_BOOLEAN,
-			.name 		= "auto white balance",
-			.minimum 	= 0,
-			.maximum 	= 1,
-			.step 		= 1,
-			.default_value 	= 1
+			.id		= V4L2_CID_AUTO_WHITE_BALANCE,
+			.type		= V4L2_CTRL_TYPE_BOOLEAN,
+			.name		= "auto white balance",
+			.minimum	= 0,
+			.maximum	= 1,
+			.step		= 1,
+			.default_value	= 1
 		},
 		.set = ov9650_set_auto_white_balance,
 		.get = ov9650_get_auto_white_balance
@@ -217,13 +219,13 @@ static const struct ctrl ov9650_ctrls[] = {
 #define AUTO_GAIN_CTRL_IDX 7
 	{
 		{
-			.id 		= V4L2_CID_AUTOGAIN,
-			.type 		= V4L2_CTRL_TYPE_BOOLEAN,
-			.name 		= "auto gain control",
-			.minimum 	= 0,
-			.maximum 	= 1,
-			.step 		= 1,
-			.default_value 	= 1
+			.id		= V4L2_CID_AUTOGAIN,
+			.type		= V4L2_CTRL_TYPE_BOOLEAN,
+			.name		= "auto gain control",
+			.minimum	= 0,
+			.maximum	= 1,
+			.step		= 1,
+			.default_value	= 1
 		},
 		.set = ov9650_set_auto_gain,
 		.get = ov9650_get_auto_gain
@@ -231,13 +233,13 @@ static const struct ctrl ov9650_ctrls[] = {
 #define AUTO_EXPOSURE_IDX 8
 	{
 		{
-			.id 		= V4L2_CID_EXPOSURE_AUTO,
-			.type 		= V4L2_CTRL_TYPE_BOOLEAN,
-			.name 		= "auto exposure",
-			.minimum 	= 0,
-			.maximum 	= 1,
-			.step 		= 1,
-			.default_value 	= 1
+			.id		= V4L2_CID_EXPOSURE_AUTO,
+			.type		= V4L2_CTRL_TYPE_BOOLEAN,
+			.name		= "auto exposure",
+			.minimum	= 0,
+			.maximum	= 1,
+			.step		= 1,
+			.default_value	= 1
 		},
 		.set = ov9650_set_auto_exposure,
 		.get = ov9650_get_auto_exposure
@@ -299,7 +301,7 @@ int ov9650_probe(struct sd *sd)
 
 	if (force_sensor) {
 		if (force_sensor == OV9650_SENSOR) {
-			info("Forcing an %s sensor", ov9650.name);
+			pr_info("Forcing an %s sensor\n", ov9650.name);
 			goto sensor_found;
 		}
 		/* If we want to force another sensor,
@@ -330,7 +332,7 @@ int ov9650_probe(struct sd *sd)
 		return -ENODEV;
 
 	if ((prod_id == 0x96) && (ver_id == 0x52)) {
-		info("Detected an ov9650 sensor");
+		pr_info("Detected an ov9650 sensor\n");
 		goto sensor_found;
 	}
 	return -ENODEV;
@@ -624,7 +626,7 @@ static int ov9650_set_gain(struct gspca_dev *gspca_dev, __s32 val)
 
 	/* Mask away all uninteresting bits */
 	i2c_data = ((val & 0x0300) >> 2) |
-			(i2c_data & 0x3F);
+			(i2c_data & 0x3f);
 	err = m5602_write_sensor(sd, OV9650_VREF, &i2c_data, 1);
 	if (err < 0)
 		return err;
@@ -850,17 +852,16 @@ static int ov9650_set_auto_gain(struct gspca_dev *gspca_dev, __s32 val)
 static void ov9650_dump_registers(struct sd *sd)
 {
 	int address;
-	info("Dumping the ov9650 register state");
+	pr_info("Dumping the ov9650 register state\n");
 	for (address = 0; address < 0xa9; address++) {
 		u8 value;
 		m5602_read_sensor(sd, address, &value, 1);
-		info("register 0x%x contains 0x%x",
-		     address, value);
+		pr_info("register 0x%x contains 0x%x\n", address, value);
 	}
 
-	info("ov9650 register state dump complete");
+	pr_info("ov9650 register state dump complete\n");
 
-	info("Probing for which registers that are read/write");
+	pr_info("Probing for which registers that are read/write\n");
 	for (address = 0; address < 0xff; address++) {
 		u8 old_value, ctrl_value;
 		u8 test_value[2] = {0xff, 0xff};
@@ -870,9 +871,9 @@ static void ov9650_dump_registers(struct sd *sd)
 		m5602_read_sensor(sd, address, &ctrl_value, 1);
 
 		if (ctrl_value == test_value[0])
-			info("register 0x%x is writeable", address);
+			pr_info("register 0x%x is writeable\n", address);
 		else
-			info("register 0x%x is read only", address);
+			pr_info("register 0x%x is read only\n", address);
 
 		/* Restore original value */
 		m5602_write_sensor(sd, address, &old_value, 1);

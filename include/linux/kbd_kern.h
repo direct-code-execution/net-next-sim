@@ -7,8 +7,6 @@
 
 extern struct tasklet_struct keyboard_tasklet;
 
-extern int shift_state;
-
 extern char *func_table[MAX_NR_FUNC];
 extern char func_buf[];
 extern char *funcbufptr;
@@ -50,11 +48,12 @@ struct kbd_struct {
 #define VC_CAPSLOCK	2	/* capslock mode */
 #define VC_KANALOCK	3	/* kanalock mode */
 
-	unsigned char kbdmode:2;	/* one 2-bit value */
+	unsigned char kbdmode:3;	/* one 3-bit value */
 #define VC_XLATE	0	/* translate keycodes using keymap */
 #define VC_MEDIUMRAW	1	/* medium raw (keycode) mode */
 #define VC_RAW		2	/* raw (scancode) mode */
 #define VC_UNICODE	3	/* Unicode mode */
+#define VC_OFF		4	/* disabled mode */
 
 	unsigned char modeflags:5;
 #define VC_APPLIC	0	/* application key mode */
@@ -63,8 +62,6 @@ struct kbd_struct {
 #define VC_CRLF		3	/* 0 - enter sends CR, 1 - enter sends CRLF */
 #define VC_META		4	/* 0 - meta, 1 - meta=prefix with ESC */
 };
-
-extern struct kbd_struct kbd_table[];
 
 extern int kbd_init(void);
 
@@ -78,6 +75,7 @@ extern void (*kbd_ledfunc)(unsigned int led);
 extern int set_console(int nr);
 extern void schedule_console_callback(void);
 
+/* FIXME: review locking for vt.c callers */
 static inline void set_leds(void)
 {
 	tasklet_schedule(&keyboard_tasklet);
@@ -141,8 +139,6 @@ static inline void chg_vc_kbd_led(struct kbd_struct * kbd, int flag)
 
 struct console;
 
-int getkeycode(unsigned int scancode);
-int setkeycode(unsigned int scancode, unsigned int keycode);
 void compute_shiftstate(void);
 
 /* defkeymap.c */
@@ -158,7 +154,7 @@ static inline void con_schedule_flip(struct tty_struct *t)
 	if (t->buf.tail != NULL)
 		t->buf.tail->commit = t->buf.tail->used;
 	spin_unlock_irqrestore(&t->buf.lock, flags);
-	schedule_delayed_work(&t->buf.work, 0);
+	schedule_work(&t->buf.work);
 }
 
 #endif

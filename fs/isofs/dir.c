@@ -10,7 +10,6 @@
  *
  *  isofs directory handling functions
  */
-#include <linux/smp_lock.h>
 #include <linux/gfp.h>
 #include "isofs.h"
 
@@ -260,13 +259,11 @@ static int isofs_readdir(struct file *filp,
 	if (tmpname == NULL)
 		return -ENOMEM;
 
-	lock_kernel();
 	tmpde = (struct iso_directory_record *) (tmpname+1024);
 
 	result = do_isofs_readdir(inode, filp, dirent, filldir, tmpname, tmpde);
 
 	free_page((unsigned long) tmpname);
-	unlock_kernel();
 	return result;
 }
 

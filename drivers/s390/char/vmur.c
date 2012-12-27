@@ -13,7 +13,7 @@
 
 #include <linux/cdev.h>
 #include <linux/slab.h>
-#include <linux/smp_lock.h>
+#include <linux/module.h>
 
 #include <asm/uaccess.h>
 #include <asm/cio.h>
@@ -64,14 +64,17 @@ static int ur_set_offline(struct ccw_device *cdev);
 static int ur_pm_suspend(struct ccw_device *cdev);
 
 static struct ccw_driver ur_driver = {
-	.name		= "vmur",
-	.owner		= THIS_MODULE,
+	.driver = {
+		.name	= "vmur",
+		.owner	= THIS_MODULE,
+	},
 	.ids		= ur_ids,
 	.probe		= ur_probe,
 	.remove		= ur_remove,
 	.set_online	= ur_set_online,
 	.set_offline	= ur_set_offline,
 	.freeze		= ur_pm_suspend,
+	.int_class	= IOINT_VMR,
 };
 
 static DEFINE_MUTEX(vmur_mutex);
@@ -900,7 +903,7 @@ static int ur_set_online(struct ccw_device *cdev)
 		goto fail_urdev_put;
 	}
 
-	cdev_init(urd->char_device, &ur_fops);
+	urd->char_device->ops = &ur_fops;
 	urd->char_device->dev = MKDEV(major, minor);
 	urd->char_device->owner = ur_fops.owner;
 

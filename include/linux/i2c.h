@@ -17,7 +17,8 @@
 
     You should have received a copy of the GNU General Public License
     along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.		     */
+    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+    MA 02110-1301 USA.							     */
 /* ------------------------------------------------------------------------- */
 
 /* With some changes from Kyösti Mälkki <kmalkki@cc.hut.fi> and
@@ -28,13 +29,12 @@
 
 #include <linux/types.h>
 #ifdef __KERNEL__
-#include <linux/module.h>
-#include <linux/i2c-id.h>
 #include <linux/mod_devicetable.h>
 #include <linux/device.h>	/* for struct device */
 #include <linux/sched.h>	/* for completion */
 #include <linux/mutex.h>
 #include <linux/of.h>		/* for struct device_node */
+#include <linux/swab.h>		/* for swab16 */
 
 extern struct bus_type i2c_bus_type;
 extern struct device_type i2c_adapter_type;
@@ -49,6 +49,8 @@ struct i2c_driver;
 union i2c_smbus_data;
 struct i2c_board_info;
 
+struct module;
+
 #if defined(CONFIG_I2C) || defined(CONFIG_I2C_MODULE)
 /*
  * The master routines are the ones normally used to transmit data to devices
@@ -57,9 +59,10 @@ struct i2c_board_info;
  * transmit an arbitrary number of messages without interruption.
  * @count must be be less than 64k since msg.len is u16.
  */
-extern int i2c_master_send(struct i2c_client *client, const char *buf,
+extern int i2c_master_send(const struct i2c_client *client, const char *buf,
 			   int count);
-extern int i2c_master_recv(struct i2c_client *client, char *buf, int count);
+extern int i2c_master_recv(const struct i2c_client *client, char *buf,
+			   int count);
 
 /* Transfer num messages.
  */
@@ -78,23 +81,41 @@ extern s32 i2c_smbus_xfer(struct i2c_adapter *adapter, u16 addr,
 /* Now follow the 'nice' access routines. These also document the calling
    conventions of i2c_smbus_xfer. */
 
-extern s32 i2c_smbus_read_byte(struct i2c_client *client);
-extern s32 i2c_smbus_write_byte(struct i2c_client *client, u8 value);
-extern s32 i2c_smbus_read_byte_data(struct i2c_client *client, u8 command);
-extern s32 i2c_smbus_write_byte_data(struct i2c_client *client,
+extern s32 i2c_smbus_read_byte(const struct i2c_client *client);
+extern s32 i2c_smbus_write_byte(const struct i2c_client *client, u8 value);
+extern s32 i2c_smbus_read_byte_data(const struct i2c_client *client,
+				    u8 command);
+extern s32 i2c_smbus_write_byte_data(const struct i2c_client *client,
 				     u8 command, u8 value);
-extern s32 i2c_smbus_read_word_data(struct i2c_client *client, u8 command);
-extern s32 i2c_smbus_write_word_data(struct i2c_client *client,
+extern s32 i2c_smbus_read_word_data(const struct i2c_client *client,
+				    u8 command);
+extern s32 i2c_smbus_write_word_data(const struct i2c_client *client,
 				     u8 command, u16 value);
+
+static inline s32
+i2c_smbus_read_word_swapped(const struct i2c_client *client, u8 command)
+{
+	s32 value = i2c_smbus_read_word_data(client, command);
+
+	return (value < 0) ? value : swab16(value);
+}
+
+static inline s32
+i2c_smbus_write_word_swapped(const struct i2c_client *client,
+			     u8 command, u16 value)
+{
+	return i2c_smbus_write_word_data(client, command, swab16(value));
+}
+
 /* Returns the number of read bytes */
-extern s32 i2c_smbus_read_block_data(struct i2c_client *client,
+extern s32 i2c_smbus_read_block_data(const struct i2c_client *client,
 				     u8 command, u8 *values);
-extern s32 i2c_smbus_write_block_data(struct i2c_client *client,
+extern s32 i2c_smbus_write_block_data(const struct i2c_client *client,
 				      u8 command, u8 length, const u8 *values);
 /* Returns the number of read bytes */
-extern s32 i2c_smbus_read_i2c_block_data(struct i2c_client *client,
+extern s32 i2c_smbus_read_i2c_block_data(const struct i2c_client *client,
 					 u8 command, u8 length, u8 *values);
-extern s32 i2c_smbus_write_i2c_block_data(struct i2c_client *client,
+extern s32 i2c_smbus_write_i2c_block_data(const struct i2c_client *client,
 					  u8 command, u8 length,
 					  const u8 *values);
 #endif /* I2C */
@@ -102,8 +123,8 @@ extern s32 i2c_smbus_write_i2c_block_data(struct i2c_client *client,
 /**
  * struct i2c_driver - represent an I2C device driver
  * @class: What kind of i2c device we instantiate (for detect)
- * @attach_adapter: Callback for bus addition (for legacy drivers)
- * @detach_adapter: Callback for bus removal (for legacy drivers)
+ * @attach_adapter: Callback for bus addition (deprecated)
+ * @detach_adapter: Callback for bus removal (deprecated)
  * @probe: Callback for device binding
  * @remove: Callback for device unbinding
  * @shutdown: Callback for device shutdown
@@ -141,11 +162,11 @@ struct i2c_driver {
 	unsigned int class;
 
 	/* Notifies the driver that a new bus has appeared or is about to be
-	 * removed. You should avoid using this if you can, it will probably
-	 * be removed in a near future.
+	 * removed. You should avoid using this, it will be removed in a
+	 * near future.
 	 */
-	int (*attach_adapter)(struct i2c_adapter *);
-	int (*detach_adapter)(struct i2c_adapter *);
+	int (*attach_adapter)(struct i2c_adapter *) __deprecated;
+	int (*detach_adapter)(struct i2c_adapter *) __deprecated;
 
 	/* Standard driver model interfaces */
 	int (*probe)(struct i2c_client *, const struct i2c_device_id *);
@@ -255,9 +276,7 @@ struct i2c_board_info {
 	unsigned short	addr;
 	void		*platform_data;
 	struct dev_archdata	*archdata;
-#ifdef CONFIG_OF
 	struct device_node *of_node;
-#endif
 	int		irq;
 };
 
@@ -353,7 +372,6 @@ struct i2c_algorithm {
  */
 struct i2c_adapter {
 	struct module *owner;
-	unsigned int id;
 	unsigned int class;		  /* classes to allow probing for */
 	const struct i2c_algorithm *algo; /* the algorithm to access the bus */
 	void *algo_data;
@@ -384,12 +402,18 @@ static inline void i2c_set_adapdata(struct i2c_adapter *dev, void *data)
 	dev_set_drvdata(&dev->dev, data);
 }
 
-static inline int i2c_parent_is_i2c_adapter(const struct i2c_adapter *adapter)
+static inline struct i2c_adapter *
+i2c_parent_is_i2c_adapter(const struct i2c_adapter *adapter)
 {
-	return adapter->dev.parent != NULL
-		&& adapter->dev.parent->bus == &i2c_bus_type
-		&& adapter->dev.parent->type == &i2c_adapter_type;
+	struct device *parent = adapter->dev.parent;
+
+	if (parent != NULL && parent->type == &i2c_adapter_type)
+		return to_i2c_adapter(parent);
+	else
+		return NULL;
 }
+
+int i2c_for_each_dev(void *data, int (*fn)(struct device *, void *));
 
 /* Adapter locking functions, exported for shared pin cases */
 void i2c_lock_adapter(struct i2c_adapter *);
@@ -403,16 +427,11 @@ void i2c_unlock_adapter(struct i2c_adapter *);
 
 /* i2c adapter classes (bitmask) */
 #define I2C_CLASS_HWMON		(1<<0)	/* lm_sensors, ... */
-#define I2C_CLASS_TV_ANALOG	(1<<1)	/* bttv + friends */
-#define I2C_CLASS_TV_DIGITAL	(1<<2)	/* dvb cards */
 #define I2C_CLASS_DDC		(1<<3)	/* DDC bus on graphics adapters */
-#define I2C_CLASS_SPD		(1<<7)	/* SPD EEPROMs and similar */
+#define I2C_CLASS_SPD		(1<<7)	/* Memory modules */
 
 /* Internal numbers to terminate lists */
 #define I2C_CLIENT_END		0xfffeU
-
-/* The numbers to use to set I2C bus address */
-#define ANY_I2C_BUS		0xffff
 
 /* Construct an I2C_CLIENT_END-terminated array of i2c addresses */
 #define I2C_ADDRS(addr, addrs...) \
@@ -431,10 +450,9 @@ extern int i2c_add_numbered_adapter(struct i2c_adapter *);
 extern int i2c_register_driver(struct module *, struct i2c_driver *);
 extern void i2c_del_driver(struct i2c_driver *);
 
-static inline int i2c_add_driver(struct i2c_driver *driver)
-{
-	return i2c_register_driver(THIS_MODULE, driver);
-}
+/* use a define to avoid include chaining to get THIS_MODULE */
+#define i2c_add_driver(driver) \
+	i2c_register_driver(THIS_MODULE, driver)
 
 extern struct i2c_client *i2c_use_client(struct i2c_client *client);
 extern void i2c_release_client(struct i2c_client *client);
@@ -444,7 +462,7 @@ extern void i2c_release_client(struct i2c_client *client);
 extern void i2c_clients_command(struct i2c_adapter *adap,
 				unsigned int cmd, void *arg);
 
-extern struct i2c_adapter *i2c_get_adapter(int id);
+extern struct i2c_adapter *i2c_get_adapter(int nr);
 extern void i2c_put_adapter(struct i2c_adapter *adap);
 
 
@@ -465,6 +483,19 @@ static inline int i2c_adapter_id(struct i2c_adapter *adap)
 {
 	return adap->nr;
 }
+
+/**
+ * module_i2c_driver() - Helper macro for registering a I2C driver
+ * @__i2c_driver: i2c_driver struct
+ *
+ * Helper macro for I2C drivers which do not do anything special in module
+ * init/exit. This eliminates a lot of boilerplate. Each module may only
+ * use this macro once, and calling it replaces module_init() and module_exit()
+ */
+#define module_i2c_driver(__i2c_driver) \
+	module_driver(__i2c_driver, i2c_add_driver, \
+			i2c_del_driver)
+
 #endif /* I2C */
 #endif /* __KERNEL__ */
 

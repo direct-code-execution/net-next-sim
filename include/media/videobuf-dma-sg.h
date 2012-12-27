@@ -34,7 +34,7 @@
  *	does memory allocation too using vmalloc_32().
  *
  * videobuf_dma_*()
- *	see Documentation/PCI/PCI-DMA-mapping.txt, these functions to
+ *	see Documentation/DMA-API-HOWTO.txt, these functions to
  *	basically the same.  The map function does also build a
  *	scatterlist for the buffer (and unmap frees it ...)
  *
@@ -103,7 +103,8 @@ void videobuf_queue_sg_init(struct videobuf_queue *q,
 			 enum v4l2_buf_type type,
 			 enum v4l2_field field,
 			 unsigned int msize,
-			 void *priv);
+			 void *priv,
+			 struct mutex *ext_lock);
 
 #endif /* _VIDEOBUF_DMA_SG_H */
 

@@ -9,6 +9,7 @@
 #include <linux/mm.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>
+#include <linux/export.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/of.h>
@@ -97,7 +98,7 @@ void sbus_set_sbus64(struct device *dev, int bursts)
 
 	default:
 		return;
-	};
+	}
 
 	val = upa_readq(cfg_reg);
 	if (val & (1UL << 14UL)) {
@@ -244,7 +245,7 @@ static unsigned int sbus_build_irq(struct platform_device *op, unsigned int ino)
 		case 3:
 			iclr = reg_base + SYSIO_ICLR_SLOT3;
 			break;
-		};
+		}
 
 		iclr += ((unsigned long)sbus_level - 1UL) * 8UL;
 	}

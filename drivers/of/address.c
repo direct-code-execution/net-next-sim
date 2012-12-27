@@ -12,13 +12,13 @@
 			(ns) > 0)
 
 static struct of_bus *of_match_bus(struct device_node *np);
-static int __of_address_to_resource(struct device_node *dev, const u32 *addrp,
-				    u64 size, unsigned int flags,
-				    struct resource *r);
+static int __of_address_to_resource(struct device_node *dev,
+		const __be32 *addrp, u64 size, unsigned int flags,
+		const char *name, struct resource *r);
 
 /* Debug utility */
 #ifdef DEBUG
-static void of_dump_addr(const char *s, const u32 *addr, int na)
+static void of_dump_addr(const char *s, const __be32 *addr, int na)
 {
 	printk(KERN_DEBUG "%s", s);
 	while (na--)
@@ -26,7 +26,7 @@ static void of_dump_addr(const char *s, const u32 *addr, int na)
 	printk("\n");
 }
 #else
-static void of_dump_addr(const char *s, const u32 *addr, int na) { }
+static void of_dump_addr(const char *s, const __be32 *addr, int na) { }
 #endif
 
 /* Callbacks for bus specific translators */
@@ -36,10 +36,10 @@ struct of_bus {
 	int		(*match)(struct device_node *parent);
 	void		(*count_cells)(struct device_node *child,
 				       int *addrc, int *sizec);
-	u64		(*map)(u32 *addr, const u32 *range,
+	u64		(*map)(u32 *addr, const __be32 *range,
 				int na, int ns, int pna);
 	int		(*translate)(u32 *addr, u64 offset, int na);
-	unsigned int	(*get_flags)(const u32 *addr);
+	unsigned int	(*get_flags)(const __be32 *addr);
 };
 
 /*
@@ -55,7 +55,7 @@ static void of_bus_default_count_cells(struct device_node *dev,
 		*sizec = of_n_size_cells(dev);
 }
 
-static u64 of_bus_default_map(u32 *addr, const u32 *range,
+static u64 of_bus_default_map(u32 *addr, const __be32 *range,
 		int na, int ns, int pna)
 {
 	u64 cp, s, da;
@@ -85,7 +85,7 @@ static int of_bus_default_translate(u32 *addr, u64 offset, int na)
 	return 0;
 }
 
-static unsigned int of_bus_default_get_flags(const u32 *addr)
+static unsigned int of_bus_default_get_flags(const __be32 *addr)
 {
 	return IORESOURCE_MEM;
 }
@@ -110,10 +110,10 @@ static void of_bus_pci_count_cells(struct device_node *np,
 		*sizec = 2;
 }
 
-static unsigned int of_bus_pci_get_flags(const u32 *addr)
+static unsigned int of_bus_pci_get_flags(const __be32 *addr)
 {
 	unsigned int flags = 0;
-	u32 w = addr[0];
+	u32 w = be32_to_cpup(addr);
 
 	switch((w >> 24) & 0x03) {
 	case 0x01:
@@ -129,7 +129,8 @@ static unsigned int of_bus_pci_get_flags(const u32 *addr)
 	return flags;
 }
 
-static u64 of_bus_pci_map(u32 *addr, const u32 *range, int na, int ns, int pna)
+static u64 of_bus_pci_map(u32 *addr, const __be32 *range, int na, int ns,
+		int pna)
 {
 	u64 cp, s, da;
 	unsigned int af, rf;
@@ -160,10 +161,10 @@ static int of_bus_pci_translate(u32 *addr, u64 offset, int na)
 	return of_bus_default_translate(addr + 1, offset, na - 1);
 }
 
-const u32 *of_get_pci_address(struct device_node *dev, int bar_no, u64 *size,
+const __be32 *of_get_pci_address(struct device_node *dev, int bar_no, u64 *size,
 			unsigned int *flags)
 {
-	const u32 *prop;
+	const __be32 *prop;
 	unsigned int psize;
 	struct device_node *parent;
 	struct of_bus *bus;
@@ -207,14 +208,14 @@ EXPORT_SYMBOL(of_get_pci_address);
 int of_pci_address_to_resource(struct device_node *dev, int bar,
 			       struct resource *r)
 {
-	const u32	*addrp;
+	const __be32	*addrp;
 	u64		size;
 	unsigned int	flags;
 
 	addrp = of_get_pci_address(dev, bar, &size, &flags);
 	if (addrp == NULL)
 		return -EINVAL;
-	return __of_address_to_resource(dev, addrp, size, flags, r);
+	return __of_address_to_resource(dev, addrp, size, flags, NULL, r);
 }
 EXPORT_SYMBOL_GPL(of_pci_address_to_resource);
 #endif /* CONFIG_PCI */
@@ -237,12 +238,13 @@ static void of_bus_isa_count_cells(struct device_node *child,
 		*sizec = 1;
 }
 
-static u64 of_bus_isa_map(u32 *addr, const u32 *range, int na, int ns, int pna)
+static u64 of_bus_isa_map(u32 *addr, const __be32 *range, int na, int ns,
+		int pna)
 {
 	u64 cp, s, da;
 
 	/* Check address type match */
-	if ((addr[0] ^ range[0]) & 0x00000001)
+	if ((addr[0] ^ range[0]) & cpu_to_be32(1))
 		return OF_BAD_ADDR;
 
 	/* Read address values, skipping high cell */
@@ -264,10 +266,10 @@ static int of_bus_isa_translate(u32 *addr, u64 offset, int na)
 	return of_bus_default_translate(addr + 1, offset, na - 1);
 }
 
-static unsigned int of_bus_isa_get_flags(const u32 *addr)
+static unsigned int of_bus_isa_get_flags(const __be32 *addr)
 {
 	unsigned int flags = 0;
-	u32 w = addr[0];
+	u32 w = be32_to_cpup(addr);
 
 	if (w & 1)
 		flags |= IORESOURCE_IO;
@@ -330,7 +332,7 @@ static int of_translate_one(struct device_node *parent, struct of_bus *bus,
 			    struct of_bus *pbus, u32 *addr,
 			    int na, int ns, int pna, const char *rprop)
 {
-	const u32 *ranges;
+	const __be32 *ranges;
 	unsigned int rlen;
 	int rone;
 	u64 offset = OF_BAD_ADDR;
@@ -398,7 +400,7 @@ static int of_translate_one(struct device_node *parent, struct of_bus *bus,
  * that can be mapped to a cpu physical address). This is not really specified
  * that way, but this is traditionally the way IBM at least do things
  */
-u64 __of_translate_address(struct device_node *dev, const u32 *in_addr,
+u64 __of_translate_address(struct device_node *dev, const __be32 *in_addr,
 			   const char *rprop)
 {
 	struct device_node *parent = NULL;
@@ -475,22 +477,22 @@ u64 __of_translate_address(struct device_node *dev, const u32 *in_addr,
 	return result;
 }
 
-u64 of_translate_address(struct device_node *dev, const u32 *in_addr)
+u64 of_translate_address(struct device_node *dev, const __be32 *in_addr)
 {
 	return __of_translate_address(dev, in_addr, "ranges");
 }
 EXPORT_SYMBOL(of_translate_address);
 
-u64 of_translate_dma_address(struct device_node *dev, const u32 *in_addr)
+u64 of_translate_dma_address(struct device_node *dev, const __be32 *in_addr)
 {
 	return __of_translate_address(dev, in_addr, "dma-ranges");
 }
 EXPORT_SYMBOL(of_translate_dma_address);
 
-const u32 *of_get_address(struct device_node *dev, int index, u64 *size,
+const __be32 *of_get_address(struct device_node *dev, int index, u64 *size,
 		    unsigned int *flags)
 {
-	const u32 *prop;
+	const __be32 *prop;
 	unsigned int psize;
 	struct device_node *parent;
 	struct of_bus *bus;
@@ -525,9 +527,9 @@ const u32 *of_get_address(struct device_node *dev, int index, u64 *size,
 }
 EXPORT_SYMBOL(of_get_address);
 
-static int __of_address_to_resource(struct device_node *dev, const u32 *addrp,
-				    u64 size, unsigned int flags,
-				    struct resource *r)
+static int __of_address_to_resource(struct device_node *dev,
+		const __be32 *addrp, u64 size, unsigned int flags,
+		const char *name, struct resource *r)
 {
 	u64 taddr;
 
@@ -549,7 +551,8 @@ static int __of_address_to_resource(struct device_node *dev, const u32 *addrp,
 		r->end = taddr + size - 1;
 	}
 	r->flags = flags;
-	r->name = dev->full_name;
+	r->name = name ? name : dev->full_name;
+
 	return 0;
 }
 
@@ -564,16 +567,39 @@ static int __of_address_to_resource(struct device_node *dev, const u32 *addrp,
 int of_address_to_resource(struct device_node *dev, int index,
 			   struct resource *r)
 {
-	const u32	*addrp;
+	const __be32	*addrp;
 	u64		size;
 	unsigned int	flags;
+	const char	*name = NULL;
 
 	addrp = of_get_address(dev, index, &size, &flags);
 	if (addrp == NULL)
 		return -EINVAL;
-	return __of_address_to_resource(dev, addrp, size, flags, r);
+
+	/* Get optional "reg-names" property to add a name to a resource */
+	of_property_read_string_index(dev, "reg-names",	index, &name);
+
+	return __of_address_to_resource(dev, addrp, size, flags, name, r);
 }
 EXPORT_SYMBOL_GPL(of_address_to_resource);
+
+struct device_node *of_find_matching_node_by_address(struct device_node *from,
+					const struct of_device_id *matches,
+					u64 base_address)
+{
+	struct device_node *dn = of_find_matching_node(from, matches);
+	struct resource res;
+
+	while (dn) {
+		if (of_address_to_resource(dn, 0, &res))
+			continue;
+		if (res.start == base_address)
+			return dn;
+		dn = of_find_matching_node(dn, matches);
+	}
+
+	return NULL;
+}
 
 
 /**
@@ -590,6 +616,6 @@ void __iomem *of_iomap(struct device_node *np, int index)
 	if (of_address_to_resource(np, index, &res))
 		return NULL;
 
-	return ioremap(res.start, 1 + res.end - res.start);
+	return ioremap(res.start, resource_size(&res));
 }
 EXPORT_SYMBOL(of_iomap);

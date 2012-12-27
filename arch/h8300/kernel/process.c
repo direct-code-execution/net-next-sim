@@ -28,7 +28,6 @@
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/stddef.h>
 #include <linux/unistd.h>
 #include <linux/ptrace.h>
@@ -39,7 +38,6 @@
 #include <linux/slab.h>
 
 #include <asm/uaccess.h>
-#include <asm/system.h>
 #include <asm/traps.h>
 #include <asm/setup.h>
 #include <asm/pgtable.h>
@@ -82,9 +80,7 @@ void cpu_idle(void)
 	while (1) {
 		while (!need_resched())
 			idle();
-		preempt_enable_no_resched();
-		schedule();
-		preempt_disable();
+		schedule_preempt_disabled();
 	}
 }
 

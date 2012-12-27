@@ -17,8 +17,6 @@
 #include <linux/module.h>
 #include <linux/init.h>
 
-#include <linux/spinlock.h>
-#include <linux/sysdev.h>
 #include <linux/io.h>
 #include <linux/gpio.h>
 #include <linux/delay.h>
@@ -29,6 +27,8 @@
 #include <linux/seq_file.h>
 
 #include <asm/mach-jz4740/base.h>
+
+#include "irq.h"
 
 #define JZ4740_GPIO_BASE_A (32*0)
 #define JZ4740_GPIO_BASE_B (32*1)
@@ -77,17 +77,11 @@
 struct jz_gpio_chip {
 	unsigned int irq;
 	unsigned int irq_base;
-	uint32_t wakeup;
-	uint32_t suspend_mask;
 	uint32_t edge_trigger_both;
 
 	void __iomem *base;
 
-	spinlock_t lock;
-
 	struct gpio_chip gpio_chip;
-	struct irq_chip irq_chip;
-	struct sys_device sysdev;
 };
 
 static struct jz_gpio_chip jz4740_gpio_chips[];
@@ -102,9 +96,10 @@ static inline struct jz_gpio_chip *gpio_chip_to_jz_gpio_chip(struct gpio_chip *g
 	return container_of(gpio_chip, struct jz_gpio_chip, gpio_chip);
 }
 
-static inline struct jz_gpio_chip *irq_to_jz_gpio_chip(unsigned int irq)
+static inline struct jz_gpio_chip *irq_to_jz_gpio_chip(struct irq_data *data)
 {
-	return get_irq_chip_data(irq);
+	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(data);
+	return gc->private;
 }
 
 static inline void jz_gpio_write_bit(unsigned int gpio, unsigned int reg)
@@ -306,81 +301,54 @@ static void jz_gpio_irq_demux_handler(unsigned int irq, struct irq_desc *desc)
 {
 	uint32_t flag;
 	unsigned int gpio_irq;
-	unsigned int gpio_bank;
-	struct jz_gpio_chip *chip = get_irq_desc_data(desc);
-
-	gpio_bank = JZ4740_IRQ_GPIO0 - irq;
+	struct jz_gpio_chip *chip = irq_desc_get_handler_data(desc);
 
 	flag = readl(chip->base + JZ_REG_GPIO_FLAG);
-
 	if (!flag)
 		return;
 
-	gpio_irq = __fls(flag);
+	gpio_irq = chip->irq_base + __fls(flag);
 
-	jz_gpio_check_trigger_both(chip, irq);
-
-	gpio_irq += (gpio_bank << 5) + JZ4740_IRQ_GPIO(0);
+	jz_gpio_check_trigger_both(chip, gpio_irq);
 
 	generic_handle_irq(gpio_irq);
 };
 
-static inline void jz_gpio_set_irq_bit(unsigned int irq, unsigned int reg)
+static inline void jz_gpio_set_irq_bit(struct irq_data *data, unsigned int reg)
 {
-	struct jz_gpio_chip *chip = irq_to_jz_gpio_chip(irq);
-	writel(IRQ_TO_BIT(irq), chip->base + reg);
+	struct jz_gpio_chip *chip = irq_to_jz_gpio_chip(data);
+	writel(IRQ_TO_BIT(data->irq), chip->base + reg);
 }
 
-static void jz_gpio_irq_mask(unsigned int irq)
+static void jz_gpio_irq_unmask(struct irq_data *data)
 {
-	jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_MASK_SET);
-};
+	struct jz_gpio_chip *chip = irq_to_jz_gpio_chip(data);
 
-static void jz_gpio_irq_unmask(unsigned int irq)
-{
-	struct jz_gpio_chip *chip = irq_to_jz_gpio_chip(irq);
-
-	jz_gpio_check_trigger_both(chip, irq);
-
-	jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_MASK_CLEAR);
+	jz_gpio_check_trigger_both(chip, data->irq);
+	irq_gc_unmask_enable_reg(data);
 };
 
 /* TODO: Check if function is gpio */
-static unsigned int jz_gpio_irq_startup(unsigned int irq)
+static unsigned int jz_gpio_irq_startup(struct irq_data *data)
 {
-	struct irq_desc *desc = irq_to_desc(irq);
-
-	jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_SELECT_SET);
-
-	desc->status &= ~IRQ_MASKED;
-	jz_gpio_irq_unmask(irq);
-
+	jz_gpio_set_irq_bit(data, JZ_REG_GPIO_SELECT_SET);
+	jz_gpio_irq_unmask(data);
 	return 0;
 }
 
-static void jz_gpio_irq_shutdown(unsigned int irq)
+static void jz_gpio_irq_shutdown(struct irq_data *data)
 {
-	struct irq_desc *desc = irq_to_desc(irq);
-
-	jz_gpio_irq_mask(irq);
-	desc->status |= IRQ_MASKED;
+	irq_gc_mask_disable_reg(data);
 
 	/* Set direction to input */
-	jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_DIRECTION_CLEAR);
-	jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_SELECT_CLEAR);
+	jz_gpio_set_irq_bit(data, JZ_REG_GPIO_DIRECTION_CLEAR);
+	jz_gpio_set_irq_bit(data, JZ_REG_GPIO_SELECT_CLEAR);
 }
 
-static void jz_gpio_irq_ack(unsigned int irq)
+static int jz_gpio_irq_set_type(struct irq_data *data, unsigned int flow_type)
 {
-	jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_FLAG_CLEAR);
-};
-
-static int jz_gpio_irq_set_type(unsigned int irq, unsigned int flow_type)
-{
-	struct jz_gpio_chip *chip = irq_to_jz_gpio_chip(irq);
-	struct irq_desc *desc = irq_to_desc(irq);
-
-	jz_gpio_irq_mask(irq);
+	struct jz_gpio_chip *chip = irq_to_jz_gpio_chip(data);
+	unsigned int irq = data->irq;
 
 	if (flow_type == IRQ_TYPE_EDGE_BOTH) {
 		uint32_t value = readl(chip->base + JZ_REG_GPIO_PIN);
@@ -395,50 +363,37 @@ static int jz_gpio_irq_set_type(unsigned int irq, unsigned int flow_type)
 
 	switch (flow_type) {
 	case IRQ_TYPE_EDGE_RISING:
-		jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_DIRECTION_SET);
-		jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_TRIGGER_SET);
+		jz_gpio_set_irq_bit(data, JZ_REG_GPIO_DIRECTION_SET);
+		jz_gpio_set_irq_bit(data, JZ_REG_GPIO_TRIGGER_SET);
 		break;
 	case IRQ_TYPE_EDGE_FALLING:
-		jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_DIRECTION_CLEAR);
-		jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_TRIGGER_SET);
+		jz_gpio_set_irq_bit(data, JZ_REG_GPIO_DIRECTION_CLEAR);
+		jz_gpio_set_irq_bit(data, JZ_REG_GPIO_TRIGGER_SET);
 		break;
 	case IRQ_TYPE_LEVEL_HIGH:
-		jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_DIRECTION_SET);
-		jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_TRIGGER_CLEAR);
+		jz_gpio_set_irq_bit(data, JZ_REG_GPIO_DIRECTION_SET);
+		jz_gpio_set_irq_bit(data, JZ_REG_GPIO_TRIGGER_CLEAR);
 		break;
 	case IRQ_TYPE_LEVEL_LOW:
-		jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_DIRECTION_CLEAR);
-		jz_gpio_set_irq_bit(irq, JZ_REG_GPIO_TRIGGER_CLEAR);
+		jz_gpio_set_irq_bit(data, JZ_REG_GPIO_DIRECTION_CLEAR);
+		jz_gpio_set_irq_bit(data, JZ_REG_GPIO_TRIGGER_CLEAR);
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	if (!(desc->status & IRQ_MASKED))
-		jz_gpio_irq_unmask(irq);
-
 	return 0;
 }
 
-static int jz_gpio_irq_set_wake(unsigned int irq, unsigned int on)
+static int jz_gpio_irq_set_wake(struct irq_data *data, unsigned int on)
 {
-	struct jz_gpio_chip *chip = irq_to_jz_gpio_chip(irq);
-	spin_lock(&chip->lock);
-	if (on)
-		chip->wakeup |= IRQ_TO_BIT(irq);
-	else
-		chip->wakeup &= ~IRQ_TO_BIT(irq);
-	spin_unlock(&chip->lock);
+	struct jz_gpio_chip *chip = irq_to_jz_gpio_chip(data);
 
-	set_irq_wake(chip->irq, on);
+	irq_gc_set_wake(data, on);
+	irq_set_irq_wake(chip->irq, on);
+
 	return 0;
 }
-
-/*
- * This lock class tells lockdep that GPIO irqs are in a different
- * category than their parents, so it won't report false recursion.
- */
-static struct lock_class_key gpio_lock_class;
 
 #define JZ4740_GPIO_CHIP(_bank) { \
 	.irq_base = JZ4740_IRQ_GPIO_BASE_ ## _bank, \
@@ -452,16 +407,6 @@ static struct lock_class_key gpio_lock_class;
 		.base = JZ4740_GPIO_BASE_ ## _bank, \
 		.ngpio = JZ4740_GPIO_NUM_ ## _bank, \
 	}, \
-	.irq_chip =  { \
-		.name = "GPIO Bank " # _bank, \
-		.mask = jz_gpio_irq_mask, \
-		.unmask = jz_gpio_irq_unmask, \
-		.ack = jz_gpio_irq_ack, \
-		.startup = jz_gpio_irq_startup, \
-		.shutdown = jz_gpio_irq_shutdown, \
-		.set_type = jz_gpio_irq_set_type, \
-		.set_wake = jz_gpio_irq_set_wake, \
-	}, \
 }
 
 static struct jz_gpio_chip jz4740_gpio_chips[] = {
@@ -471,82 +416,54 @@ static struct jz_gpio_chip jz4740_gpio_chips[] = {
 	JZ4740_GPIO_CHIP(D),
 };
 
-static inline struct jz_gpio_chip *sysdev_to_chip(struct sys_device *dev)
+static void jz4740_gpio_chip_init(struct jz_gpio_chip *chip, unsigned int id)
 {
-	return container_of(dev, struct jz_gpio_chip, sysdev);
-}
-
-static int jz4740_gpio_suspend(struct sys_device *dev, pm_message_t state)
-{
-	struct jz_gpio_chip *chip = sysdev_to_chip(dev);
-
-	chip->suspend_mask = readl(chip->base + JZ_REG_GPIO_MASK);
-	writel(~(chip->wakeup), chip->base + JZ_REG_GPIO_MASK_SET);
-	writel(chip->wakeup, chip->base + JZ_REG_GPIO_MASK_CLEAR);
-
-	return 0;
-}
-
-static int jz4740_gpio_resume(struct sys_device *dev)
-{
-	struct jz_gpio_chip *chip = sysdev_to_chip(dev);
-	uint32_t mask = chip->suspend_mask;
-
-	writel(~mask, chip->base + JZ_REG_GPIO_MASK_CLEAR);
-	writel(mask, chip->base + JZ_REG_GPIO_MASK_SET);
-
-	return 0;
-}
-
-static struct sysdev_class jz4740_gpio_sysdev_class = {
-	.name = "gpio",
-	.suspend = jz4740_gpio_suspend,
-	.resume = jz4740_gpio_resume,
-};
-
-static int jz4740_gpio_chip_init(struct jz_gpio_chip *chip, unsigned int id)
-{
-	int ret, irq;
-
-	chip->sysdev.id = id;
-	chip->sysdev.cls = &jz4740_gpio_sysdev_class;
-	ret = sysdev_register(&chip->sysdev);
-
-	if (ret)
-		return ret;
-
-	spin_lock_init(&chip->lock);
+	struct irq_chip_generic *gc;
+	struct irq_chip_type *ct;
 
 	chip->base = ioremap(JZ4740_GPIO_BASE_ADDR + (id * 0x100), 0x100);
 
-	gpiochip_add(&chip->gpio_chip);
-
 	chip->irq = JZ4740_IRQ_INTC_GPIO(id);
-	set_irq_data(chip->irq, chip);
-	set_irq_chained_handler(chip->irq, jz_gpio_irq_demux_handler);
+	irq_set_handler_data(chip->irq, chip);
+	irq_set_chained_handler(chip->irq, jz_gpio_irq_demux_handler);
 
-	for (irq = chip->irq_base; irq < chip->irq_base + chip->gpio_chip.ngpio; ++irq) {
-		lockdep_set_class(&irq_desc[irq].lock, &gpio_lock_class);
-		set_irq_chip_data(irq, chip);
-		set_irq_chip_and_handler(irq, &chip->irq_chip, handle_level_irq);
-	}
+	gc = irq_alloc_generic_chip(chip->gpio_chip.label, 1, chip->irq_base,
+		chip->base, handle_level_irq);
 
-	return 0;
+	gc->wake_enabled = IRQ_MSK(chip->gpio_chip.ngpio);
+	gc->private = chip;
+
+	ct = gc->chip_types;
+	ct->regs.enable = JZ_REG_GPIO_MASK_CLEAR;
+	ct->regs.disable = JZ_REG_GPIO_MASK_SET;
+	ct->regs.ack = JZ_REG_GPIO_FLAG_CLEAR;
+
+	ct->chip.name = "GPIO";
+	ct->chip.irq_mask = irq_gc_mask_disable_reg;
+	ct->chip.irq_unmask = jz_gpio_irq_unmask;
+	ct->chip.irq_ack = irq_gc_ack_set_bit;
+	ct->chip.irq_suspend = jz4740_irq_suspend;
+	ct->chip.irq_resume = jz4740_irq_resume;
+	ct->chip.irq_startup = jz_gpio_irq_startup;
+	ct->chip.irq_shutdown = jz_gpio_irq_shutdown;
+	ct->chip.irq_set_type = jz_gpio_irq_set_type;
+	ct->chip.irq_set_wake = jz_gpio_irq_set_wake;
+	ct->chip.flags = IRQCHIP_SET_TYPE_MASKED;
+
+	irq_setup_generic_chip(gc, IRQ_MSK(chip->gpio_chip.ngpio),
+		IRQ_GC_INIT_NESTED_LOCK, 0, IRQ_NOPROBE | IRQ_LEVEL);
+
+	gpiochip_add(&chip->gpio_chip);
 }
 
 static int __init jz4740_gpio_init(void)
 {
 	unsigned int i;
-	int ret;
-
-	ret = sysdev_class_register(&jz4740_gpio_sysdev_class);
-	if (ret)
-		return ret;
 
 	for (i = 0; i < ARRAY_SIZE(jz4740_gpio_chips); ++i)
 		jz4740_gpio_chip_init(&jz4740_gpio_chips[i], i);
 
-	printk(KERN_INFO "JZ4740 GPIO initalized\n");
+	printk(KERN_INFO "JZ4740 GPIO initialized\n");
 
 	return 0;
 }

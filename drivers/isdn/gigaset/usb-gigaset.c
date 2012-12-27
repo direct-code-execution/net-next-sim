@@ -184,7 +184,7 @@ static int set_value(struct cardstate *cs, u8 req, u16 val)
 		(unsigned)req, (unsigned)val);
 	r = usb_control_msg(udev, usb_sndctrlpipe(udev, 0), 0x12, 0x41,
 			    0xf /*?*/, 0, NULL, 0, 2000 /*?*/);
-			    /* no idea what this does */
+	/* no idea what this does */
 	if (r < 0) {
 		dev_err(&udev->dev, "error %d on request 0x12\n", -r);
 		return r;
@@ -365,7 +365,7 @@ static void gigaset_read_int_callback(struct urb *urb)
 			src = cs->hw.usb->rcvbuf;
 			if (unlikely(*src))
 				dev_warn(cs->dev,
-				    "%s: There was no leading 0, but 0x%02x!\n",
+					 "%s: There was no leading 0, but 0x%02x!\n",
 					 __func__, (unsigned) *src);
 			++src; /* skip leading 0x00 */
 			--numbytes;
@@ -465,7 +465,7 @@ static int send_cb(struct cardstate *cs, struct cmdbuf_t *cb)
 
 			usb_fill_bulk_urb(ucs->bulk_out_urb, ucs->udev,
 					  usb_sndbulkpipe(ucs->udev,
-					     ucs->bulk_out_endpointAddr & 0x0f),
+							  ucs->bulk_out_endpointAddr & 0x0f),
 					  cb->buf + cb->offset, count,
 					  gigaset_write_bulk_callback, cs);
 
@@ -499,7 +499,7 @@ static int gigaset_write_cmd(struct cardstate *cs, struct cmdbuf_t *cb)
 	unsigned long flags;
 
 	gigaset_dbg_buffer(cs->mstate != MS_LOCKED ?
-			     DEBUG_TRANSCMD : DEBUG_LOCKCMD,
+			   DEBUG_TRANSCMD : DEBUG_LOCKCMD,
 			   "CMD Transmit", cb->len, cb->buf);
 
 	spin_lock_irqsave(&cs->cmdlock, flags);
@@ -695,7 +695,7 @@ static int gigaset_probe(struct usb_interface *interface,
 
 	dev_info(&udev->dev, "%s: Device matched ... !\n", __func__);
 
-	/* allocate memory for our device state and intialize it */
+	/* allocate memory for our device state and initialize it */
 	cs = gigaset_initcs(driver, 1, 1, 0, cidmode, GIGASET_MODULENAME);
 	if (!cs)
 		return -ENODEV;
@@ -894,7 +894,7 @@ static int __init usb_gigaset_init(void)
 {
 	int result;
 
-	/* allocate memory for our driver state and intialize it */
+	/* allocate memory for our driver state and initialize it */
 	driver = gigaset_initdriver(GIGASET_MINOR, GIGASET_MINORS,
 				    GIGASET_MODULENAME, GIGASET_DEVNAME,
 				    &ops, THIS_MODULE);

@@ -6,6 +6,7 @@
  *
  * This file is released under the GPLv2.
  */
+#include <linux/export.h>
 #include <linux/init.h>
 #include <linux/list.h>
 #include <linux/device.h>
@@ -167,11 +168,8 @@ static int acpi_bind_one(struct device *dev, acpi_handle handle)
 				"firmware_node");
 		ret = sysfs_create_link(&acpi_dev->dev.kobj, &dev->kobj,
 				"physical_node");
-		if (acpi_dev->wakeup.flags.valid) {
+		if (acpi_dev->wakeup.flags.valid)
 			device_set_wakeup_capable(dev, true);
-			device_set_wakeup_enable(dev,
-						acpi_dev->wakeup.state.enabled);
-		}
 	}
 
 	return 0;

@@ -1,0 +1,128 @@
+ARCH_DIR := arch/sim
+SRCDIR=$(dir $(firstword $(MAKEFILE_LIST)))
+KERNEL_VERSION=6be35c700f742e911ecedd07fcc43d4439922334
+KERNEL_VERSION=v3.4
+
+SIM_SRC=\
+fs.c random.c sim.c softirq.c time.c \
+glue.c sim-device.c sysctl.c timer.c \
+hrtimer.c sched.c sim-socket.c sysfs.c workqueue.c \
+print.c security.c slab.c tasklet.c \
+proc.c seq.c socket.c tasklet-hrtimer.c \
+cred.c pid.c modules.c 
+
+COV?=no
+cov_yes=-coverage
+cov_no=
+covl_yes=-Wl,-whole-archive -lgcov -Wl,-no-whole-archive
+covl_no=
+# no idea why OPT=no doesn't work...
+OPT?=yes
+opt_yes=-O3 -fomit-frame-pointer 
+opt_no=-O0
+PIC?=yes
+pic_yes=-fpic -DPIC
+pic_no=-mcmodel=large
+PIC_CFLAGS=$(pic_$(PIC))
+KERNEL_LIB=liblinux-$(KERNEL_VERSION).so
+SIM_OBJ=$(addprefix $(ARCH_DIR)/,$(addsuffix .o,$(basename $(SIM_SRC))))
+CFLAGS+= \
+ $(opt_$(OPT)) -g3 -D__KERNEL__ -Wall -Wstrict-prototypes -Wno-trigraphs \
+ -fno-inline -iwithprefix $(srctree)/include -DKBUILD_BASENAME=\"clnt\" \
+ -fno-strict-aliasing -fno-common -fno-delete-null-pointer-checks \
+ -fno-stack-protector \
+ -DKBUILD_MODNAME=\"nsc\" -DMODVERSIONS -DEXPORT_SYMTAB \
+ -include $(ARCH_DIR)/autoconf.h \
+ -U__FreeBSD__ -D__linux__=1 -Dlinux=1 -D__linux=1 \
+ -I$(ARCH_DIR)/include -I$(srctree)/include \
+ -I$(ARCH_DIR) -I$(srctree) \
+ $(PIC_CFLAGS) -D_DEBUG $(cov_$(COV))
+
+include $(ARCH_DIR)/processor.mk
+
+ifeq ($(PROCESSOR_SIZE),64)
+CFLAGS+= -DCONFIG_64BIT
+endif
+
+LDFLAGS += -shared -nostdlib -g3 -Wl,-O1 -Wl,-T$(ARCH_DIR)/linker.lds $(covl_$(COV))
+
+modules:=
+all-obj-for-clean:=
+
+all: library modules
+
+-include $(ARCH_DIR)/objs.mk
+
+AUTOCONF=$(ARCH_DIR)/autoconf.h
+# note: the directory order below matters to ensure that we match the kernel order
+dirs=kernel/ mm/ crypto/ lib/ drivers/base/ drivers/net/ net/
+empty:=
+space:= $(empty) $(empty)
+colon:= :
+comma= ,
+kernel/_to_keep=notifier.o params.o time.o sysctl.o mutex.o \
+rwsem.o semaphore.o srcu.o rcupdate.o rcutiny.o kfifo.o
+mm/_to_keep=util.o
+crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o
+drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o
+drivers/net/_to_keep=loopback.o
+lib/_to_keep=klist.o kobject.o kref.o hweight.o int_sqrt.o checksum.o \
+find_last_bit.o find_next_bit.o bitmap.o nlattr.o idr.o libcrc32c.o \
+ctype.o string.o kasprintf.o rbtree.o sha1.o textsearch.o vsprintf.o \
+rwsem-spinlock.o scatterlist.o ratelimit.o hexdump.o dec_and_lock.o \
+div64.o dynamic_queue_limits.o md5.o kstrtox.o
+
+
+$(ARCH_DIR)/objs.mk: $(ARCH_DIR)/Makefile.print $(srctree)/.config
+	-for i in 1; do \
+	$(foreach d,$(dirs), \
+           $(MAKE) -i -s -f $< srcdir=$(srctree)/$(d) \
+	    objdir=$(srctree)/$(d) \
+            config=$(srctree)/.config \
+	    to_keep=$(subst $(space),$(colon),$($(d)_to_keep)) print;) \
+	done > $@
+
+-include $(srctree)/.config
+
+$(AUTOCONF): $(ARCH_DIR)/generate-autoconf.py $(srctree)/.config $(ARCH_DIR)/timeconst.h
+	$(ARCH_DIR)/generate-autoconf.py $(srctree)/.config > $@
+$(ARCH_DIR)/timeconst.h: $(srctree)/.config
+	perl $(srctree)/kernel/timeconst.pl $(CONFIG_HZ) > $@
+$(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
+	ld -shared --verbose | ./$^ > $@
+
+KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
+OBJS=$(SIM_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))
+
+%/builtin.o:
+	mkdir -p $(dir $@); if test -n "$($@)"; then for f in $($@); do $(AR) Tcru $@ $$f; done; else $(AR) Tcru $@; fi
+%.ko:%.o
+	$(CC) -shared -o $@ -nostdlib $^
+%.o:%.c
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $^ -o $@
+
+library: $(KERNEL_LIB)
+modules: $(modules) 
+
+install: modules library
+
+install-dir:
+
+.patch.ts: $(ARCH_DIR)/kernel.patch
+	CWD=`pwd` && cd $(srctree) && patch -p1 < $(ARCH_DIR)/kernel$(KERNEL_VERSION).patch && cd $$CWD && touch $(ARCH_DIR)/.patch.ts
+unpatch: 
+	CWD=`pwd` && cd $(srctree) && git reset --hard $(KERNEL_VERSION) && cd $$CWD && rm -f $(ARCH_DIR)/.patch.ts
+
+ALL_OBJS=$(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean)
+archclean:
+	@for f in $(foreach m,$(modules),$($(m))) ; do rm -f $$f 2>/dev/null; done
+	@for f in $(OBJS) $(KERNEL_LIB) $(modules) $(all-obj-for-clean); do rm -f $$f; done 2>/dev/null
+	@rm -rf $(ARCH_DIR)/linker.lds $(AUTOCONF) $(ARCH_DIR)/objs.mk $(ARCH_DIR)/timeconst.h 2>/dev/null
+
+$(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds
+	$(CC) $(LDFLAGS) -Wl,--whole-archive $(OBJS) -o $@
+
+.PHONY : clean
+
+KBUILD_KCONFIG := arch/$(ARCH)/Kconfig

@@ -8,6 +8,7 @@
 
 #ifdef CONFIG_NFS_USE_KERNEL_DNS
 
+#include <linux/module.h>
 #include <linux/sunrpc/clnt.h>
 #include <linux/dns_resolver.h>
 #include "dns_resolve.h"
@@ -27,9 +28,11 @@ ssize_t nfs_dns_resolve_name(struct net *net, char *name, size_t namelen,
 	kfree(ip_addr);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(nfs_dns_resolve_name);
 
 #else
 
+#include <linux/module.h>
 #include <linux/hash.h>
 #include <linux/string.h>
 #include <linux/kmod.h>
@@ -214,7 +217,7 @@ static int nfs_dns_parse(struct cache_detail *cd, char *buf, int buflen)
 {
 	char buf1[NFS_DNS_HOSTNAME_MAXLEN+1];
 	struct nfs_dns_ent key, *item;
-	unsigned long ttl;
+	unsigned int ttl;
 	ssize_t len;
 	int ret = -EINVAL;
 
@@ -237,7 +240,8 @@ static int nfs_dns_parse(struct cache_detail *cd, char *buf, int buflen)
 	key.namelen = len;
 	memset(&key.h, 0, sizeof(key.h));
 
-	ttl = get_expiry(&buf);
+	if (get_uint(&buf, &ttl) < 0)
+		goto out;
 	if (ttl == 0)
 		goto out;
 	key.h.expiry_time = ttl + seconds_since_boot();
@@ -345,6 +349,7 @@ ssize_t nfs_dns_resolve_name(struct net *net, char *name,
 		ret = -ESRCH;
 	return ret;
 }
+EXPORT_SYMBOL_GPL(nfs_dns_resolve_name);
 
 int nfs_dns_resolver_cache_init(struct net *net)
 {

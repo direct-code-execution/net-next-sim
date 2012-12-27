@@ -22,6 +22,7 @@
  * Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#include <linux/bcd.h>
 #include <linux/module.h>
 #include <linux/version.h>
 #include <linux/kernel.h>
@@ -123,9 +124,8 @@ static inline int is_root_hub(struct usb_device *udev)
  */
 
 /*-------------------------------------------------------------------------*/
-
-#define KERNEL_REL	((LINUX_VERSION_CODE >> 16) & 0x0ff)
-#define KERNEL_VER	((LINUX_VERSION_CODE >> 8) & 0x0ff)
+#define KERNEL_REL	bin2bcd(((LINUX_VERSION_CODE >> 16) & 0x0ff))
+#define KERNEL_VER	bin2bcd(((LINUX_VERSION_CODE >> 8) & 0x0ff))
 
 /* usb 3.0 root hub device descriptor */
 static const u8 usb3_rh_dev_descriptor[18] = {
@@ -1011,10 +1011,7 @@ static int register_root_hub(struct usb_hcd *hcd)
 	if (retval) {
 		dev_err (parent_dev, "can't register root hub for %s, %d\n",
 				dev_name(&usb_dev->dev), retval);
-	}
-	mutex_unlock(&usb_bus_list_lock);
-
-	if (retval == 0) {
+	} else {
 		spin_lock_irq (&hcd_root_hub_lock);
 		hcd->rh_registered = 1;
 		spin_unlock_irq (&hcd_root_hub_lock);
@@ -1023,6 +1020,7 @@ static int register_root_hub(struct usb_hcd *hcd)
 		if (HCD_DEAD(hcd))
 			usb_hc_died (hcd);	/* This time clean up */
 	}
+	mutex_unlock(&usb_bus_list_lock);
 
 	return retval;
 }
@@ -1398,7 +1396,15 @@ int usb_hcd_map_urb_for_dma(struct usb_hcd *hcd, struct urb *urb,
 	    && !(urb->transfer_flags & URB_NO_TRANSFER_DMA_MAP)) {
 		if (hcd->self.uses_dma) {
 			if (urb->num_sgs) {
-				int n = dma_map_sg(
+				int n;
+
+				/* We don't support sg for isoc transfers ! */
+				if (usb_endpoint_xfer_isoc(&urb->ep->desc)) {
+					WARN_ON(1);
+					return -EINVAL;
+				}
+
+				n = dma_map_sg(
 						hcd->self.controller,
 						urb->sg,
 						urb->num_sgs,

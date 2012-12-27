@@ -2424,6 +2424,38 @@ static void ipmi_pci_cleanup(struct smi_info *info)
 	pci_disable_device(pdev);
 }
 
+static int __devinit ipmi_pci_probe_regspacing(struct smi_info *info)
+{
+	if (info->si_type == SI_KCS) {
+		unsigned char	status;
+		int		regspacing;
+
+		info->io.regsize = DEFAULT_REGSIZE;
+		info->io.regshift = 0;
+		info->io_size = 2;
+		info->handlers = &kcs_smi_handlers;
+
+		/* detect 1, 4, 16byte spacing */
+		for (regspacing = DEFAULT_REGSPACING; regspacing <= 16;) {
+			info->io.regspacing = regspacing;
+			if (info->io_setup(info)) {
+				dev_err(info->dev,
+					"Could not setup I/O space\n");
+				return DEFAULT_REGSPACING;
+			}
+			/* write invalid cmd */
+			info->io.outputb(&info->io, 1, 0x10);
+			/* read status back */
+			status = info->io.inputb(&info->io, 1);
+			info->io_cleanup(info);
+			if (status)
+				return regspacing;
+			regspacing *= 4;
+		}
+	}
+	return DEFAULT_REGSPACING;
+}
+
 static int __devinit ipmi_pci_probe(struct pci_dev *pdev,
 				    const struct pci_device_id *ent)
 {
@@ -2476,8 +2508,8 @@ static int __devinit ipmi_pci_probe(struct pci_dev *pdev,
 	}
 	info->io.addr_data = pci_resource_start(pdev, 0);
 
-	info->io.regspacing = DEFAULT_REGSPACING;
-	info->io.regsize = DEFAULT_REGSPACING;
+	info->io.regspacing = ipmi_pci_probe_regspacing(info);
+	info->io.regsize = DEFAULT_REGSIZE;
 	info->io.regshift = 0;
 
 	info->irq = pdev->irq;
@@ -2503,18 +2535,6 @@ static void __devexit ipmi_pci_remove(struct pci_dev *pdev)
 	cleanup_one_si(info);
 }
 
-#ifdef CONFIG_PM
-static int ipmi_pci_suspend(struct pci_dev *pdev, pm_message_t state)
-{
-	return 0;
-}
-
-static int ipmi_pci_resume(struct pci_dev *pdev)
-{
-	return 0;
-}
-#endif
-
 static struct pci_device_id ipmi_pci_devices[] = {
 	{ PCI_DEVICE(PCI_HP_VENDOR_ID, PCI_MMC_DEVICE_ID) },
 	{ PCI_DEVICE_CLASS(PCI_ERMC_CLASSCODE, PCI_ERMC_CLASSCODE_MASK) },
@@ -2527,10 +2547,6 @@ static struct pci_driver ipmi_pci_driver = {
 	.id_table =     ipmi_pci_devices,
 	.probe =        ipmi_pci_probe,
 	.remove =       __devexit_p(ipmi_pci_remove),
-#ifdef CONFIG_PM
-	.suspend =      ipmi_pci_suspend,
-	.resume =       ipmi_pci_resume,
-#endif
 };
 #endif /* CONFIG_PCI */
 

@@ -43,6 +43,7 @@
 #include <linux/slab.h>
 #include <net/ip.h>
 
+#include <asm/xen/page.h>
 #include <xen/xen.h>
 #include <xen/xenbus.h>
 #include <xen/events.h>
@@ -57,8 +58,7 @@
 static const struct ethtool_ops xennet_ethtool_ops;
 
 struct netfront_cb {
-	struct page *page;
-	unsigned offset;
+	int pull_to;
 };
 
 #define NETFRONT_SKB_CB(skb)	((struct netfront_cb *)((skb)->cb))
@@ -452,27 +452,83 @@ static void xennet_make_frags(struct sk_buff *skb, struct net_device *dev,
 	/* Grant backend access to each skb fragment page. */
 	for (i = 0; i < frags; i++) {
 		skb_frag_t *frag = skb_shinfo(skb)->frags + i;
+		struct page *page = skb_frag_page(frag);
 
-		tx->flags |= XEN_NETTXF_more_data;
+		len = skb_frag_size(frag);
+		offset = frag->page_offset;
 
-		id = get_id_from_freelist(&np->tx_skb_freelist, np->tx_skbs);
-		np->tx_skbs[id].skb = skb_get(skb);
-		tx = RING_GET_REQUEST(&np->tx, prod++);
-		tx->id = id;
-		ref = gnttab_claim_grant_reference(&np->gref_tx_head);
-		BUG_ON((signed short)ref < 0);
+		/* Data must not cross a page boundary. */
+		BUG_ON(len + offset > PAGE_SIZE<<compound_order(page));
 
-		mfn = pfn_to_mfn(page_to_pfn(skb_frag_page(frag)));
-		gnttab_grant_foreign_access_ref(ref, np->xbdev->otherend_id,
-						mfn, GNTMAP_readonly);
+		/* Skip unused frames from start of page */
+		page += offset >> PAGE_SHIFT;
+		offset &= ~PAGE_MASK;
 
-		tx->gref = np->grant_tx_ref[id] = ref;
-		tx->offset = frag->page_offset;
-		tx->size = skb_frag_size(frag);
-		tx->flags = 0;
+		while (len > 0) {
+			unsigned long bytes;
+
+			BUG_ON(offset >= PAGE_SIZE);
+
+			bytes = PAGE_SIZE - offset;
+			if (bytes > len)
+				bytes = len;
+
+			tx->flags |= XEN_NETTXF_more_data;
+
+			id = get_id_from_freelist(&np->tx_skb_freelist,
+						  np->tx_skbs);
+			np->tx_skbs[id].skb = skb_get(skb);
+			tx = RING_GET_REQUEST(&np->tx, prod++);
+			tx->id = id;
+			ref = gnttab_claim_grant_reference(&np->gref_tx_head);
+			BUG_ON((signed short)ref < 0);
+
+			mfn = pfn_to_mfn(page_to_pfn(page));
+			gnttab_grant_foreign_access_ref(ref,
+							np->xbdev->otherend_id,
+							mfn, GNTMAP_readonly);
+
+			tx->gref = np->grant_tx_ref[id] = ref;
+			tx->offset = offset;
+			tx->size = bytes;
+			tx->flags = 0;
+
+			offset += bytes;
+			len -= bytes;
+
+			/* Next frame */
+			if (offset == PAGE_SIZE && len) {
+				BUG_ON(!PageCompound(page));
+				page++;
+				offset = 0;
+			}
+		}
 	}
 
 	np->tx.req_prod_pvt = prod;
+}
+
+/*
+ * Count how many ring slots are required to send the frags of this
+ * skb. Each frag might be a compound page.
+ */
+static int xennet_count_skb_frag_slots(struct sk_buff *skb)
+{
+	int i, frags = skb_shinfo(skb)->nr_frags;
+	int pages = 0;
+
+	for (i = 0; i < frags; i++) {
+		skb_frag_t *frag = skb_shinfo(skb)->frags + i;
+		unsigned long size = skb_frag_size(frag);
+		unsigned long offset = frag->page_offset;
+
+		/* Skip unused frames from start of page */
+		offset &= ~PAGE_MASK;
+
+		pages += PFN_UP(offset + size);
+	}
+
+	return pages;
 }
 
 static int xennet_start_xmit(struct sk_buff *skb, struct net_device *dev)
@@ -487,23 +543,23 @@ static int xennet_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	grant_ref_t ref;
 	unsigned long mfn;
 	int notify;
-	int frags = skb_shinfo(skb)->nr_frags;
+	int slots;
 	unsigned int offset = offset_in_page(data);
 	unsigned int len = skb_headlen(skb);
 	unsigned long flags;
 
-	frags += DIV_ROUND_UP(offset + len, PAGE_SIZE);
-	if (unlikely(frags > MAX_SKB_FRAGS + 1)) {
-		printk(KERN_ALERT "xennet: skb rides the rocket: %d frags\n",
-		       frags);
-		dump_stack();
+	slots = DIV_ROUND_UP(offset + len, PAGE_SIZE) +
+		xennet_count_skb_frag_slots(skb);
+	if (unlikely(slots > MAX_SKB_FRAGS + 1)) {
+		net_alert_ratelimited(
+			"xennet: skb rides the rocket: %d slots\n", slots);
 		goto drop;
 	}
 
 	spin_lock_irqsave(&np->tx_lock, flags);
 
 	if (unlikely(!netif_carrier_ok(dev) ||
-		     (frags > 1 && !xennet_can_sg(dev)) ||
+		     (slots > 1 && !xennet_can_sg(dev)) ||
 		     netif_needs_gso(skb, netif_skb_features(skb)))) {
 		spin_unlock_irqrestore(&np->tx_lock, flags);
 		goto drop;
@@ -867,15 +923,9 @@ static int handle_incoming_queue(struct net_device *dev,
 	struct sk_buff *skb;
 
 	while ((skb = __skb_dequeue(rxq)) != NULL) {
-		struct page *page = NETFRONT_SKB_CB(skb)->page;
-		void *vaddr = page_address(page);
-		unsigned offset = NETFRONT_SKB_CB(skb)->offset;
+		int pull_to = NETFRONT_SKB_CB(skb)->pull_to;
 
-		memcpy(skb->data, vaddr + offset,
-		       skb_headlen(skb));
-
-		if (page != skb_frag_page(&skb_shinfo(skb)->frags[0]))
-			__free_page(page);
+		__pskb_pull_tail(skb, pull_to - skb_headlen(skb));
 
 		/* Ethernet work: Delayed to here as it peeks the header. */
 		skb->protocol = eth_type_trans(skb, dev);
@@ -913,7 +963,6 @@ static int xennet_poll(struct napi_struct *napi, int budget)
 	struct sk_buff_head errq;
 	struct sk_buff_head tmpq;
 	unsigned long flags;
-	unsigned int len;
 	int err;
 
 	spin_lock(&np->rx_lock);
@@ -955,24 +1004,13 @@ err:
 			}
 		}
 
-		NETFRONT_SKB_CB(skb)->page =
-			skb_frag_page(&skb_shinfo(skb)->frags[0]);
-		NETFRONT_SKB_CB(skb)->offset = rx->offset;
+		NETFRONT_SKB_CB(skb)->pull_to = rx->status;
+		if (NETFRONT_SKB_CB(skb)->pull_to > RX_COPY_THRESHOLD)
+			NETFRONT_SKB_CB(skb)->pull_to = RX_COPY_THRESHOLD;
 
-		len = rx->status;
-		if (len > RX_COPY_THRESHOLD)
-			len = RX_COPY_THRESHOLD;
-		skb_put(skb, len);
-
-		if (rx->status > len) {
-			skb_shinfo(skb)->frags[0].page_offset =
-				rx->offset + len;
-			skb_frag_size_set(&skb_shinfo(skb)->frags[0], rx->status - len);
-			skb->data_len = rx->status - len;
-		} else {
-			__skb_fill_page_desc(skb, 0, NULL, 0, 0);
-			skb_shinfo(skb)->nr_frags = 0;
-		}
+		skb_shinfo(skb)->frags[0].page_offset = rx->offset;
+		skb_frag_size_set(&skb_shinfo(skb)->frags[0], rx->status);
+		skb->data_len = rx->status;
 
 		i = xennet_fill_frags(np, skb, &tmpq);
 
@@ -999,7 +1037,7 @@ err:
 		 * receive throughout using the standard receive
 		 * buffer size was cut by 25%(!!!).
 		 */
-		skb->truesize += skb->data_len - (RX_COPY_THRESHOLD - len);
+		skb->truesize += skb->data_len - RX_COPY_THRESHOLD;
 		skb->len += skb->data_len;
 
 		if (rx->flags & XEN_NETRXF_csum_blank)
@@ -1731,7 +1769,7 @@ static void netback_changed(struct xenbus_device *dev,
 		break;
 
 	case XenbusStateConnected:
-		netif_notify_peers(netdev);
+		netdev_notify_peers(netdev);
 		break;
 
 	case XenbusStateClosing:

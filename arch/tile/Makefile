@@ -26,6 +26,10 @@ $(error Set TILERA_ROOT or CROSS_COMPILE when building $(ARCH) on $(HOST_ARCH))
   endif
 endif
 
+# The tile compiler may emit .eh_frame information for backtracing.
+# In kernel modules, this causes load failures due to unsupported relocations.
+KBUILD_CFLAGS   += -fno-asynchronous-unwind-tables
+
 ifneq ($(CONFIG_DEBUG_EXTRA_FLAGS),"")
 KBUILD_CFLAGS   += $(CONFIG_DEBUG_EXTRA_FLAGS)
 endif
@@ -58,6 +62,8 @@ libs-y		+= $(LIBGCC_PATH)
 
 # See arch/tile/Kbuild for content of core part of the kernel
 core-y		+= arch/tile/
+
+core-$(CONFIG_TILE_GXIO) += arch/tile/gxio/
 
 ifdef TILERA_ROOT
 INSTALL_PATH ?= $(TILERA_ROOT)/tile/boot

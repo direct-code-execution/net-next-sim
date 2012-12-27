@@ -50,6 +50,7 @@ int gfs2_trans_begin(struct gfs2_sbd *sdp, unsigned int blocks,
 	if (revokes)
 		tr->tr_reserved += gfs2_struct2blk(sdp, revokes,
 						   sizeof(u64));
+	sb_start_intwrite(sdp->sd_vfs);
 	gfs2_holder_init(sdp->sd_trans_gl, LM_ST_SHARED, 0, &tr->tr_t_gh);
 
 	error = gfs2_glock_nq(&tr->tr_t_gh);
@@ -68,6 +69,7 @@ fail_gunlock:
 	gfs2_glock_dq(&tr->tr_t_gh);
 
 fail_holder_uninit:
+	sb_end_intwrite(sdp->sd_vfs);
 	gfs2_holder_uninit(&tr->tr_t_gh);
 	kfree(tr);
 
@@ -116,6 +118,7 @@ void gfs2_trans_end(struct gfs2_sbd *sdp)
 			gfs2_holder_uninit(&tr->tr_t_gh);
 			kfree(tr);
 		}
+		sb_end_intwrite(sdp->sd_vfs);
 		return;
 	}
 
@@ -136,6 +139,7 @@ void gfs2_trans_end(struct gfs2_sbd *sdp)
 
 	if (sdp->sd_vfs->s_flags & MS_SYNCHRONOUS)
 		gfs2_log_flush(sdp, NULL);
+	sb_end_intwrite(sdp->sd_vfs);
 }
 
 /**
@@ -151,14 +155,22 @@ void gfs2_trans_add_bh(struct gfs2_glock *gl, struct buffer_head *bh, int meta)
 	struct gfs2_sbd *sdp = gl->gl_sbd;
 	struct gfs2_bufdata *bd;
 
+	lock_buffer(bh);
+	gfs2_log_lock(sdp);
 	bd = bh->b_private;
 	if (bd)
 		gfs2_assert(sdp, bd->bd_gl == gl);
 	else {
+		gfs2_log_unlock(sdp);
+		unlock_buffer(bh);
 		gfs2_attach_bufdata(gl, bh, meta);
 		bd = bh->b_private;
+		lock_buffer(bh);
+		gfs2_log_lock(sdp);
 	}
 	lops_add(sdp, bd);
+	gfs2_log_unlock(sdp);
+	unlock_buffer(bh);
 }
 
 void gfs2_trans_add_revoke(struct gfs2_sbd *sdp, struct gfs2_bufdata *bd)

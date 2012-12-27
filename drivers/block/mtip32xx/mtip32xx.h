@@ -33,6 +33,9 @@
 /* offset of Device Control register in PCIe extended capabilites space */
 #define PCIE_CONFIG_EXT_DEVICE_CONTROL_OFFSET	0x48
 
+/* check for erase mode support during secure erase */
+#define MTIP_SEC_ERASE_MODE     0x2
+
 /* # of times to retry timed out/failed IOs */
 #define MTIP_MAX_RETRIES	2
 
@@ -76,7 +79,13 @@
 
 /* Micron Vendor ID & P320x SSD Device ID */
 #define PCI_VENDOR_ID_MICRON    0x1344
-#define P320_DEVICE_ID		0x5150
+#define P320H_DEVICE_ID		0x5150
+#define P320M_DEVICE_ID		0x5151
+#define P320S_DEVICE_ID		0x5152
+#define P325M_DEVICE_ID		0x5153
+#define P420H_DEVICE_ID		0x5160
+#define P420M_DEVICE_ID		0x5161
+#define P425M_DEVICE_ID		0x5163
 
 /* Driver name and version strings */
 #define MTIP_DRV_NAME		"mtip32xx"
@@ -131,10 +140,12 @@ enum {
 	MTIP_PF_SVC_THD_STOP_BIT    = 8,
 
 	/* below are bit numbers in 'dd_flag' defined in driver_data */
+	MTIP_DDF_SEC_LOCK_BIT	    = 0,
 	MTIP_DDF_REMOVE_PENDING_BIT = 1,
 	MTIP_DDF_OVER_TEMP_BIT      = 2,
 	MTIP_DDF_WRITE_PROTECT_BIT  = 3,
 	MTIP_DDF_STOP_IO      = ((1 << MTIP_DDF_REMOVE_PENDING_BIT) | \
+				(1 << MTIP_DDF_SEC_LOCK_BIT) | \
 				(1 << MTIP_DDF_OVER_TEMP_BIT) | \
 				(1 << MTIP_DDF_WRITE_PROTECT_BIT)),
 
@@ -144,14 +155,14 @@ enum {
 	MTIP_DDF_REBUILD_FAILED_BIT = 8,
 };
 
-__packed struct smart_attr{
+struct smart_attr {
 	u8 attr_id;
 	u16 flags;
 	u8 cur;
 	u8 worst;
 	u32 data;
 	u8 res[3];
-};
+} __packed;
 
 /* Register Frame Information Structure (FIS), host to device. */
 struct host_to_dev_fis {

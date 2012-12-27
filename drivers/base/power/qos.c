@@ -451,7 +451,7 @@ int dev_pm_qos_add_ancestor_request(struct device *dev,
 	if (ancestor)
 		error = dev_pm_qos_add_request(ancestor, req, value);
 
-	if (error)
+	if (error < 0)
 		req->dev = NULL;
 
 	return error;
@@ -462,7 +462,7 @@ EXPORT_SYMBOL_GPL(dev_pm_qos_add_ancestor_request);
 static void __dev_pm_qos_drop_user_request(struct device *dev)
 {
 	dev_pm_qos_remove_request(dev->power.pq_req);
-	dev->power.pq_req = 0;
+	dev->power.pq_req = NULL;
 }
 
 /**

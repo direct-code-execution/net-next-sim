@@ -30,8 +30,6 @@
 #include <linux/pinctrl/pinconf.h>
 #include <linux/slab.h>
 
-#include <mach/pinconf-tegra.h>
-
 #include "core.h"
 #include "pinctrl-tegra.h"
 
@@ -466,7 +464,7 @@ static int tegra_pinconf_reg(struct tegra_pmx *pmx,
 		*bank = g->drv_bank;
 		*reg = g->drv_reg;
 		*bit = g->lpmd_bit;
-		*width = 1;
+		*width = 2;
 		break;
 	case TEGRA_PINCONF_PARAM_DRIVE_DOWN_STRENGTH:
 		*bank = g->drv_bank;
@@ -745,9 +743,9 @@ int __devinit tegra_pinctrl_probe(struct platform_device *pdev,
 	}
 
 	pmx->pctl = pinctrl_register(&tegra_pinctrl_desc, &pdev->dev, pmx);
-	if (IS_ERR(pmx->pctl)) {
+	if (!pmx->pctl) {
 		dev_err(&pdev->dev, "Couldn't register pinctrl driver\n");
-		return PTR_ERR(pmx->pctl);
+		return -ENODEV;
 	}
 
 	pinctrl_add_gpio_range(pmx->pctl, &tegra_pinctrl_gpio_range);
@@ -764,7 +762,6 @@ int __devexit tegra_pinctrl_remove(struct platform_device *pdev)
 {
 	struct tegra_pmx *pmx = platform_get_drvdata(pdev);
 
-	pinctrl_remove_gpio_range(pmx->pctl, &tegra_pinctrl_gpio_range);
 	pinctrl_unregister(pmx->pctl);
 
 	return 0;

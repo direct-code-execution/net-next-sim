@@ -54,6 +54,8 @@
 #include <linux/notifier.h>
 #include <linux/cpu.h>
 #include <linux/mutex.h>
+#include <linux/async.h>
+#include <asm/unaligned.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -91,7 +93,7 @@ EXPORT_SYMBOL(scsi_logging_level);
 #endif
 
 /* sd, scsi core and power management need to coordinate flushing async actions */
-LIST_HEAD(scsi_sd_probe_domain);
+ASYNC_DOMAIN(scsi_sd_probe_domain);
 EXPORT_SYMBOL(scsi_sd_probe_domain);
 
 /* NB: These are exposed through /proc/scsi/scsi and form part of the ABI.
@@ -1061,6 +1063,50 @@ int scsi_get_vpd_page(struct scsi_device *sdev, u8 page, unsigned char *buf,
 EXPORT_SYMBOL_GPL(scsi_get_vpd_page);
 
 /**
+ * scsi_report_opcode - Find out if a given command opcode is supported
+ * @sdev:	scsi device to query
+ * @buffer:	scratch buffer (must be at least 20 bytes long)
+ * @len:	length of buffer
+ * @opcode:	opcode for command to look up
+ *
+ * Uses the REPORT SUPPORTED OPERATION CODES to look up the given
+ * opcode. Returns 0 if RSOC fails or if the command opcode is
+ * unsupported. Returns 1 if the device claims to support the command.
+ */
+int scsi_report_opcode(struct scsi_device *sdev, unsigned char *buffer,
+		       unsigned int len, unsigned char opcode)
+{
+	unsigned char cmd[16];
+	struct scsi_sense_hdr sshdr;
+	int result;
+
+	if (sdev->no_report_opcodes || sdev->scsi_level < SCSI_SPC_3)
+		return 0;
+
+	memset(cmd, 0, 16);
+	cmd[0] = MAINTENANCE_IN;
+	cmd[1] = MI_REPORT_SUPPORTED_OPERATION_CODES;
+	cmd[2] = 1;		/* One command format */
+	cmd[3] = opcode;
+	put_unaligned_be32(len, &cmd[6]);
+	memset(buffer, 0, len);
+
+	result = scsi_execute_req(sdev, cmd, DMA_FROM_DEVICE, buffer, len,
+				  &sshdr, 30 * HZ, 3, NULL);
+
+	if (result && scsi_sense_valid(&sshdr) &&
+	    sshdr.sense_key == ILLEGAL_REQUEST &&
+	    (sshdr.asc == 0x20 || sshdr.asc == 0x24) && sshdr.ascq == 0x00)
+		return 0;
+
+	if ((buffer[1] & 3) == 3) /* Command supported */
+		return 1;
+
+	return 0;
+}
+EXPORT_SYMBOL(scsi_report_opcode);
+
+/**
  * scsi_device_get  -  get an additional reference to a scsi_device
  * @sdev:	device to get a reference to
  *
@@ -1354,6 +1400,7 @@ static void __exit exit_scsi(void)
 	scsi_exit_devinfo();
 	scsi_exit_procfs();
 	scsi_exit_queue();
+	async_unregister_domain(&scsi_sd_probe_domain);
 }
 
 subsys_initcall(init_scsi);

@@ -56,11 +56,13 @@ static inline unsigned int leon_eirq_get(int cpu)
 static void leon_handle_ext_irq(unsigned int irq, struct irq_desc *desc)
 {
 	unsigned int eirq;
+	struct irq_bucket *p;
 	int cpu = sparc_leon3_cpuid();
 
 	eirq = leon_eirq_get(cpu);
-	if ((eirq & 0x10) && irq_map[eirq]->irq) /* bit4 tells if IRQ happened */
-		generic_handle_irq(irq_map[eirq]->irq);
+	p = irq_map[eirq];
+	if ((eirq & 0x10) && p && p->irq) /* bit4 tells if IRQ happened */
+		generic_handle_irq(p->irq);
 }
 
 /* The extended IRQ controller has been found, this function registers it */
@@ -486,17 +488,6 @@ void __init leon_trans_init(struct device_node *dp)
 	}
 }
 
-void __initdata (*prom_amba_init)(struct device_node *dp, struct device_node ***nextp) = 0;
-
-void __init leon_node_init(struct device_node *dp, struct device_node ***nextp)
-{
-	if (prom_amba_init &&
-	    strcmp(dp->type, "ambapp") == 0 &&
-	    strcmp(dp->name, "ambapp0") == 0) {
-		prom_amba_init(dp, nextp);
-	}
-}
-
 #ifdef CONFIG_SMP
 void leon_clear_profile_irq(int cpu)
 {
@@ -521,9 +512,4 @@ void __init leon_init_IRQ(void)
 	sparc_config.clock_rate       = 1000000;
 	sparc_config.clear_clock_irq  = leon_clear_clock_irq;
 	sparc_config.load_profile_irq = leon_load_profile_irq;
-}
-
-void __init leon_init(void)
-{
-	of_pdt_build_more = &leon_node_init;
 }

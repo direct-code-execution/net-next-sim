@@ -103,8 +103,6 @@ void __cpuinit smp_callin(void)
 	if (cheetah_pcache_forced_on)
 		cheetah_enable_pcache();
 
-	local_irq_enable();
-
 	callin_flag = 1;
 	__asm__ __volatile__("membar #Sync\n\t"
 			     "flush  %%g6" : : : "memory");
@@ -124,9 +122,8 @@ void __cpuinit smp_callin(void)
 	while (!cpumask_test_cpu(cpuid, &smp_commenced_mask))
 		rmb();
 
-	ipi_call_lock_irq();
 	set_cpu_online(cpuid, true);
-	ipi_call_unlock_irq();
+	local_irq_enable();
 
 	/* idle thread is expected to have preempt disabled */
 	preempt_disable();
@@ -855,6 +852,8 @@ extern unsigned long xcall_flush_tlb_mm;
 extern unsigned long xcall_flush_tlb_pending;
 extern unsigned long xcall_flush_tlb_kernel_range;
 extern unsigned long xcall_fetch_glob_regs;
+extern unsigned long xcall_fetch_glob_pmu;
+extern unsigned long xcall_fetch_glob_pmu_n4;
 extern unsigned long xcall_receive_signal;
 extern unsigned long xcall_new_mmu_context_version;
 #ifdef CONFIG_KGDB
@@ -1001,6 +1000,15 @@ void kgdb_roundup_cpus(unsigned long flags)
 void smp_fetch_global_regs(void)
 {
 	smp_cross_call(&xcall_fetch_glob_regs, 0, 0, 0);
+}
+
+void smp_fetch_global_pmu(void)
+{
+	if (tlb_type == hypervisor &&
+	    sun4v_chip_type >= SUN4V_CHIP_NIAGARA4)
+		smp_cross_call(&xcall_fetch_glob_pmu_n4, 0, 0, 0);
+	else
+		smp_cross_call(&xcall_fetch_glob_pmu, 0, 0, 0);
 }
 
 /* We know that the window frames of the user have been flushed
@@ -1308,9 +1316,7 @@ int __cpu_disable(void)
 	mdelay(1);
 	local_irq_disable();
 
-	ipi_call_lock();
 	set_cpu_online(cpu, false);
-	ipi_call_unlock();
 
 	cpu_map_rebuild();
 

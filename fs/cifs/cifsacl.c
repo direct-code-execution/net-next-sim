@@ -167,17 +167,17 @@ static struct shrinker cifs_shrinker = {
 };
 
 static int
-cifs_idmap_key_instantiate(struct key *key, const void *data, size_t datalen)
+cifs_idmap_key_instantiate(struct key *key, struct key_preparsed_payload *prep)
 {
 	char *payload;
 
-	payload = kmalloc(datalen, GFP_KERNEL);
+	payload = kmalloc(prep->datalen, GFP_KERNEL);
 	if (!payload)
 		return -ENOMEM;
 
-	memcpy(payload, data, datalen);
+	memcpy(payload, prep->data, prep->datalen);
 	key->payload.data = payload;
-	key->datalen = datalen;
+	key->datalen = prep->datalen;
 	return 0;
 }
 
@@ -225,6 +225,13 @@ sid_to_str(struct cifs_sid *sidptr, char *sidstr)
 }
 
 static void
+cifs_copy_sid(struct cifs_sid *dst, const struct cifs_sid *src)
+{
+	memcpy(dst, src, sizeof(*dst));
+	dst->num_subauth = min_t(u8, src->num_subauth, NUM_SUBAUTHS);
+}
+
+static void
 id_rb_insert(struct rb_root *root, struct cifs_sid *sidptr,
 		struct cifs_sid_id **psidid, char *typestr)
 {
@@ -248,7 +255,7 @@ id_rb_insert(struct rb_root *root, struct cifs_sid *sidptr,
 		}
 	}
 
-	memcpy(&(*psidid)->sid, sidptr, sizeof(struct cifs_sid));
+	cifs_copy_sid(&(*psidid)->sid, sidptr);
 	(*psidid)->time = jiffies - (SID_MAP_RETRY + 1);
 	(*psidid)->refcount = 0;
 
@@ -354,7 +361,7 @@ id_to_sid(unsigned long cid, uint sidtype, struct cifs_sid *ssid)
 	 * any fields of the node after a reference is put .
 	 */
 	if (test_bit(SID_ID_MAPPED, &psidid->state)) {
-		memcpy(ssid, &psidid->sid, sizeof(struct cifs_sid));
+		cifs_copy_sid(ssid, &psidid->sid);
 		psidid->time = jiffies; /* update ts for accessing */
 		goto id_sid_out;
 	}
@@ -370,14 +377,14 @@ id_to_sid(unsigned long cid, uint sidtype, struct cifs_sid *ssid)
 		if (IS_ERR(sidkey)) {
 			rc = -EINVAL;
 			cFYI(1, "%s: Can't map and id to a SID", __func__);
+		} else if (sidkey->datalen < sizeof(struct cifs_sid)) {
+			rc = -EIO;
+			cFYI(1, "%s: Downcall contained malformed key "
+				"(datalen=%hu)", __func__, sidkey->datalen);
 		} else {
 			lsid = (struct cifs_sid *)sidkey->payload.data;
-			memcpy(&psidid->sid, lsid,
-				sidkey->datalen < sizeof(struct cifs_sid) ?
-				sidkey->datalen : sizeof(struct cifs_sid));
-			memcpy(ssid, &psidid->sid,
-				sidkey->datalen < sizeof(struct cifs_sid) ?
-				sidkey->datalen : sizeof(struct cifs_sid));
+			cifs_copy_sid(&psidid->sid, lsid);
+			cifs_copy_sid(ssid, &psidid->sid);
 			set_bit(SID_ID_MAPPED, &psidid->state);
 			key_put(sidkey);
 			kfree(psidid->sidstr);
@@ -396,7 +403,7 @@ id_to_sid(unsigned long cid, uint sidtype, struct cifs_sid *ssid)
 			return rc;
 		}
 		if (test_bit(SID_ID_MAPPED, &psidid->state))
-			memcpy(ssid, &psidid->sid, sizeof(struct cifs_sid));
+			cifs_copy_sid(ssid, &psidid->sid);
 		else
 			rc = -EINVAL;
 	}
@@ -525,7 +532,7 @@ init_cifs_idmap(void)
 	struct key *keyring;
 	int ret;
 
-	cFYI(1, "Registering the %s key type\n", cifs_idmap_key_type.name);
+	cFYI(1, "Registering the %s key type", cifs_idmap_key_type.name);
 
 	/* create an override credential set with a special thread keyring in
 	 * which requests are cached
@@ -572,7 +579,7 @@ init_cifs_idmap(void)
 	sidgidtree = RB_ROOT;
 	register_shrinker(&cifs_shrinker);
 
-	cFYI(1, "cifs idmap keyring: %d\n", key_serial(keyring));
+	cFYI(1, "cifs idmap keyring: %d", key_serial(keyring));
 	return 0;
 
 failed_put_key:
@@ -589,7 +596,7 @@ exit_cifs_idmap(void)
 	unregister_key_type(&cifs_idmap_key_type);
 	put_cred(root_cred);
 	unregister_shrinker(&cifs_shrinker);
-	cFYI(1, "Unregistered %s key type\n", cifs_idmap_key_type.name);
+	cFYI(1, "Unregistered %s key type", cifs_idmap_key_type.name);
 }
 
 void
@@ -675,8 +682,6 @@ int compare_sids(const struct cifs_sid *ctsid, const struct cifs_sid *cwsid)
 static void copy_sec_desc(const struct cifs_ntsd *pntsd,
 				struct cifs_ntsd *pnntsd, __u32 sidsoffset)
 {
-	int i;
-
 	struct cifs_sid *owner_sid_ptr, *group_sid_ptr;
 	struct cifs_sid *nowner_sid_ptr, *ngroup_sid_ptr;
 
@@ -692,26 +697,14 @@ static void copy_sec_desc(const struct cifs_ntsd *pntsd,
 	owner_sid_ptr = (struct cifs_sid *)((char *)pntsd +
 				le32_to_cpu(pntsd->osidoffset));
 	nowner_sid_ptr = (struct cifs_sid *)((char *)pnntsd + sidsoffset);
-
-	nowner_sid_ptr->revision = owner_sid_ptr->revision;
-	nowner_sid_ptr->num_subauth = owner_sid_ptr->num_subauth;
-	for (i = 0; i < 6; i++)
-		nowner_sid_ptr->authority[i] = owner_sid_ptr->authority[i];
-	for (i = 0; i < 5; i++)
-		nowner_sid_ptr->sub_auth[i] = owner_sid_ptr->sub_auth[i];
+	cifs_copy_sid(nowner_sid_ptr, owner_sid_ptr);
 
 	/* copy group sid */
 	group_sid_ptr = (struct cifs_sid *)((char *)pntsd +
 				le32_to_cpu(pntsd->gsidoffset));
 	ngroup_sid_ptr = (struct cifs_sid *)((char *)pnntsd + sidsoffset +
 					sizeof(struct cifs_sid));
-
-	ngroup_sid_ptr->revision = group_sid_ptr->revision;
-	ngroup_sid_ptr->num_subauth = group_sid_ptr->num_subauth;
-	for (i = 0; i < 6; i++)
-		ngroup_sid_ptr->authority[i] = group_sid_ptr->authority[i];
-	for (i = 0; i < 5; i++)
-		ngroup_sid_ptr->sub_auth[i] = group_sid_ptr->sub_auth[i];
+	cifs_copy_sid(ngroup_sid_ptr, group_sid_ptr);
 
 	return;
 }
@@ -1120,8 +1113,7 @@ static int build_sec_desc(struct cifs_ntsd *pntsd, struct cifs_ntsd *pnntsd,
 				kfree(nowner_sid_ptr);
 				return rc;
 			}
-			memcpy(owner_sid_ptr, nowner_sid_ptr,
-					sizeof(struct cifs_sid));
+			cifs_copy_sid(owner_sid_ptr, nowner_sid_ptr);
 			kfree(nowner_sid_ptr);
 			*aclflag = CIFS_ACL_OWNER;
 		}
@@ -1139,8 +1131,7 @@ static int build_sec_desc(struct cifs_ntsd *pntsd, struct cifs_ntsd *pnntsd,
 				kfree(ngroup_sid_ptr);
 				return rc;
 			}
-			memcpy(group_sid_ptr, ngroup_sid_ptr,
-					sizeof(struct cifs_sid));
+			cifs_copy_sid(group_sid_ptr, ngroup_sid_ptr);
 			kfree(ngroup_sid_ptr);
 			*aclflag = CIFS_ACL_GROUP;
 		}
@@ -1153,15 +1144,16 @@ static struct cifs_ntsd *get_cifs_acl_by_fid(struct cifs_sb_info *cifs_sb,
 		__u16 fid, u32 *pacllen)
 {
 	struct cifs_ntsd *pntsd = NULL;
-	int xid, rc;
+	unsigned int xid;
+	int rc;
 	struct tcon_link *tlink = cifs_sb_tlink(cifs_sb);
 
 	if (IS_ERR(tlink))
 		return ERR_CAST(tlink);
 
-	xid = GetXid();
+	xid = get_xid();
 	rc = CIFSSMBGetCIFSACL(xid, tlink_tcon(tlink), fid, &pntsd, pacllen);
-	FreeXid(xid);
+	free_xid(xid);
 
 	cifs_put_tlink(tlink);
 
@@ -1176,7 +1168,8 @@ static struct cifs_ntsd *get_cifs_acl_by_path(struct cifs_sb_info *cifs_sb,
 {
 	struct cifs_ntsd *pntsd = NULL;
 	int oplock = 0;
-	int xid, rc, create_options = 0;
+	unsigned int xid;
+	int rc, create_options = 0;
 	__u16 fid;
 	struct cifs_tcon *tcon;
 	struct tcon_link *tlink = cifs_sb_tlink(cifs_sb);
@@ -1185,7 +1178,7 @@ static struct cifs_ntsd *get_cifs_acl_by_path(struct cifs_sb_info *cifs_sb,
 		return ERR_CAST(tlink);
 
 	tcon = tlink_tcon(tlink);
-	xid = GetXid();
+	xid = get_xid();
 
 	if (backup_cred(cifs_sb))
 		create_options |= CREATE_OPEN_BACKUP_INTENT;
@@ -1199,7 +1192,7 @@ static struct cifs_ntsd *get_cifs_acl_by_path(struct cifs_sb_info *cifs_sb,
 	}
 
 	cifs_put_tlink(tlink);
-	FreeXid(xid);
+	free_xid(xid);
 
 	cFYI(1, "%s: rc = %d ACL len %d", __func__, rc, *pacllen);
 	if (rc)
@@ -1220,7 +1213,7 @@ struct cifs_ntsd *get_cifs_acl(struct cifs_sb_info *cifs_sb,
 	if (!open_file)
 		return get_cifs_acl_by_path(cifs_sb, path, pacllen);
 
-	pntsd = get_cifs_acl_by_fid(cifs_sb, open_file->netfid, pacllen);
+	pntsd = get_cifs_acl_by_fid(cifs_sb, open_file->fid.netfid, pacllen);
 	cifsFileInfo_put(open_file);
 	return pntsd;
 }
@@ -1230,7 +1223,8 @@ int set_cifs_acl(struct cifs_ntsd *pnntsd, __u32 acllen,
 			struct inode *inode, const char *path, int aclflag)
 {
 	int oplock = 0;
-	int xid, rc, access_flags, create_options = 0;
+	unsigned int xid;
+	int rc, access_flags, create_options = 0;
 	__u16 fid;
 	struct cifs_tcon *tcon;
 	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
@@ -1240,7 +1234,7 @@ int set_cifs_acl(struct cifs_ntsd *pnntsd, __u32 acllen,
 		return PTR_ERR(tlink);
 
 	tcon = tlink_tcon(tlink);
-	xid = GetXid();
+	xid = get_xid();
 
 	if (backup_cred(cifs_sb))
 		create_options |= CREATE_OPEN_BACKUP_INTENT;
@@ -1263,7 +1257,7 @@ int set_cifs_acl(struct cifs_ntsd *pnntsd, __u32 acllen,
 
 	CIFSSMBClose(xid, tcon, fid);
 out:
-	FreeXid(xid);
+	free_xid(xid);
 	cifs_put_tlink(tlink);
 	return rc;
 }

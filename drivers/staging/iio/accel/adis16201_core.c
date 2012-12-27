@@ -159,21 +159,6 @@ static int adis16201_reset(struct iio_dev *indio_dev)
 	return ret;
 }
 
-static ssize_t adis16201_write_reset(struct device *dev,
-		struct device_attribute *attr,
-		const char *buf, size_t len)
-{
-	int ret;
-	bool res;
-
-	if (len < 1)
-		return -EINVAL;
-	ret = strtobool(buf, &res);
-	if (ret || !res)
-		return ret;
-	return adis16201_reset(dev_to_iio_dev(dev));
-}
-
 int adis16201_set_irq(struct iio_dev *indio_dev, bool enable)
 {
 	int ret = 0;
@@ -325,30 +310,32 @@ static int adis16201_read_raw(struct iio_dev *indio_dev,
 	case IIO_CHAN_INFO_SCALE:
 		switch (chan->type) {
 		case IIO_VOLTAGE:
-			*val = 0;
-			if (chan->channel == 0)
-				*val2 = 1220;
-			else
-				*val2 = 610;
+			if (chan->channel == 0) {
+				*val = 1;
+				*val2 = 220000; /* 1.22 mV */
+			} else {
+				*val = 0;
+				*val2 = 610000; /* 0.610 mV */
+			}
 			return IIO_VAL_INT_PLUS_MICRO;
 		case IIO_TEMP:
-			*val = 0;
-			*val2 = -470000;
+			*val = -470; /* 0.47 C */
+			*val2 = 0;
 			return IIO_VAL_INT_PLUS_MICRO;
 		case IIO_ACCEL:
 			*val = 0;
-			*val2 = 462500;
-			return IIO_VAL_INT_PLUS_MICRO;
+			*val2 = IIO_G_TO_M_S_2(462400); /* 0.4624 mg */
+			return IIO_VAL_INT_PLUS_NANO;
 		case IIO_INCLI:
 			*val = 0;
-			*val2 = 100000;
+			*val2 = 100000; /* 0.1 degree */
 			return IIO_VAL_INT_PLUS_MICRO;
 		default:
 			return -EINVAL;
 		}
 		break;
 	case IIO_CHAN_INFO_OFFSET:
-		*val = 25;
+		*val = 25000 / -470 - 1278; /* 25 C = 1278 */
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_CALIBBIAS:
 		switch (chan->type) {
@@ -405,7 +392,7 @@ static int adis16201_write_raw(struct iio_dev *indio_dev,
 	return -EINVAL;
 }
 
-static struct iio_chan_spec adis16201_channels[] = {
+static const struct iio_chan_spec adis16201_channels[] = {
 	{
 		.type = IIO_VOLTAGE,
 		.indexed = 1,
@@ -507,19 +494,7 @@ static struct iio_chan_spec adis16201_channels[] = {
 	IIO_CHAN_SOFT_TIMESTAMP(7)
 };
 
-static IIO_DEVICE_ATTR(reset, S_IWUSR, NULL, adis16201_write_reset, 0);
-
-static struct attribute *adis16201_attributes[] = {
-	&iio_dev_attr_reset.dev_attr.attr,
-	NULL
-};
-
-static const struct attribute_group adis16201_attribute_group = {
-	.attrs = adis16201_attributes,
-};
-
 static const struct iio_info adis16201_info = {
-	.attrs = &adis16201_attribute_group,
 	.read_raw = &adis16201_read_raw,
 	.write_raw = &adis16201_write_raw,
 	.driver_module = THIS_MODULE,
@@ -592,7 +567,7 @@ error_ret:
 	return ret;
 }
 
-static int adis16201_remove(struct spi_device *spi)
+static int __devexit adis16201_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
 

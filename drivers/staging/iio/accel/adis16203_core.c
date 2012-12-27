@@ -178,22 +178,6 @@ static int adis16203_reset(struct iio_dev *indio_dev)
 	return ret;
 }
 
-static ssize_t adis16203_write_reset(struct device *dev,
-		struct device_attribute *attr,
-		const char *buf, size_t len)
-{
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	if (len < 1)
-		return -EINVAL;
-	switch (buf[0]) {
-	case '1':
-	case 'y':
-	case 'Y':
-		return adis16203_reset(indio_dev);
-	}
-	return -EINVAL;
-}
-
 int adis16203_set_irq(struct iio_dev *indio_dev, bool enable)
 {
 	int ret = 0;
@@ -332,25 +316,27 @@ static int adis16203_read_raw(struct iio_dev *indio_dev,
 	case IIO_CHAN_INFO_SCALE:
 		switch (chan->type) {
 		case IIO_VOLTAGE:
-			*val = 0;
-			if (chan->channel == 0)
-				*val2 = 1220;
-			else
-				*val2 = 610;
+			if (chan->channel == 0) {
+				*val = 1;
+				*val2 = 220000; /* 1.22 mV */
+			} else {
+				*val = 0;
+				*val2 = 610000; /* 0.61 mV */
+			}
 			return IIO_VAL_INT_PLUS_MICRO;
 		case IIO_TEMP:
-			*val = 0;
-			*val2 = -470000;
+			*val = -470; /* -0.47 C */
+			*val2 = 0;
 			return IIO_VAL_INT_PLUS_MICRO;
 		case IIO_INCLI:
 			*val = 0;
-			*val2 = 25000;
+			*val2 = 25000; /* 0.025 degree */
 			return IIO_VAL_INT_PLUS_MICRO;
 		default:
 			return -EINVAL;
 		}
 	case IIO_CHAN_INFO_OFFSET:
-		*val = 25;
+		*val = 25000 / -470 - 1278; /* 25 C = 1278 */
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_CALIBBIAS:
 		bits = 14;
@@ -371,7 +357,7 @@ static int adis16203_read_raw(struct iio_dev *indio_dev,
 	}
 }
 
-static struct iio_chan_spec adis16203_channels[] = {
+static const struct iio_chan_spec adis16203_channels[] = {
 	{
 		.type = IIO_VOLTAGE,
 		.indexed = 1,
@@ -444,19 +430,7 @@ static struct iio_chan_spec adis16203_channels[] = {
 	IIO_CHAN_SOFT_TIMESTAMP(5),
 };
 
-static IIO_DEVICE_ATTR(reset, S_IWUSR, NULL, adis16203_write_reset, 0);
-
-static struct attribute *adis16203_attributes[] = {
-	&iio_dev_attr_reset.dev_attr.attr,
-	NULL
-};
-
-static const struct attribute_group adis16203_attribute_group = {
-	.attrs = adis16203_attributes,
-};
-
 static const struct iio_info adis16203_info = {
-	.attrs = &adis16203_attribute_group,
 	.read_raw = &adis16203_read_raw,
 	.write_raw = &adis16203_write_raw,
 	.driver_module = THIS_MODULE,
@@ -528,7 +502,7 @@ error_ret:
 	return ret;
 }
 
-static int adis16203_remove(struct spi_device *spi)
+static int __devexit adis16203_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
 

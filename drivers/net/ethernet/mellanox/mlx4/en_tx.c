@@ -143,7 +143,6 @@ void mlx4_en_destroy_tx_ring(struct mlx4_en_priv *priv,
 		mlx4_bf_free(mdev->dev, &ring->bf);
 	mlx4_qp_remove(mdev->dev, &ring->qp);
 	mlx4_qp_free(mdev->dev, &ring->qp);
-	mlx4_qp_release_range(mdev->dev, ring->qpn, 1);
 	mlx4_en_unmap_buffer(&ring->wqres.buf);
 	mlx4_free_hwq_res(mdev->dev, &ring->wqres, ring->buf_size);
 	kfree(ring->bounce_buf);
@@ -164,7 +163,6 @@ int mlx4_en_activate_tx_ring(struct mlx4_en_priv *priv,
 	ring->cons = 0xffffffff;
 	ring->last_nr_txbb = 1;
 	ring->poll_cnt = 0;
-	ring->blocked = 0;
 	memset(ring->tx_info, 0, ring->size * sizeof(struct mlx4_en_tx_info));
 	memset(ring->buf, 0, ring->buf_size);
 
@@ -365,14 +363,13 @@ static void mlx4_en_process_tx_cq(struct net_device *dev, struct mlx4_en_cq *cq)
 	ring->cons += txbbs_skipped;
 	netdev_tx_completed_queue(ring->tx_queue, packets, bytes);
 
-	/* Wakeup Tx queue if this ring stopped it */
-	if (unlikely(ring->blocked)) {
-		if ((u32) (ring->prod - ring->cons) <=
-		     ring->size - HEADROOM - MAX_DESC_TXBBS) {
-			ring->blocked = 0;
-			netif_tx_wake_queue(ring->tx_queue);
-			priv->port_stats.wake_queue++;
-		}
+	/*
+	 * Wakeup Tx queue if this stopped, and at least 1 packet
+	 * was completed
+	 */
+	if (netif_tx_queue_stopped(ring->tx_queue) && txbbs_skipped > 0) {
+		netif_tx_wake_queue(ring->tx_queue);
+		priv->port_stats.wake_queue++;
 	}
 }
 
@@ -592,7 +589,6 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff *skb, struct net_device *dev)
 		     ring->size - HEADROOM - MAX_DESC_TXBBS)) {
 		/* every full Tx ring stops queue */
 		netif_tx_stop_queue(ring->tx_queue);
-		ring->blocked = 1;
 		priv->port_stats.queue_stopped++;
 
 		return NETDEV_TX_BUSY;
@@ -715,11 +711,7 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (bounce)
 		tx_desc = mlx4_en_bounce_to_desc(priv, ring, index, desc_size);
 
-	/* Run destructor before passing skb to HW */
-	if (likely(!skb_shared(skb)))
-		skb_orphan(skb);
-
-	if (ring->bf_enabled && desc_size <= MAX_BF && !bounce && !vlan_tag) {
+	if (ring->bf_enabled && desc_size <= MAX_BF && !bounce && !vlan_tx_tag_present(skb)) {
 		*(__be32 *) (&tx_desc->ctrl.vlan_tag) |= cpu_to_be32(ring->doorbell_qpn);
 		op_own |= htonl((bf_index & 0xffff) << 8);
 		/* Ensure new descirptor hits memory

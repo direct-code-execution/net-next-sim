@@ -186,13 +186,13 @@ EXPORT_SYMBOL(dma_release_from_coherent);
  * @vma:	vm_area for the userspace memory
  * @vaddr:	cpu address returned by dma_alloc_from_coherent
  * @size:	size of the memory buffer allocated by dma_alloc_from_coherent
+ * @ret:	result from remap_pfn_range()
  *
  * This checks whether the memory was allocated from the per-device
  * coherent memory pool and if so, maps that memory to the provided vma.
  *
- * Returns 1 if we correctly mapped the memory, or 0 if
- * dma_release_coherent() should proceed with mapping memory from
- * generic pools.
+ * Returns 1 if we correctly mapped the memory, or 0 if the caller should
+ * proceed with mapping memory from generic pools.
  */
 int dma_mmap_from_coherent(struct device *dev, struct vm_area_struct *vma,
 			   void *vaddr, size_t size, int *ret)

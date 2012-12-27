@@ -138,24 +138,18 @@ int __ext4_handle_dirty_metadata(const char *where, unsigned int line,
 }
 
 int __ext4_handle_dirty_super(const char *where, unsigned int line,
-			      handle_t *handle, struct super_block *sb,
-			      int now)
+			      handle_t *handle, struct super_block *sb)
 {
 	struct buffer_head *bh = EXT4_SB(sb)->s_sbh;
 	int err = 0;
 
+	ext4_superblock_csum_set(sb);
 	if (ext4_handle_valid(handle)) {
-		ext4_superblock_csum_set(sb,
-				(struct ext4_super_block *)bh->b_data);
 		err = jbd2_journal_dirty_metadata(handle, bh);
 		if (err)
 			ext4_journal_abort_handle(where, line, __func__,
 						  bh, handle, err);
-	} else if (now) {
-		ext4_superblock_csum_set(sb,
-				(struct ext4_super_block *)bh->b_data);
-		mark_buffer_dirty(bh);
 	} else
-		sb->s_dirt = 1;
+		mark_buffer_dirty(bh);
 	return err;
 }

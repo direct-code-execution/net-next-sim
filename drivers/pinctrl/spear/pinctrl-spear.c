@@ -244,7 +244,7 @@ static int spear_pinctrl_endisable(struct pinctrl_dev *pctldev,
 			else
 				temp = ~muxreg->val;
 
-			val |= temp;
+			val |= muxreg->mask & temp;
 			pmx_writel(pmx, val, muxreg->reg);
 		}
 	}
@@ -336,9 +336,9 @@ int __devinit spear_pinctrl_probe(struct platform_device *pdev,
 	spear_pinctrl_desc.npins = machdata->npins;
 
 	pmx->pctl = pinctrl_register(&spear_pinctrl_desc, &pdev->dev, pmx);
-	if (IS_ERR(pmx->pctl)) {
+	if (!pmx->pctl) {
 		dev_err(&pdev->dev, "Couldn't register pinctrl driver\n");
-		return PTR_ERR(pmx->pctl);
+		return -ENODEV;
 	}
 
 	return 0;

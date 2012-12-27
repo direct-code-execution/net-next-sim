@@ -38,8 +38,6 @@
 #include <linux/string.h>
 #include <linux/configfs.h>
 #include <linux/ctype.h>
-#include <linux/string.h>
-#include <linux/ctype.h>
 #include <asm/unaligned.h>
 #include <scsi/scsi.h>
 #include <scsi/scsi_host.h>
@@ -239,7 +237,7 @@ static char *tcm_qla2xxx_get_fabric_wwn(struct se_portal_group *se_tpg)
 				struct tcm_qla2xxx_tpg, se_tpg);
 	struct tcm_qla2xxx_lport *lport = tpg->lport;
 
-	return &lport->lport_name[0];
+	return lport->lport_naa_name;
 }
 
 static char *tcm_qla2xxx_npiv_get_fabric_wwn(struct se_portal_group *se_tpg)
@@ -466,8 +464,7 @@ static int tcm_qla2xxx_shutdown_session(struct se_session *se_sess)
 	vha = sess->vha;
 
 	spin_lock_irqsave(&vha->hw->hardware_lock, flags);
-	sess->tearing_down = 1;
-	target_splice_sess_cmd_list(se_sess);
+	target_sess_cmd_list_set_waiting(se_sess);
 	spin_unlock_irqrestore(&vha->hw->hardware_lock, flags);
 
 	return 1;
@@ -600,28 +597,15 @@ static int tcm_qla2xxx_handle_cmd(scsi_qla_host_t *vha, struct qla_tgt_cmd *cmd,
 		return -EINVAL;
 	}
 
-	target_submit_cmd(se_cmd, se_sess, cdb, &cmd->sense_buffer[0],
+	return target_submit_cmd(se_cmd, se_sess, cdb, &cmd->sense_buffer[0],
 				cmd->unpacked_lun, data_length, fcp_task_attr,
 				data_dir, flags);
-	return 0;
 }
 
-static void tcm_qla2xxx_do_rsp(struct work_struct *work)
+static void tcm_qla2xxx_handle_data_work(struct work_struct *work)
 {
 	struct qla_tgt_cmd *cmd = container_of(work, struct qla_tgt_cmd, work);
-	/*
-	 * Dispatch ->queue_status from workqueue process context
-	 */
-	transport_generic_request_failure(&cmd->se_cmd);
-}
 
-/*
- * Called from qla_target.c:qlt_do_ctio_completion()
- */
-static int tcm_qla2xxx_handle_data(struct qla_tgt_cmd *cmd)
-{
-	struct se_cmd *se_cmd = &cmd->se_cmd;
-	unsigned long flags;
 	/*
 	 * Ensure that the complete FCP WRITE payload has been received.
 	 * Otherwise return an exception via CHECK_CONDITION status.
@@ -631,24 +615,26 @@ static int tcm_qla2xxx_handle_data(struct qla_tgt_cmd *cmd)
 		 * Check if se_cmd has already been aborted via LUN_RESET, and
 		 * waiting upon completion in tcm_qla2xxx_write_pending_status()
 		 */
-		spin_lock_irqsave(&se_cmd->t_state_lock, flags);
-		if (se_cmd->transport_state & CMD_T_ABORTED) {
-			spin_unlock_irqrestore(&se_cmd->t_state_lock, flags);
-			complete(&se_cmd->t_transport_stop_comp);
-			return 0;
+		if (cmd->se_cmd.transport_state & CMD_T_ABORTED) {
+			complete(&cmd->se_cmd.t_transport_stop_comp);
+			return;
 		}
-		spin_unlock_irqrestore(&se_cmd->t_state_lock, flags);
 
-		se_cmd->scsi_sense_reason = TCM_CHECK_CONDITION_ABORT_CMD;
-		INIT_WORK(&cmd->work, tcm_qla2xxx_do_rsp);
-		queue_work(tcm_qla2xxx_free_wq, &cmd->work);
-		return 0;
+		cmd->se_cmd.scsi_sense_reason = TCM_CHECK_CONDITION_ABORT_CMD;
+		transport_generic_request_failure(&cmd->se_cmd);
+		return;
 	}
-	/*
-	 * We now tell TCM to queue this WRITE CDB with TRANSPORT_PROCESS_WRITE
-	 * status to the backstore processing thread.
-	 */
-	return transport_generic_handle_data(&cmd->se_cmd);
+
+	return target_execute_cmd(&cmd->se_cmd);
+}
+
+/*
+ * Called from qla_target.c:qlt_do_ctio_completion()
+ */
+static void tcm_qla2xxx_handle_data(struct qla_tgt_cmd *cmd)
+{
+	INIT_WORK(&cmd->work, tcm_qla2xxx_handle_data_work);
+	queue_work(tcm_qla2xxx_free_wq, &cmd->work);
 }
 
 /*
@@ -746,17 +732,6 @@ static int tcm_qla2xxx_queue_tm_rsp(struct se_cmd *se_cmd)
 	 */
 	qlt_xmit_tm_rsp(mcmd);
 
-	return 0;
-}
-
-static u16 tcm_qla2xxx_get_fabric_sense_len(void)
-{
-	return 0;
-}
-
-static u16 tcm_qla2xxx_set_fabric_sense_len(struct se_cmd *se_cmd,
-					u32 sense_length)
-{
 	return 0;
 }
 
@@ -1482,6 +1457,78 @@ static int tcm_qla2xxx_check_initiator_node_acl(
 	return 0;
 }
 
+static void tcm_qla2xxx_update_sess(struct qla_tgt_sess *sess, port_id_t s_id,
+				    uint16_t loop_id, bool conf_compl_supported)
+{
+	struct qla_tgt *tgt = sess->tgt;
+	struct qla_hw_data *ha = tgt->ha;
+	struct tcm_qla2xxx_lport *lport = ha->tgt.target_lport_ptr;
+	struct se_node_acl *se_nacl = sess->se_sess->se_node_acl;
+	struct tcm_qla2xxx_nacl *nacl = container_of(se_nacl,
+			struct tcm_qla2xxx_nacl, se_node_acl);
+	u32 key;
+
+
+	if (sess->loop_id != loop_id || sess->s_id.b24 != s_id.b24)
+		pr_info("Updating session %p from port %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x loop_id %d -> %d s_id %x:%x:%x -> %x:%x:%x\n",
+			sess,
+			sess->port_name[0], sess->port_name[1],
+			sess->port_name[2], sess->port_name[3],
+			sess->port_name[4], sess->port_name[5],
+			sess->port_name[6], sess->port_name[7],
+			sess->loop_id, loop_id,
+			sess->s_id.b.domain, sess->s_id.b.area, sess->s_id.b.al_pa,
+			s_id.b.domain, s_id.b.area, s_id.b.al_pa);
+
+	if (sess->loop_id != loop_id) {
+		/*
+		 * Because we can shuffle loop IDs around and we
+		 * update different sessions non-atomically, we might
+		 * have overwritten this session's old loop ID
+		 * already, and we might end up overwriting some other
+		 * session that will be updated later.  So we have to
+		 * be extra careful and we can't warn about those things...
+		 */
+		if (lport->lport_loopid_map[sess->loop_id].se_nacl == se_nacl)
+			lport->lport_loopid_map[sess->loop_id].se_nacl = NULL;
+
+		lport->lport_loopid_map[loop_id].se_nacl = se_nacl;
+
+		sess->loop_id = loop_id;
+	}
+
+	if (sess->s_id.b24 != s_id.b24) {
+		key = (((u32) sess->s_id.b.domain << 16) |
+		       ((u32) sess->s_id.b.area   <<  8) |
+		       ((u32) sess->s_id.b.al_pa));
+
+		if (btree_lookup32(&lport->lport_fcport_map, key))
+			WARN(btree_remove32(&lport->lport_fcport_map, key) != se_nacl,
+			     "Found wrong se_nacl when updating s_id %x:%x:%x\n",
+			     sess->s_id.b.domain, sess->s_id.b.area, sess->s_id.b.al_pa);
+		else
+			WARN(1, "No lport_fcport_map entry for s_id %x:%x:%x\n",
+			     sess->s_id.b.domain, sess->s_id.b.area, sess->s_id.b.al_pa);
+
+		key = (((u32) s_id.b.domain << 16) |
+		       ((u32) s_id.b.area   <<  8) |
+		       ((u32) s_id.b.al_pa));
+
+		if (btree_lookup32(&lport->lport_fcport_map, key)) {
+			WARN(1, "Already have lport_fcport_map entry for s_id %x:%x:%x\n",
+			     s_id.b.domain, s_id.b.area, s_id.b.al_pa);
+			btree_update32(&lport->lport_fcport_map, key, se_nacl);
+		} else {
+			btree_insert32(&lport->lport_fcport_map, key, se_nacl, GFP_ATOMIC);
+		}
+
+		sess->s_id = s_id;
+		nacl->nport_id = key;
+	}
+
+	sess->conf_compl_supported = conf_compl_supported;
+}
+
 /*
  * Calls into tcm_qla2xxx used by qla2xxx LLD I/O path.
  */
@@ -1492,6 +1539,7 @@ static struct qla_tgt_func_tmpl tcm_qla2xxx_template = {
 	.free_cmd		= tcm_qla2xxx_free_cmd,
 	.free_mcmd		= tcm_qla2xxx_free_mcmd,
 	.free_session		= tcm_qla2xxx_free_session,
+	.update_sess		= tcm_qla2xxx_update_sess,
 	.check_initiator_node_acl = tcm_qla2xxx_check_initiator_node_acl,
 	.find_sess_by_s_id	= tcm_qla2xxx_find_sess_by_s_id,
 	.find_sess_by_loop_id	= tcm_qla2xxx_find_sess_by_loop_id,
@@ -1559,6 +1607,7 @@ static struct se_wwn *tcm_qla2xxx_make_lport(
 	lport->lport_wwpn = wwpn;
 	tcm_qla2xxx_format_wwn(&lport->lport_name[0], TCM_QLA2XXX_NAMELEN,
 				wwpn);
+	sprintf(lport->lport_naa_name, "naa.%016llx", (unsigned long long) wwpn);
 
 	ret = tcm_qla2xxx_init_lport(lport);
 	if (ret != 0)
@@ -1626,6 +1675,7 @@ static struct se_wwn *tcm_qla2xxx_npiv_make_lport(
 	lport->lport_npiv_wwnn = npiv_wwnn;
 	tcm_qla2xxx_npiv_format_wwn(&lport->lport_npiv_name[0],
 			TCM_QLA2XXX_NAMELEN, npiv_wwpn, npiv_wwnn);
+	sprintf(lport->lport_naa_name, "naa.%016llx", (unsigned long long) npiv_wwpn);
 
 /* FIXME: tcm_qla2xxx_npiv_make_lport */
 	ret = -ENOSYS;
@@ -1690,7 +1740,6 @@ static struct target_core_fabric_ops tcm_qla2xxx_ops = {
 	.tpg_alloc_fabric_acl		= tcm_qla2xxx_alloc_fabric_acl,
 	.tpg_release_fabric_acl		= tcm_qla2xxx_release_fabric_acl,
 	.tpg_get_inst_index		= tcm_qla2xxx_tpg_get_inst_index,
-	.new_cmd_map			= NULL,
 	.check_stop_free		= tcm_qla2xxx_check_stop_free,
 	.release_cmd			= tcm_qla2xxx_release_cmd,
 	.put_session			= tcm_qla2xxx_put_session,
@@ -1706,8 +1755,6 @@ static struct target_core_fabric_ops tcm_qla2xxx_ops = {
 	.queue_data_in			= tcm_qla2xxx_queue_data_in,
 	.queue_status			= tcm_qla2xxx_queue_status,
 	.queue_tm_rsp			= tcm_qla2xxx_queue_tm_rsp,
-	.get_fabric_sense_len		= tcm_qla2xxx_get_fabric_sense_len,
-	.set_fabric_sense_len		= tcm_qla2xxx_set_fabric_sense_len,
 	/*
 	 * Setup function pointers for generic logic in
 	 * target_core_fabric_configfs.c
@@ -1755,8 +1802,6 @@ static struct target_core_fabric_ops tcm_qla2xxx_npiv_ops = {
 	.queue_data_in			= tcm_qla2xxx_queue_data_in,
 	.queue_status			= tcm_qla2xxx_queue_status,
 	.queue_tm_rsp			= tcm_qla2xxx_queue_tm_rsp,
-	.get_fabric_sense_len		= tcm_qla2xxx_get_fabric_sense_len,
-	.set_fabric_sense_len		= tcm_qla2xxx_set_fabric_sense_len,
 	/*
 	 * Setup function pointers for generic logic in
 	 * target_core_fabric_configfs.c

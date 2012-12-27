@@ -109,7 +109,7 @@ int __init mx27_clocks_init(unsigned long fref)
 	clk[per3_div] = imx_clk_divider("per3_div", "mpll_main2", CCM_PCDR1, 16, 6);
 	clk[per4_div] = imx_clk_divider("per4_div", "mpll_main2", CCM_PCDR1, 24, 6);
 	clk[vpu_sel] = imx_clk_mux("vpu_sel", CCM_CSCR, 21, 1, vpu_sel_clks, ARRAY_SIZE(vpu_sel_clks));
-	clk[vpu_div] = imx_clk_divider("vpu_div", "vpu_sel", CCM_PCDR0, 10, 3);
+	clk[vpu_div] = imx_clk_divider("vpu_div", "vpu_sel", CCM_PCDR0, 10, 6);
 	clk[usb_div] = imx_clk_divider("usb_div", "spll", CCM_CSCR, 28, 3);
 	clk[cpu_sel] = imx_clk_mux("cpu_sel", CCM_CSCR, 15, 1, cpu_sel_clks, ARRAY_SIZE(cpu_sel_clks));
 	clk[clko_sel] = imx_clk_mux("clko_sel", CCM_CCSR, 0, 5, clko_sel_clks, ARRAY_SIZE(clko_sel_clks));
@@ -121,7 +121,7 @@ int __init mx27_clocks_init(unsigned long fref)
 	clk[ssi1_sel] = imx_clk_mux("ssi1_sel", CCM_CSCR, 22, 1, ssi_sel_clks, ARRAY_SIZE(ssi_sel_clks));
 	clk[ssi2_sel] = imx_clk_mux("ssi2_sel", CCM_CSCR, 23, 1, ssi_sel_clks, ARRAY_SIZE(ssi_sel_clks));
 	clk[ssi1_div] = imx_clk_divider("ssi1_div", "ssi1_sel", CCM_PCDR0, 16, 6);
-	clk[ssi2_div] = imx_clk_divider("ssi2_div", "ssi2_sel", CCM_PCDR0, 26, 3);
+	clk[ssi2_div] = imx_clk_divider("ssi2_div", "ssi2_sel", CCM_PCDR0, 26, 6);
 	clk[clko_en] = imx_clk_gate("clko_en", "clko_div", CCM_PCCR0, 0);
 	clk[ssi2_ipg_gate] = imx_clk_gate("ssi2_ipg_gate", "ipg", CCM_PCCR0, 0);
 	clk[ssi1_ipg_gate] = imx_clk_gate("ssi1_ipg_gate", "ipg", CCM_PCCR0, 1);
@@ -223,7 +223,7 @@ int __init mx27_clocks_init(unsigned long fref)
 	clk_register_clkdev(clk[per3_gate], "per", "imx-fb.0");
 	clk_register_clkdev(clk[lcdc_ipg_gate], "ipg", "imx-fb.0");
 	clk_register_clkdev(clk[lcdc_ahb_gate], "ahb", "imx-fb.0");
-	clk_register_clkdev(clk[csi_ahb_gate], NULL, "mx2-camera.0");
+	clk_register_clkdev(clk[csi_ahb_gate], "ahb", "mx2-camera.0");
 	clk_register_clkdev(clk[usb_div], "per", "fsl-usb2-udc");
 	clk_register_clkdev(clk[usb_ipg_gate], "ipg", "fsl-usb2-udc");
 	clk_register_clkdev(clk[usb_ahb_gate], "ahb", "fsl-usb2-udc");
@@ -239,8 +239,8 @@ int __init mx27_clocks_init(unsigned long fref)
 	clk_register_clkdev(clk[ssi1_ipg_gate], NULL, "imx-ssi.0");
 	clk_register_clkdev(clk[ssi2_ipg_gate], NULL, "imx-ssi.1");
 	clk_register_clkdev(clk[nfc_baud_gate], NULL, "mxc_nand.0");
-	clk_register_clkdev(clk[vpu_baud_gate], "per", "imx-vpu");
-	clk_register_clkdev(clk[vpu_ahb_gate], "ahb", "imx-vpu");
+	clk_register_clkdev(clk[vpu_baud_gate], "per", "coda-imx27.0");
+	clk_register_clkdev(clk[vpu_ahb_gate], "ahb", "coda-imx27.0");
 	clk_register_clkdev(clk[dma_ahb_gate], "ahb", "imx-dma");
 	clk_register_clkdev(clk[dma_ipg_gate], "ipg", "imx-dma");
 	clk_register_clkdev(clk[fec_ipg_gate], "ipg", "imx27-fec.0");
@@ -250,13 +250,15 @@ int __init mx27_clocks_init(unsigned long fref)
 	clk_register_clkdev(clk[i2c2_ipg_gate], NULL, "imx-i2c.1");
 	clk_register_clkdev(clk[owire_ipg_gate], NULL, "mxc_w1.0");
 	clk_register_clkdev(clk[kpp_ipg_gate], NULL, "imx-keypad");
-	clk_register_clkdev(clk[emma_ahb_gate], "ahb", "imx-emma");
-	clk_register_clkdev(clk[emma_ipg_gate], "ipg", "imx-emma");
+	clk_register_clkdev(clk[emma_ahb_gate], "emma-ahb", "mx2-camera.0");
+	clk_register_clkdev(clk[emma_ipg_gate], "emma-ipg", "mx2-camera.0");
+	clk_register_clkdev(clk[emma_ahb_gate], "ahb", "m2m-emmaprp.0");
+	clk_register_clkdev(clk[emma_ipg_gate], "ipg", "m2m-emmaprp.0");
 	clk_register_clkdev(clk[iim_ipg_gate], "iim", NULL);
 	clk_register_clkdev(clk[gpio_ipg_gate], "gpio", NULL);
 	clk_register_clkdev(clk[brom_ahb_gate], "brom", NULL);
 	clk_register_clkdev(clk[ata_ahb_gate], "ata", NULL);
-	clk_register_clkdev(clk[rtc_ipg_gate], "rtc", NULL);
+	clk_register_clkdev(clk[rtc_ipg_gate], NULL, "mxc_rtc");
 	clk_register_clkdev(clk[scc_ipg_gate], "scc", NULL);
 	clk_register_clkdev(clk[cpu_div], "cpu", NULL);
 	clk_register_clkdev(clk[emi_ahb_gate], "emi_ahb" , NULL);
@@ -266,6 +268,8 @@ int __init mx27_clocks_init(unsigned long fref)
 	mxc_timer_init(MX27_IO_ADDRESS(MX27_GPT1_BASE_ADDR), MX27_INT_GPT1);
 
 	clk_prepare_enable(clk[emi_ahb_gate]);
+
+	imx_print_silicon_rev("i.MX27", mx27_revision());
 
 	return 0;
 }

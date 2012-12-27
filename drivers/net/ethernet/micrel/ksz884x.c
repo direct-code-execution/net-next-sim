@@ -3913,7 +3913,7 @@ static void hw_start_rx(struct ksz_hw *hw)
 		hw->rx_stop = 2;
 }
 
-/*
+/**
  * hw_stop_rx - stop receiving
  * @hw: 	The hardware instance.
  *
@@ -4480,14 +4480,12 @@ static void ksz_init_rx_buffers(struct dev_info *adapter)
 		dma_buf->len = adapter->mtu;
 		if (!dma_buf->skb)
 			dma_buf->skb = alloc_skb(dma_buf->len, GFP_ATOMIC);
-		if (dma_buf->skb && !dma_buf->dma) {
-			dma_buf->skb->dev = adapter->dev;
+		if (dma_buf->skb && !dma_buf->dma)
 			dma_buf->dma = pci_map_single(
 				adapter->pdev,
 				skb_tail_pointer(dma_buf->skb),
 				dma_buf->len,
 				PCI_DMA_FROMDEVICE);
-		}
 
 		/* Set descriptor. */
 		set_rx_buf(desc, dma_buf->dma);
@@ -4881,8 +4879,8 @@ static netdev_tx_t netdev_tx(struct sk_buff *skb, struct net_device *dev)
 	left = hw_alloc_pkt(hw, skb->len, num);
 	if (left) {
 		if (left < num ||
-				((CHECKSUM_PARTIAL == skb->ip_summed) &&
-				(ETH_P_IPV6 == htons(skb->protocol)))) {
+		    (CHECKSUM_PARTIAL == skb->ip_summed &&
+		     skb->protocol == htons(ETH_P_IPV6))) {
 			struct sk_buff *org_skb = skb;
 
 			skb = netdev_alloc_skb(dev, org_skb->len);
@@ -5409,8 +5407,8 @@ static int netdev_close(struct net_device *dev)
 		/* Delay for receive task to stop scheduling itself. */
 		msleep(2000 / HZ);
 
-		tasklet_disable(&hw_priv->rx_tasklet);
-		tasklet_disable(&hw_priv->tx_tasklet);
+		tasklet_kill(&hw_priv->rx_tasklet);
+		tasklet_kill(&hw_priv->tx_tasklet);
 		free_irq(dev->irq, hw_priv->dev);
 
 		transmit_cleanup(hw_priv, 0);
@@ -5461,8 +5459,10 @@ static int prepare_hardware(struct net_device *dev)
 	rc = request_irq(dev->irq, netdev_intr, IRQF_SHARED, dev->name, dev);
 	if (rc)
 		return rc;
-	tasklet_enable(&hw_priv->rx_tasklet);
-	tasklet_enable(&hw_priv->tx_tasklet);
+	tasklet_init(&hw_priv->rx_tasklet, rx_proc_task,
+		     (unsigned long) hw_priv);
+	tasklet_init(&hw_priv->tx_tasklet, tx_proc_task,
+		     (unsigned long) hw_priv);
 
 	hw->promiscuous = 0;
 	hw->all_multi = 0;
@@ -7034,16 +7034,6 @@ static int __devinit pcidev_init(struct pci_dev *pdev,
 
 	spin_lock_init(&hw_priv->hwlock);
 	mutex_init(&hw_priv->lock);
-
-	/* tasklet is enabled. */
-	tasklet_init(&hw_priv->rx_tasklet, rx_proc_task,
-		(unsigned long) hw_priv);
-	tasklet_init(&hw_priv->tx_tasklet, tx_proc_task,
-		(unsigned long) hw_priv);
-
-	/* tasklet_enable will decrement the atomic counter. */
-	tasklet_disable(&hw_priv->rx_tasklet);
-	tasklet_disable(&hw_priv->tx_tasklet);
 
 	for (i = 0; i < TOTAL_PORT_NUM; i++)
 		init_waitqueue_head(&hw_priv->counter[i].counter);

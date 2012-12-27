@@ -43,30 +43,41 @@ static void blk_end_sync_rq(struct request *rq, int error)
  * Description:
  *    Insert a fully prepared request at the back of the I/O scheduler queue
  *    for execution.  Don't wait for completion.
+ *
+ * Note:
+ *    This function will invoke @done directly if the queue is dead.
  */
 void blk_execute_rq_nowait(struct request_queue *q, struct gendisk *bd_disk,
 			   struct request *rq, int at_head,
 			   rq_end_io_fn *done)
 {
 	int where = at_head ? ELEVATOR_INSERT_FRONT : ELEVATOR_INSERT_BACK;
+	bool is_pm_resume;
 
 	WARN_ON(irqs_disabled());
-	spin_lock_irq(q->queue_lock);
-
-	if (unlikely(blk_queue_dead(q))) {
-		spin_unlock_irq(q->queue_lock);
-		rq->errors = -ENXIO;
-		if (rq->end_io)
-			rq->end_io(rq, rq->errors);
-		return;
-	}
 
 	rq->rq_disk = bd_disk;
 	rq->end_io = done;
+	/*
+	 * need to check this before __blk_run_queue(), because rq can
+	 * be freed before that returns.
+	 */
+	is_pm_resume = rq->cmd_type == REQ_TYPE_PM_RESUME;
+
+	spin_lock_irq(q->queue_lock);
+
+	if (unlikely(blk_queue_dead(q))) {
+		rq->errors = -ENXIO;
+		if (rq->end_io)
+			rq->end_io(rq, rq->errors);
+		spin_unlock_irq(q->queue_lock);
+		return;
+	}
+
 	__elv_add_request(q, rq, where);
 	__blk_run_queue(q);
 	/* the queue is stopped so it won't be run */
-	if (rq->cmd_type == REQ_TYPE_PM_RESUME)
+	if (is_pm_resume)
 		q->request_fn(q);
 	spin_unlock_irq(q->queue_lock);
 }

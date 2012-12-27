@@ -196,7 +196,7 @@ struct tjmax {
 	int tjmax;
 };
 
-static struct tjmax __cpuinitconst tjmax_table[] = {
+static const struct tjmax __cpuinitconst tjmax_table[] = {
 	{ "CPU D410", 100000 },
 	{ "CPU D425", 100000 },
 	{ "CPU D510", 100000 },
@@ -205,8 +205,11 @@ static struct tjmax __cpuinitconst tjmax_table[] = {
 	{ "CPU N455", 100000 },
 	{ "CPU N470", 100000 },
 	{ "CPU N475", 100000 },
-	{ "CPU  230", 100000 },
-	{ "CPU  330", 125000 },
+	{ "CPU  230", 100000 },		/* Model 0x1c, stepping 2	*/
+	{ "CPU  330", 125000 },		/* Model 0x1c, stepping 2	*/
+	{ "CPU CE4110", 110000 },	/* Model 0x1c, stepping 10	*/
+	{ "CPU CE4150", 110000 },	/* Model 0x1c, stepping 10	*/
+	{ "CPU CE4170", 110000 },	/* Model 0x1c, stepping 10	*/
 };
 
 static int __cpuinit adjust_tjmax(struct cpuinfo_x86 *c, u32 id,
@@ -793,7 +796,7 @@ static struct notifier_block coretemp_cpu_notifier __refdata = {
 	.notifier_call = coretemp_cpu_callback,
 };
 
-static const struct x86_cpu_id coretemp_ids[] = {
+static const struct x86_cpu_id __initconst coretemp_ids[] = {
 	{ X86_VENDOR_INTEL, X86_FAMILY_ANY, X86_MODEL_ANY, X86_FEATURE_DTHERM },
 	{}
 };
@@ -815,17 +818,20 @@ static int __init coretemp_init(void)
 	if (err)
 		goto exit;
 
+	get_online_cpus();
 	for_each_online_cpu(i)
 		get_core_online(i);
 
 #ifndef CONFIG_HOTPLUG_CPU
 	if (list_empty(&pdev_list)) {
+		put_online_cpus();
 		err = -ENODEV;
 		goto exit_driver_unreg;
 	}
 #endif
 
 	register_hotcpu_notifier(&coretemp_cpu_notifier);
+	put_online_cpus();
 	return 0;
 
 #ifndef CONFIG_HOTPLUG_CPU
@@ -840,6 +846,7 @@ static void __exit coretemp_exit(void)
 {
 	struct pdev_entry *p, *n;
 
+	get_online_cpus();
 	unregister_hotcpu_notifier(&coretemp_cpu_notifier);
 	mutex_lock(&pdev_list_mutex);
 	list_for_each_entry_safe(p, n, &pdev_list, list) {
@@ -848,6 +855,7 @@ static void __exit coretemp_exit(void)
 		kfree(p);
 	}
 	mutex_unlock(&pdev_list_mutex);
+	put_online_cpus();
 	platform_driver_unregister(&coretemp_driver);
 }
 

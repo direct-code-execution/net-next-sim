@@ -79,30 +79,21 @@ static int xfrm4_fill_dst(struct xfrm_dst *xdst, struct net_device *dev,
 	struct rtable *rt = (struct rtable *)xdst->route;
 	const struct flowi4 *fl4 = &fl->u.ip4;
 
-	xdst->u.rt.rt_key_dst = fl4->daddr;
-	xdst->u.rt.rt_key_src = fl4->saddr;
-	xdst->u.rt.rt_key_tos = fl4->flowi4_tos;
-	xdst->u.rt.rt_route_iif = fl4->flowi4_iif;
 	xdst->u.rt.rt_iif = fl4->flowi4_iif;
-	xdst->u.rt.rt_oif = fl4->flowi4_oif;
-	xdst->u.rt.rt_mark = fl4->flowi4_mark;
 
 	xdst->u.dst.dev = dev;
 	dev_hold(dev);
 
-	xdst->u.rt.peer = rt->peer;
-	if (rt->peer)
-		atomic_inc(&rt->peer->refcnt);
-
 	/* Sheit... I remember I did this right. Apparently,
 	 * it was magically lost, so this code needs audit */
+	xdst->u.rt.rt_is_input = rt->rt_is_input;
 	xdst->u.rt.rt_flags = rt->rt_flags & (RTCF_BROADCAST | RTCF_MULTICAST |
 					      RTCF_LOCAL);
 	xdst->u.rt.rt_type = rt->rt_type;
-	xdst->u.rt.rt_src = rt->rt_src;
-	xdst->u.rt.rt_dst = rt->rt_dst;
 	xdst->u.rt.rt_gateway = rt->rt_gateway;
-	xdst->u.rt.rt_spec_dst = rt->rt_spec_dst;
+	xdst->u.rt.rt_uses_gateway = rt->rt_uses_gateway;
+	xdst->u.rt.rt_pmtu = rt->rt_pmtu;
+	INIT_LIST_HEAD(&xdst->u.rt.rt_uncached);
 
 	return 0;
 }
@@ -198,12 +189,22 @@ static inline int xfrm4_garbage_collect(struct dst_ops *ops)
 	return (dst_entries_get_slow(ops) > ops->gc_thresh * 2);
 }
 
-static void xfrm4_update_pmtu(struct dst_entry *dst, u32 mtu)
+static void xfrm4_update_pmtu(struct dst_entry *dst, struct sock *sk,
+			      struct sk_buff *skb, u32 mtu)
 {
 	struct xfrm_dst *xdst = (struct xfrm_dst *)dst;
 	struct dst_entry *path = xdst->route;
 
-	path->ops->update_pmtu(path, mtu);
+	path->ops->update_pmtu(path, sk, skb, mtu);
+}
+
+static void xfrm4_redirect(struct dst_entry *dst, struct sock *sk,
+			   struct sk_buff *skb)
+{
+	struct xfrm_dst *xdst = (struct xfrm_dst *)dst;
+	struct dst_entry *path = xdst->route;
+
+	path->ops->redirect(path, sk, skb);
 }
 
 static void xfrm4_dst_destroy(struct dst_entry *dst)
@@ -211,9 +212,6 @@ static void xfrm4_dst_destroy(struct dst_entry *dst)
 	struct xfrm_dst *xdst = (struct xfrm_dst *)dst;
 
 	dst_destroy_metrics_generic(dst);
-
-	if (likely(xdst->u.rt.peer))
-		inet_putpeer(xdst->u.rt.peer);
 
 	xfrm_dst_destroy(xdst);
 }
@@ -232,6 +230,7 @@ static struct dst_ops xfrm4_dst_ops = {
 	.protocol =		cpu_to_be16(ETH_P_IP),
 	.gc =			xfrm4_garbage_collect,
 	.update_pmtu =		xfrm4_update_pmtu,
+	.redirect =		xfrm4_redirect,
 	.cow_metrics =		dst_cow_metrics_generic,
 	.destroy =		xfrm4_dst_destroy,
 	.ifdown =		xfrm4_dst_ifdown,
@@ -280,19 +279,8 @@ static void __exit xfrm4_policy_fini(void)
 	xfrm_policy_unregister_afinfo(&xfrm4_policy_afinfo);
 }
 
-void __init xfrm4_init(int rt_max_size)
+void __init xfrm4_init(void)
 {
-	/*
-	 * Select a default value for the gc_thresh based on the main route
-	 * table hash size.  It seems to me the worst case scenario is when
-	 * we have ipsec operating in transport mode, in which we create a
-	 * dst_entry per socket.  The xfrm gc algorithm starts trying to remove
-	 * entries at gc_thresh, and prevents new allocations as 2*gc_thresh
-	 * so lets set an initial xfrm gc_thresh value at the rt_max_size/2.
-	 * That will let us store an ipsec connection per route table entry,
-	 * and start cleaning when were 1/2 full
-	 */
-	xfrm4_dst_ops.gc_thresh = rt_max_size/2;
 	dst_entries_init(&xfrm4_dst_ops);
 
 	xfrm4_state_init();

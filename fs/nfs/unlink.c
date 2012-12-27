@@ -95,7 +95,7 @@ static void nfs_async_unlink_release(void *calldata)
 
 	nfs_dec_sillycount(data->dir);
 	nfs_free_unlinkdata(data);
-	nfs_sb_deactive(sb);
+	nfs_sb_deactive_async(sb);
 }
 
 static void nfs_unlink_prepare(struct rpc_task *task, void *calldata)
@@ -501,7 +501,7 @@ nfs_sillyrename(struct inode *dir, struct dentry *dentry)
 		(unsigned long long)NFS_FILEID(dentry->d_inode));
 
 	/* Return delegation in anticipation of the rename */
-	nfs_inode_return_delegation(dentry->d_inode);
+	NFS_PROTO(dentry->d_inode)->return_delegation(dentry->d_inode);
 
 	sdentry = NULL;
 	do {

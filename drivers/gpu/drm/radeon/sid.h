@@ -424,6 +424,7 @@
 #       define RDERR_INT_ENABLE                         (1 << 0)
 #       define GUI_IDLE_INT_ENABLE                      (1 << 19)
 
+#define	CP_STRMOUT_CNTL					0x84FC
 #define	SCRATCH_REG0					0x8500
 #define	SCRATCH_REG1					0x8504
 #define	SCRATCH_REG2					0x8508
@@ -698,6 +699,9 @@
 #define RLC_UCODE_ADDR                                    0xC32C
 #define RLC_UCODE_DATA                                    0xC330
 
+#define RLC_GPU_CLOCK_COUNT_LSB                           0xC338
+#define RLC_GPU_CLOCK_COUNT_MSB                           0xC33C
+#define RLC_CAPTURE_GPU_CLOCK_COUNT                       0xC340
 #define RLC_MC_CNTL                                       0xC344
 #define RLC_UCODE_CNTL                                    0xC348
 
@@ -809,6 +813,21 @@
 #define	PACKET3_DRAW_INDEX_OFFSET_2			0x35
 #define	PACKET3_DRAW_INDEX_MULTI_ELEMENT		0x36
 #define	PACKET3_WRITE_DATA				0x37
+#define		WRITE_DATA_DST_SEL(x)                   ((x) << 8)
+                /* 0 - register
+		 * 1 - memory (sync - via GRBM)
+		 * 2 - tc/l2
+		 * 3 - gds
+		 * 4 - reserved
+		 * 5 - memory (async - direct)
+		 */
+#define		WR_ONE_ADDR                             (1 << 16)
+#define		WR_CONFIRM                              (1 << 20)
+#define		WRITE_DATA_ENGINE_SEL(x)                ((x) << 30)
+                /* 0 - me
+		 * 1 - pfp
+		 * 2 - ce
+		 */
 #define	PACKET3_DRAW_INDEX_INDIRECT_MULTI		0x38
 #define	PACKET3_MEM_SEMAPHORE				0x39
 #define	PACKET3_MPEG_INDEX				0x3A
@@ -901,5 +920,6 @@
 #define	PACKET3_WAIT_ON_DE_COUNTER_DIFF			0x88
 #define	PACKET3_SET_CE_DE_COUNTERS			0x89
 #define	PACKET3_WAIT_ON_AVAIL_BUFFER			0x8A
+#define	PACKET3_SWITCH_BUFFER				0x8B
 
 #endif

@@ -393,25 +393,25 @@ static void buf_lo_add(struct gfs2_sbd *sdp, struct gfs2_bufdata *bd)
 	struct gfs2_meta_header *mh;
 	struct gfs2_trans *tr;
 
-	lock_buffer(bd->bd_bh);
-	gfs2_log_lock(sdp);
 	tr = current->journal_info;
 	tr->tr_touched = 1;
 	if (!list_empty(&bd->bd_list))
-		goto out;
+		return;
 	set_bit(GLF_LFLUSH, &bd->bd_gl->gl_flags);
 	set_bit(GLF_DIRTY, &bd->bd_gl->gl_flags);
-	gfs2_meta_check(sdp, bd->bd_bh);
-	gfs2_pin(sdp, bd->bd_bh);
 	mh = (struct gfs2_meta_header *)bd->bd_bh->b_data;
+	if (unlikely(mh->mh_magic != cpu_to_be32(GFS2_MAGIC))) {
+		printk(KERN_ERR
+		       "Attempting to add uninitialised block to journal (inplace block=%lld)\n",
+		       (unsigned long long)bd->bd_bh->b_blocknr);
+		BUG();
+	}
+	gfs2_pin(sdp, bd->bd_bh);
 	mh->__pad0 = cpu_to_be64(0);
 	mh->mh_jid = cpu_to_be32(sdp->sd_jdesc->jd_jid);
 	sdp->sd_log_num_buf++;
 	list_add(&bd->bd_list, &sdp->sd_log_le_buf);
 	tr->tr_num_buf_new++;
-out:
-	gfs2_log_unlock(sdp);
-	unlock_buffer(bd->bd_bh);
 }
 
 static void gfs2_check_magic(struct buffer_head *bh)
@@ -616,7 +616,6 @@ static void revoke_lo_add(struct gfs2_sbd *sdp, struct gfs2_bufdata *bd)
 
 static void revoke_lo_before_commit(struct gfs2_sbd *sdp)
 {
-	struct gfs2_log_descriptor *ld;
 	struct gfs2_meta_header *mh;
 	unsigned int offset;
 	struct list_head *head = &sdp->sd_log_le_revoke;
@@ -629,7 +628,6 @@ static void revoke_lo_before_commit(struct gfs2_sbd *sdp)
 
 	length = gfs2_struct2blk(sdp, sdp->sd_log_num_revoke, sizeof(u64));
 	page = gfs2_get_log_desc(sdp, GFS2_LOG_DESC_REVOKE, length, sdp->sd_log_num_revoke);
-	ld = page_address(page);
 	offset = sizeof(struct gfs2_log_descriptor);
 
 	list_for_each_entry(bd, head, bd_list) {
@@ -772,12 +770,10 @@ static void databuf_lo_add(struct gfs2_sbd *sdp, struct gfs2_bufdata *bd)
 	struct address_space *mapping = bd->bd_bh->b_page->mapping;
 	struct gfs2_inode *ip = GFS2_I(mapping->host);
 
-	lock_buffer(bd->bd_bh);
-	gfs2_log_lock(sdp);
 	if (tr)
 		tr->tr_touched = 1;
 	if (!list_empty(&bd->bd_list))
-		goto out;
+		return;
 	set_bit(GLF_LFLUSH, &bd->bd_gl->gl_flags);
 	set_bit(GLF_DIRTY, &bd->bd_gl->gl_flags);
 	if (gfs2_is_jdata(ip)) {
@@ -788,9 +784,6 @@ static void databuf_lo_add(struct gfs2_sbd *sdp, struct gfs2_bufdata *bd)
 	} else {
 		list_add_tail(&bd->bd_list, &sdp->sd_log_le_ordered);
 	}
-out:
-	gfs2_log_unlock(sdp);
-	unlock_buffer(bd->bd_bh);
 }
 
 /**

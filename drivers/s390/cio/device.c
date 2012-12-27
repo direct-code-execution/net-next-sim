@@ -1,8 +1,7 @@
 /*
- *  drivers/s390/cio/device.c
  *  bus driver for ccw devices
  *
- *    Copyright IBM Corp. 2002,2008
+ *    Copyright IBM Corp. 2002, 2008
  *    Author(s): Arnd Bergmann (arndb@de.ibm.com)
  *		 Cornelia Huck (cornelia.huck@de.ibm.com)
  *		 Martin Schwidefsky (schwidefsky@de.ibm.com)
@@ -1425,8 +1424,10 @@ static enum io_sch_action sch_get_action(struct subchannel *sch)
 	}
 	if (device_is_disconnected(cdev))
 		return IO_SCH_REPROBE;
-	if (cdev->online)
+	if (cdev->online && !cdev->private->flags.resuming)
 		return IO_SCH_VERIFY;
+	if (cdev->private->state == DEV_STATE_NOT_OPER)
+		return IO_SCH_UNREG_ATTACH;
 	return IO_SCH_NOP;
 }
 
@@ -1468,12 +1469,6 @@ static int io_subchannel_sch_event(struct subchannel *sch, int process)
 		rc = 0;
 		goto out_unlock;
 	case IO_SCH_VERIFY:
-		if (cdev->private->flags.resuming == 1) {
-			if (cio_enable_subchannel(sch, (u32)(addr_t)sch)) {
-				ccw_device_set_notoper(cdev);
-				break;
-			}
-		}
 		/* Trigger path verification. */
 		io_subchannel_verify(sch);
 		rc = 0;
@@ -1520,11 +1515,14 @@ static int io_subchannel_sch_event(struct subchannel *sch, int process)
 			goto out;
 		break;
 	case IO_SCH_UNREG_ATTACH:
+		spin_lock_irqsave(sch->lock, flags);
 		if (cdev->private->flags.resuming) {
 			/* Device will be handled later. */
 			rc = 0;
-			goto out;
+			goto out_unlock;
 		}
+		sch_set_cdev(sch, NULL);
+		spin_unlock_irqrestore(sch->lock, flags);
 		/* Unregister ccw device. */
 		ccw_device_unregister(cdev);
 		break;

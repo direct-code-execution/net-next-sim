@@ -138,20 +138,7 @@ struct cdc_ncm_ctx {
 static void cdc_ncm_txpath_bh(unsigned long param);
 static void cdc_ncm_tx_timeout_start(struct cdc_ncm_ctx *ctx);
 static enum hrtimer_restart cdc_ncm_tx_timer_cb(struct hrtimer *hr_timer);
-static const struct driver_info cdc_ncm_info;
 static struct usb_driver cdc_ncm_driver;
-static const struct ethtool_ops cdc_ncm_ethtool_ops;
-
-static const struct usb_device_id cdc_devs[] = {
-	{ USB_INTERFACE_INFO(USB_CLASS_COMM,
-		USB_CDC_SUBCLASS_NCM, USB_CDC_PROTO_NONE),
-		.driver_info = (unsigned long)&cdc_ncm_info,
-	},
-	{
-	},
-};
-
-MODULE_DEVICE_TABLE(usb, cdc_devs);
 
 static void
 cdc_ncm_get_drvinfo(struct net_device *net, struct ethtool_drvinfo *info)
@@ -454,6 +441,16 @@ static void cdc_ncm_free(struct cdc_ncm_ctx *ctx)
 	kfree(ctx);
 }
 
+static const struct ethtool_ops cdc_ncm_ethtool_ops = {
+	.get_drvinfo = cdc_ncm_get_drvinfo,
+	.get_link = usbnet_get_link,
+	.get_msglevel = usbnet_get_msglevel,
+	.set_msglevel = usbnet_set_msglevel,
+	.get_settings = usbnet_get_settings,
+	.set_settings = usbnet_set_settings,
+	.nway_reset = usbnet_nway_reset,
+};
+
 static int cdc_ncm_bind(struct usbnet *dev, struct usb_interface *intf)
 {
 	struct cdc_ncm_ctx *ctx;
@@ -543,10 +540,12 @@ advance:
 	    (ctx->ether_desc == NULL) || (ctx->control != intf))
 		goto error;
 
-	/* claim interfaces, if any */
-	temp = usb_driver_claim_interface(driver, ctx->data, dev);
-	if (temp)
-		goto error;
+	/* claim data interface, if different from control */
+	if (ctx->data != ctx->control) {
+		temp = usb_driver_claim_interface(driver, ctx->data, dev);
+		if (temp)
+			goto error;
+	}
 
 	iface_no = ctx->data->cur_altsetting->desc.bInterfaceNumber;
 
@@ -625,6 +624,10 @@ static void cdc_ncm_unbind(struct usbnet *dev, struct usb_interface *intf)
 		hrtimer_cancel(&ctx->tx_timer);
 
 	tasklet_kill(&ctx->bh);
+
+	/* handle devices with combined control and data interface */
+	if (ctx->control == ctx->data)
+		ctx->data = NULL;
 
 	/* disconnect master --> disconnect slave */
 	if (intf == ctx->control && ctx->data) {
@@ -1203,6 +1206,69 @@ static const struct driver_info cdc_ncm_info = {
 	.tx_fixup = cdc_ncm_tx_fixup,
 };
 
+/* Same as cdc_ncm_info, but with FLAG_WWAN */
+static const struct driver_info wwan_info = {
+	.description = "Mobile Broadband Network Device",
+	.flags = FLAG_POINTTOPOINT | FLAG_NO_SETINT | FLAG_MULTI_PACKET
+			| FLAG_WWAN,
+	.bind = cdc_ncm_bind,
+	.unbind = cdc_ncm_unbind,
+	.check_connect = cdc_ncm_check_connect,
+	.manage_power = cdc_ncm_manage_power,
+	.status = cdc_ncm_status,
+	.rx_fixup = cdc_ncm_rx_fixup,
+	.tx_fixup = cdc_ncm_tx_fixup,
+};
+
+static const struct usb_device_id cdc_devs[] = {
+	/* Ericsson MBM devices like F5521gw */
+	{ .match_flags = USB_DEVICE_ID_MATCH_INT_INFO
+		| USB_DEVICE_ID_MATCH_VENDOR,
+	  .idVendor = 0x0bdb,
+	  .bInterfaceClass = USB_CLASS_COMM,
+	  .bInterfaceSubClass = USB_CDC_SUBCLASS_NCM,
+	  .bInterfaceProtocol = USB_CDC_PROTO_NONE,
+	  .driver_info = (unsigned long) &wwan_info,
+	},
+
+	/* Dell branded MBM devices like DW5550 */
+	{ .match_flags = USB_DEVICE_ID_MATCH_INT_INFO
+		| USB_DEVICE_ID_MATCH_VENDOR,
+	  .idVendor = 0x413c,
+	  .bInterfaceClass = USB_CLASS_COMM,
+	  .bInterfaceSubClass = USB_CDC_SUBCLASS_NCM,
+	  .bInterfaceProtocol = USB_CDC_PROTO_NONE,
+	  .driver_info = (unsigned long) &wwan_info,
+	},
+
+	/* Toshiba branded MBM devices */
+	{ .match_flags = USB_DEVICE_ID_MATCH_INT_INFO
+		| USB_DEVICE_ID_MATCH_VENDOR,
+	  .idVendor = 0x0930,
+	  .bInterfaceClass = USB_CLASS_COMM,
+	  .bInterfaceSubClass = USB_CDC_SUBCLASS_NCM,
+	  .bInterfaceProtocol = USB_CDC_PROTO_NONE,
+	  .driver_info = (unsigned long) &wwan_info,
+	},
+
+	/* Huawei NCM devices disguised as vendor specific */
+	{ USB_VENDOR_AND_INTERFACE_INFO(0x12d1, 0xff, 0x02, 0x16),
+	  .driver_info = (unsigned long)&wwan_info,
+	},
+	{ USB_VENDOR_AND_INTERFACE_INFO(0x12d1, 0xff, 0x02, 0x46),
+	  .driver_info = (unsigned long)&wwan_info,
+	},
+
+	/* Generic CDC-NCM devices */
+	{ USB_INTERFACE_INFO(USB_CLASS_COMM,
+		USB_CDC_SUBCLASS_NCM, USB_CDC_PROTO_NONE),
+		.driver_info = (unsigned long)&cdc_ncm_info,
+	},
+	{
+	},
+};
+MODULE_DEVICE_TABLE(usb, cdc_devs);
+
 static struct usb_driver cdc_ncm_driver = {
 	.name = "cdc_ncm",
 	.id_table = cdc_devs,
@@ -1213,16 +1279,6 @@ static struct usb_driver cdc_ncm_driver = {
 	.reset_resume =	usbnet_resume,
 	.supports_autosuspend = 1,
 	.disable_hub_initiated_lpm = 1,
-};
-
-static const struct ethtool_ops cdc_ncm_ethtool_ops = {
-	.get_drvinfo = cdc_ncm_get_drvinfo,
-	.get_link = usbnet_get_link,
-	.get_msglevel = usbnet_get_msglevel,
-	.set_msglevel = usbnet_set_msglevel,
-	.get_settings = usbnet_get_settings,
-	.set_settings = usbnet_set_settings,
-	.nway_reset = usbnet_nway_reset,
 };
 
 module_usb_driver(cdc_ncm_driver);

@@ -1003,6 +1003,7 @@ static int ixp4xx_nway_reset(struct net_device *dev)
 }
 
 int ixp46x_phc_index = -1;
+EXPORT_SYMBOL_GPL(ixp46x_phc_index);
 
 static int ixp4xx_get_ts_info(struct net_device *dev,
 			      struct ethtool_ts_info *info)
@@ -1101,10 +1102,12 @@ static int init_queues(struct port *port)
 {
 	int i;
 
-	if (!ports_open)
-		if (!(dma_pool = dma_pool_create(DRV_NAME, NULL,
-						 POOL_ALLOC_SIZE, 32, 0)))
+	if (!ports_open) {
+		dma_pool = dma_pool_create(DRV_NAME, &port->netdev->dev,
+					   POOL_ALLOC_SIZE, 32, 0);
+		if (!dma_pool)
 			return -ENOMEM;
+	}
 
 	if (!(port->desc_tab = dma_pool_alloc(dma_pool, GFP_KERNEL,
 					      &port->desc_tab_phys)))

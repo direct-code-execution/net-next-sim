@@ -944,7 +944,7 @@ void __init e820_reserve_resources(void)
 	for (i = 0; i < e820_saved.nr_map; i++) {
 		struct e820entry *entry = &e820_saved.map[i];
 		firmware_map_add_early(entry->addr,
-			entry->addr + entry->size - 1,
+			entry->addr + entry->size,
 			e820_type_to_string(entry->type));
 	}
 }
@@ -1076,6 +1076,9 @@ void __init memblock_x86_fill(void)
 
 		memblock_add(ei->addr, ei->size);
 	}
+
+	/* throw away partial pages */
+	memblock_trim_memory(PAGE_SIZE);
 
 	memblock_dump_all();
 }

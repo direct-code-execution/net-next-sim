@@ -28,6 +28,7 @@
 #include <linux/pci-aspm.h>
 #include <linux/slab.h>
 #include <linux/vgaarb.h>
+#include <linux/pm_runtime.h>
 #include "pci.h"
 
 static int sysfs_initialized;	/* = 0 */
@@ -378,6 +379,31 @@ dev_bus_rescan_store(struct device *dev, struct device_attribute *attr,
 
 #endif
 
+#if defined(CONFIG_PM_RUNTIME) && defined(CONFIG_ACPI)
+static ssize_t d3cold_allowed_store(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	unsigned long val;
+
+	if (strict_strtoul(buf, 0, &val) < 0)
+		return -EINVAL;
+
+	pdev->d3cold_allowed = !!val;
+	pm_runtime_resume(dev);
+
+	return count;
+}
+
+static ssize_t d3cold_allowed_show(struct device *dev,
+				   struct device_attribute *attr, char *buf)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	return sprintf (buf, "%u\n", pdev->d3cold_allowed);
+}
+#endif
+
 struct device_attribute pci_dev_attrs[] = {
 	__ATTR_RO(resource),
 	__ATTR_RO(vendor),
@@ -401,6 +427,9 @@ struct device_attribute pci_dev_attrs[] = {
 #ifdef CONFIG_HOTPLUG
 	__ATTR(remove, (S_IWUSR|S_IWGRP), NULL, remove_store),
 	__ATTR(rescan, (S_IWUSR|S_IWGRP), NULL, dev_rescan_store),
+#endif
+#if defined(CONFIG_PM_RUNTIME) && defined(CONFIG_ACPI)
+	__ATTR(d3cold_allowed, 0644, d3cold_allowed_show, d3cold_allowed_store),
 #endif
 	__ATTR_NULL,
 };
@@ -455,6 +484,8 @@ pci_read_config(struct file *filp, struct kobject *kobj,
 		size = count;
 	}
 
+	pci_config_pm_runtime_get(dev);
+
 	if ((off & 1) && size) {
 		u8 val;
 		pci_user_read_config_byte(dev, off, &val);
@@ -500,6 +531,8 @@ pci_read_config(struct file *filp, struct kobject *kobj,
 		--size;
 	}
 
+	pci_config_pm_runtime_put(dev);
+
 	return count;
 }
 
@@ -520,6 +553,8 @@ pci_write_config(struct file* filp, struct kobject *kobj,
 		count = size;
 	}
 	
+	pci_config_pm_runtime_get(dev);
+
 	if ((off & 1) && size) {
 		pci_user_write_config_byte(dev, off, data[off - init_off]);
 		off++;
@@ -557,6 +592,8 @@ pci_write_config(struct file* filp, struct kobject *kobj,
 		off++;
 		--size;
 	}
+
+	pci_config_pm_runtime_put(dev);
 
 	return count;
 }
@@ -1112,7 +1149,7 @@ static struct bin_attribute pcie_config_attr = {
 	.write = pci_write_config,
 };
 
-int __attribute__ ((weak)) pcibios_add_platform_entries(struct pci_dev *dev)
+int __weak pcibios_add_platform_entries(struct pci_dev *dev)
 {
 	return 0;
 }

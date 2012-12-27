@@ -153,23 +153,6 @@ static int adis16209_reset(struct iio_dev *indio_dev)
 	return ret;
 }
 
-static ssize_t adis16209_write_reset(struct device *dev,
-		struct device_attribute *attr,
-		const char *buf, size_t len)
-{
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-
-	if (len < 1)
-		return -EINVAL;
-	switch (buf[0]) {
-	case '1':
-	case 'y':
-	case 'Y':
-		return adis16209_reset(indio_dev);
-	}
-	return -EINVAL;
-}
-
 int adis16209_set_irq(struct iio_dev *indio_dev, bool enable)
 {
 	int ret = 0;
@@ -360,28 +343,29 @@ static int adis16209_read_raw(struct iio_dev *indio_dev,
 		case IIO_VOLTAGE:
 			*val = 0;
 			if (chan->channel == 0)
-				*val2 = 305180;
+				*val2 = 305180; /* 0.30518 mV */
 			else
-				*val2 = 610500;
+				*val2 = 610500; /* 0.6105 mV */
 			return IIO_VAL_INT_PLUS_MICRO;
 		case IIO_TEMP:
-			*val = 0;
-			*val2 = -470000;
+			*val = -470; /* -0.47 C */
+			*val2 = 0;
 			return IIO_VAL_INT_PLUS_MICRO;
 		case IIO_ACCEL:
 			*val = 0;
-			*val2 = 2394;
-			return IIO_VAL_INT_PLUS_MICRO;
+			*val2 = IIO_G_TO_M_S_2(244140); /* 0.244140 mg */
+			return IIO_VAL_INT_PLUS_NANO;
 		case IIO_INCLI:
+		case IIO_ROT:
 			*val = 0;
-			*val2 = 436;
+			*val2 = 25000; /* 0.025 degree */
 			return IIO_VAL_INT_PLUS_MICRO;
 		default:
 			return -EINVAL;
 		}
 		break;
 	case IIO_CHAN_INFO_OFFSET:
-		*val = 25;
+		*val = 25000 / -470 - 0x4FE; /* 25 C = 0x4FE */
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_CALIBBIAS:
 		switch (chan->type) {
@@ -407,7 +391,7 @@ static int adis16209_read_raw(struct iio_dev *indio_dev,
 	return -EINVAL;
 }
 
-static struct iio_chan_spec adis16209_channels[] = {
+static const struct iio_chan_spec adis16209_channels[] = {
 	{
 		.type = IIO_VOLTAGE,
 		.indexed = 1,
@@ -508,6 +492,7 @@ static struct iio_chan_spec adis16209_channels[] = {
 		.modified = 1,
 		.channel2 = IIO_MOD_X,
 		.info_mask = IIO_CHAN_INFO_RAW_SEPARATE_BIT,
+		IIO_CHAN_INFO_SCALE_SHARED_BIT,
 		.address = rot,
 		.scan_index = ADIS16209_SCAN_ROT,
 		.scan_type = {
@@ -519,19 +504,7 @@ static struct iio_chan_spec adis16209_channels[] = {
 	IIO_CHAN_SOFT_TIMESTAMP(8)
 };
 
-static IIO_DEVICE_ATTR(reset, S_IWUSR, NULL, adis16209_write_reset, 0);
-
-static struct attribute *adis16209_attributes[] = {
-	&iio_dev_attr_reset.dev_attr.attr,
-	NULL
-};
-
-static const struct attribute_group adis16209_attribute_group = {
-	.attrs = adis16209_attributes,
-};
-
 static const struct iio_info adis16209_info = {
-	.attrs = &adis16209_attribute_group,
 	.read_raw = &adis16209_read_raw,
 	.write_raw = &adis16209_write_raw,
 	.driver_module = THIS_MODULE,
@@ -602,11 +575,9 @@ error_ret:
 	return ret;
 }
 
-static int adis16209_remove(struct spi_device *spi)
+static int __devexit adis16209_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
-
-	flush_scheduled_work();
 
 	iio_device_unregister(indio_dev);
 	adis16209_remove_trigger(indio_dev);

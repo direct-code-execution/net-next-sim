@@ -65,14 +65,6 @@ static struct super_block *alloc_super(struct file_system_type *type)
 		spin_lock_init(&s->s_inode_lru_lock);
 		INIT_LIST_HEAD(&s->s_mounts);
 		init_rwsem(&s->s_umount);
-		mutex_init(&s->s_lock);
-		lockdep_set_class(&s->s_umount, &type->s_umount_key);
-		/*
-		 * The locking rules for s_lock are up to the
-		 * filesystem. For example ext3fs has different
-		 * lock ordering than usbfs:
-		 */
-		lockdep_set_class(&s->s_lock, &type->s_lock_key);
 		/*
 		 * sget() can have s_umount recursion.
 		 *
@@ -96,7 +88,6 @@ static struct super_block *alloc_super(struct file_system_type *type)
 		mutex_init(&s->s_dquot.dqio_mutex);
 		mutex_init(&s->s_dquot.dqonoff_mutex);
 		init_rwsem(&s->s_dquot.dqptr_sem);
-		init_waitqueue_head(&s->s_wait_unfrozen);
 		s->s_maxbytes = MAX_NON_LFS;
 		s->s_op = &default_op;
 		s->s_time_gran = 1000000000;
@@ -153,7 +144,7 @@ void deactivate_locked_super(struct super_block *s)
 struct super_block *sget(struct file_system_type *type,
 			int (*test)(struct super_block *,void *),
 			int (*set)(struct super_block *,void *),
-			void *data)
+			int flags, void *data)
 {
 	struct super_block *s = NULL;
 	struct hlist_node *node;

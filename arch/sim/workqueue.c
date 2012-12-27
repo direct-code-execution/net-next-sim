@@ -68,7 +68,7 @@ static int flush_entry (struct list_head *prev)
   return active;
 }
 
-static void delayed_work_timer_fn(unsigned long data)
+void delayed_work_timer_fn(unsigned long data)
 {
   struct delayed_work *dwork = (struct delayed_work *)data;
   struct work_struct *work = &dwork->work;
@@ -84,7 +84,7 @@ static void delayed_work_timer_fn(unsigned long data)
  * We queue the work, the caller must ensure it
  * can't go away.
  */
-int schedule_work(struct work_struct *work)
+bool schedule_work(struct work_struct *work)
 {
   int ret = 0;
 
@@ -120,7 +120,7 @@ bool cancel_work_sync(struct work_struct *work)
     }
   return retval;
 }
-int schedule_delayed_work(struct delayed_work *dwork, unsigned long delay)
+bool schedule_delayed_work(struct delayed_work *dwork, unsigned long delay)
 {
   int ret = 0;
   struct timer_list *timer = &dwork->timer;

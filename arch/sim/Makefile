@@ -36,7 +36,7 @@ CFLAGS+= \
  -include $(srctree)/include/linux/kconfig.h \
  -U__FreeBSD__ -D__linux__=1 -Dlinux=1 -D__linux=1 \
  -I$(ARCH_DIR)/include -I$(srctree)/include \
- -I$(ARCH_DIR) -I$(srctree) \
+ -I$(ARCH_DIR) -I$(srctree) -I$(srctree) -I$(srctree)/include/uapi \
  $(PIC_CFLAGS) -D_DEBUG $(cov_$(COV))
 
 include $(ARCH_DIR)/processor.mk

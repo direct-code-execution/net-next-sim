@@ -14,6 +14,7 @@
  * other timer functions.
  */
 void init_timer_key(struct timer_list *timer,
+                    unsigned int flags,
                     const char *name,
                     struct lock_class_key *key)
 {
@@ -154,7 +155,7 @@ void init_timer_deferrable_key(struct timer_list *timer,
    * Note: Our implementation of deferrable timers uses 
    * non-deferrable timers for simplicity.
    */
-  init_timer_key(timer, name, key);
+  init_timer_key(timer, 0, name, key);
 }
 /**
  * add_timer_on - start a timer on a particular CPU

@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <linux/types.h>
 #include <linux/socket.h>
+#include <stdio.h>
 #include "sim-types.h"
 
 #ifdef __cplusplus
@@ -56,6 +57,20 @@ struct SimImported
   void (*free) (struct SimKernel *kernel, void *buffer);
   void *(*memcpy) (struct SimKernel *kernel, void *dst, const void *src, unsigned long size);
   void *(*memset) (struct SimKernel *kernel, void *dst, char value, unsigned long size);
+  int (*atexit) (struct SimKernel *kernel, void (*function)(void));
+  int (*access) (struct SimKernel *kernel, const char *pathname, int mode);
+  char *(*getenv) (struct SimKernel *kernel, const char *name);
+  int (*mkdir)(struct SimKernel *kernel, const char *pathname, mode_t mode);
+  int (*open)(struct SimKernel *kernel, const char *pathname, int flags);
+  int (*__fxstat) (struct SimKernel *kernel, int ver, int fd, void *buf);
+  int (*fseek)(struct SimKernel *kernel, FILE *stream, long offset, int whence);
+  void (*setbuf)(struct SimKernel *kernel, FILE *stream, char *buf);
+  FILE *(*fdopen)(struct SimKernel *kernel, int fd, const char *mode);
+  long (*ftell)(struct SimKernel *kernel, FILE *stream);
+  int (*fclose)(struct SimKernel *kernel, FILE *fp);
+  size_t (*fread)(struct SimKernel *kernel, void *ptr, size_t size, size_t nmemb, FILE *stream);
+  size_t (*fwrite)(struct SimKernel *kernel, const void *ptr, size_t size, size_t nmemb, FILE *stream);
+
   unsigned long (*random) (struct SimKernel *kernel);
   void *(*event_schedule_ns) (struct SimKernel *kernel, __u64 ns, void (*fn) (void *context), void *context,
 			      void (*pre_fn) (void));

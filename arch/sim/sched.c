@@ -22,12 +22,18 @@ struct SimTask
 struct SimTask *sim_task_create (void *private, unsigned long pid)
 {
   struct SimTask *task = sim_malloc (sizeof (struct SimTask));
+  if (!task) return NULL;
   struct cred *cred = sim_malloc (sizeof (struct cred));
+  if (!cred) return NULL;
   // XXX: we could optimize away this allocation by sharing it for all tasks
   struct nsproxy *ns = sim_malloc (sizeof (struct nsproxy));
+  if (!ns) return NULL;
   struct user_struct *user = sim_malloc (sizeof (struct user_struct));
+  if (!user) return NULL;
   struct thread_info *info = alloc_thread_info (&task->kernel_task);
+  if (!info) return NULL;
   struct pid *kpid = sim_malloc (sizeof (struct pid));
+  if (!kpid) return NULL;
   kpid->numbers[0].nr = pid;
   user->user_ns = 0;
   cred->fsuid = 0;

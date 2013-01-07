@@ -16,6 +16,8 @@ static struct iovec *copy_iovec (const struct iovec *input, int len)
 {
   int size = sizeof (struct iovec) * len;
   struct iovec *output = sim_malloc (size);
+  if (!output)
+    return NULL;
   sim_memcpy (output, input, size);
   return output;
 }
@@ -189,6 +191,8 @@ void* sim_sock_pollwait (struct SimSocket *socket, void *context)
 {
   struct socket *sock = (struct socket *)socket;
   wait_queue_t *wait = ( wait_queue_t * ) sim_malloc (sizeof(wait_queue_t));
+  if (!wait)
+    return NULL;
 
   wait->func = sim_wake_function;
   wait->private = context;
@@ -298,6 +302,9 @@ static void sim_pollwait(struct file *filp, wait_queue_head_t *wait_address, pol
       ( struct sim_ptable_entry * ) sim_malloc (sizeof(struct sim_ptable_entry));
   struct poll_table_ref *fromDCE =  (struct poll_table_ref *) pwq->table;
 
+  if (!entry)
+    return;
+
   entry->opaque = fromDCE->opaque; // Copy DCE poll table reference
   entry->eventMask = fromDCE->ret; // Copy poll mask of wanted events.
 
@@ -333,6 +340,9 @@ void sim_sock_poll (struct SimSocket *socket, struct poll_table_ref *ret)
   if ( ret->opaque )
     {
       ptable = (struct poll_wqueues *)sim_malloc (sizeof(struct poll_wqueues));
+      if (!ptable)
+        return;
+
       dce_poll_initwait(ptable);
 
       pwait = &(ptable->pt);

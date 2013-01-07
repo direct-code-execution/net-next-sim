@@ -33,6 +33,10 @@ proc_create_entry(const char *name,
 {
   // insert new entry at head of subdir list in parent
   struct proc_dir_entry * child = kzalloc (sizeof(struct proc_dir_entry), GFP_KERNEL);
+  if (!child)
+    {
+      return NULL;
+    }
   child->name = kstrdup (name, GFP_KERNEL);
   child->namelen = strlen (name);
   child->parent = parent;

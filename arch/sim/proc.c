@@ -38,8 +38,11 @@ proc_create_entry(const char *name,
 		  + strlen (name) + 1
 		  , GFP_KERNEL);
 
+  if (!child)
+    {
+      return NULL;
+    }
   strcpy ( child->name, name );
-
   child->namelen = strlen (name);
   child->parent = parent;
   if (parent == 0)

@@ -22,6 +22,10 @@ size_t ksize(const void *p)
 void *__kmalloc(size_t size, gfp_t flags)
 {
   void *p = sim_malloc (size + sizeof (size));
+  if (!p)
+    {
+      return NULL;
+    }
 
   if (p != 0 && (flags & __GFP_ZERO))
     {
@@ -54,6 +58,10 @@ kmem_cache_create(const char *name, size_t size, size_t align,
 		  unsigned long flags, void (*ctor)(void *))
 {
   struct kmem_cache *cache = kmalloc (sizeof (struct kmem_cache), flags);
+  if (!cache)
+    {
+      return NULL;
+    }
   cache->name = name;
   cache->size = size;
   cache->align = align;

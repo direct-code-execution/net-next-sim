@@ -45,7 +45,7 @@ ifeq ($(PROCESSOR_SIZE),64)
 CFLAGS+= -DCONFIG_64BIT
 endif
 
-LDFLAGS += -shared -nostdlib -g3 -Wl,-O1 -Wl,-T$(ARCH_DIR)/linker.lds $(covl_$(COV))
+LDFLAGS += -shared -nodefaultlibs -g3 -Wl,-O1 -Wl,-T$(ARCH_DIR)/linker.lds $(covl_$(COV))
 
 modules:=
 all-obj-for-clean:=

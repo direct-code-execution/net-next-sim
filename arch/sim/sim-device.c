@@ -157,7 +157,7 @@ struct SimDevicePacket sim_dev_create_packet (struct SimDevice *dev, int size)
 {
   struct SimDevicePacket packet;
   int len = get_hack_size (size);
-  struct sk_buff *skb = dev_alloc_skb(len);
+  struct sk_buff *skb = __dev_alloc_skb(len, __GFP_WAIT);
   packet.token = skb;
   packet.buffer = skb_put (skb, len);
   return packet;

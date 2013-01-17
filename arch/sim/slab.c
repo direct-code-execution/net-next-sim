@@ -110,7 +110,10 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order,
 {
   // typically, called from networking code by alloc_page or
   // directly with an order = 0.
-  sim_assert (order == 0);
+  if (order)
+    {
+      return NULL;
+    }
   void *p = sim_malloc (sizeof (struct page) + (1<<PAGE_SHIFT));
   struct page *page = (struct page *)p;
   atomic_set (&page->_count, 1);

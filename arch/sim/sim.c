@@ -117,6 +117,7 @@ static struct SimKernel *g_kernel;
 
 static int num_handler = 0;
 void *atexit_list[1024];
+FILE *stderr = NULL;
 
 void sim_init (struct SimExported *exported, const struct SimImported *imported, struct SimKernel *kernel)
 {
@@ -357,4 +358,3 @@ void sim_poll_event (int flag, void *context)
 {
   g_imported.poll_event (flag, context);
 }
-

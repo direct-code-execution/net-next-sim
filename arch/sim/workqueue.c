@@ -1,4 +1,5 @@
 #include <linux/workqueue.h>
+#include <linux/slab.h>
 #include "sim.h"
 #include "sim-assert.h"
 
@@ -15,6 +16,35 @@ struct wq_barrier {
   struct SimTask      *waiter;
 };
 
+/* copy from kernel/workqueue.c */
+typedef unsigned long mayday_mask_t;
+struct workqueue_struct {
+	unsigned int		flags;		/* W: WQ_* flags */
+	union {
+		struct cpu_workqueue_struct __percpu	*pcpu;
+		struct cpu_workqueue_struct		*single;
+		unsigned long				v;
+	} cpu_wq;				/* I: cwq's */
+	struct list_head	list;		/* W: list of all workqueues */
+
+	struct mutex		flush_mutex;	/* protects wq flushing */
+	int			work_color;	/* F: current work color */
+	int			flush_color;	/* F: current flush color */
+	atomic_t		nr_cwqs_to_flush; /* flush in progress */
+	struct wq_flusher	*first_flusher;	/* F: first flusher */
+	struct list_head	flusher_queue;	/* F: flush waiters */
+	struct list_head	flusher_overflow; /* F: flush overflow list */
+
+	mayday_mask_t		mayday_mask;	/* cpus requesting rescue */
+	struct worker		*rescuer;	/* I: rescue worker */
+
+	int			nr_drainers;	/* W: drain in progress */
+	int			saved_max_active; /* W: saved cwq max_active */
+#ifdef CONFIG_LOCKDEP
+	struct lockdep_map	lockdep_map;
+#endif
+	char			name[];		/* I: workqueue name */
+};
 
 static void workqueue_barrier_fn (struct work_struct *work)
 {
@@ -148,5 +178,113 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 					       struct lock_class_key *key,
 					       const char *lock_name, ...)
 {
-	return 0;
+	va_list args, args1;
+	struct workqueue_struct *wq;
+	unsigned int cpu;
+	size_t namelen;
+
+	/* determine namelen, allocate wq and format name */
+	va_start(args, lock_name);
+	va_copy(args1, args);
+	namelen = vsnprintf(NULL, 0, fmt, args) + 1;
+
+	wq = kzalloc(sizeof(*wq) + namelen, GFP_KERNEL);
+	if (!wq)
+		goto err;
+
+	vsnprintf(wq->name, namelen, fmt, args1);
+	va_end(args);
+	va_end(args1);
+
+	/*
+	 * Workqueues which may be used during memory reclaim should
+	 * have a rescuer to guarantee forward progress.
+	 */
+	if (flags & WQ_MEM_RECLAIM)
+		flags |= WQ_RESCUER;
+
+	max_active = max_active ?: WQ_DFL_ACTIVE;
+#if 0
+	max_active = wq_clamp_max_active(max_active, flags, wq->name);
+#endif
+	/* init wq */
+	wq->flags = flags;
+	wq->saved_max_active = max_active;
+	mutex_init(&wq->flush_mutex);
+	atomic_set(&wq->nr_cwqs_to_flush, 0);
+	INIT_LIST_HEAD(&wq->flusher_queue);
+	INIT_LIST_HEAD(&wq->flusher_overflow);
+
+	lockdep_init_map(&wq->lockdep_map, lock_name, key, 0);
+	INIT_LIST_HEAD(&wq->list);
+
+#if 0
+	if (alloc_cwqs(wq) < 0)
+		goto err;
+
+	for_each_cwq_cpu(cpu, wq) {
+		struct cpu_workqueue_struct *cwq = get_cwq(cpu, wq);
+		struct global_cwq *gcwq = get_gcwq(cpu);
+		int pool_idx = (bool)(flags & WQ_HIGHPRI);
+
+		BUG_ON((unsigned long)cwq & WORK_STRUCT_FLAG_MASK);
+		cwq->pool = &gcwq->pools[pool_idx];
+		cwq->wq = wq;
+		cwq->flush_color = -1;
+		cwq->max_active = max_active;
+		INIT_LIST_HEAD(&cwq->delayed_works);
+	}
+
+	if (flags & WQ_RESCUER) {
+		struct worker *rescuer;
+
+		if (!alloc_mayday_mask(&wq->mayday_mask, GFP_KERNEL))
+			goto err;
+
+		wq->rescuer = rescuer = alloc_worker();
+		if (!rescuer)
+			goto err;
+
+		rescuer->task = kthread_create(rescuer_thread, wq, "%s",
+					       wq->name);
+		if (IS_ERR(rescuer->task))
+			goto err;
+
+		rescuer->task->flags |= PF_THREAD_BOUND;
+		wake_up_process(rescuer->task);
+	}
+
+	/*
+	 * workqueue_lock protects global freeze state and workqueues
+	 * list.  Grab it, set max_active accordingly and add the new
+	 * workqueue to workqueues list.
+	 */
+	spin_lock(&workqueue_lock);
+
+	if (workqueue_freezing && wq->flags & WQ_FREEZABLE)
+		for_each_cwq_cpu(cpu, wq)
+			get_cwq(cpu, wq)->max_active = 0;
+
+	list_add(&wq->list, &workqueues);
+
+	spin_unlock(&workqueue_lock);
+#endif
+
+	return wq;
+err:
+	if (wq) {
+#if 0
+		free_cwqs(wq);
+		free_mayday_mask(wq->mayday_mask);
+#endif
+		kfree(wq->rescuer);
+		kfree(wq);
+	}
+	return NULL;
+}
+
+struct workqueue_struct *system_wq __read_mostly;
+static int __init init_workqueues(void)
+{
+  system_wq = alloc_workqueue("events", 0, 0);
 }

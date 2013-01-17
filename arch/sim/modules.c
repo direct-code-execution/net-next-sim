@@ -14,6 +14,6 @@ struct kernel_param *__stop___param = &g_empty_param_buffer;
 int __request_module(bool wait, const char *fmt, ...)
 {
   // we really should never be trying to load modules that way.
-  sim_assert (false);
+//  sim_assert (false);
   return 0;
 }

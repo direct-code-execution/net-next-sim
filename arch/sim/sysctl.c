@@ -212,10 +212,18 @@ static void iterate_recursive (const struct SimSysIterator *iter, struct ctl_tab
             }
           else 
             {
+              struct ctl_table_header *tmp;
+              struct ctl_table *tmp_entry;
               const char *procname = entry->procname;
-              h = NULL;
-              entry = find_entry(&h, dir, procname, strlen(procname));
+              tmp_entry = find_entry(&tmp, dir, procname, strlen(procname));
               ret = -ENOENT;
+              if (tmp_entry)
+                {
+                  entry = tmp_entry;
+                  h = tmp;
+                }
+              else
+                continue;
             }
         }
 

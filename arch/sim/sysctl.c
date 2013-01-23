@@ -2,6 +2,7 @@
 #include <linux/mmzone.h>
 #include <linux/mman.h>
 #include <linux/ratelimit.h>
+#include <linux/proc_fs.h>
 #include "sim-assert.h"
 #include "sim-types.h"
 
@@ -157,58 +158,86 @@ int pipe_proc_fn(struct ctl_table *table, int write, void __user *buf,
 /**
  * Honestly, I don't understand half of that code.
  * It was modeled after fs/proc/proc_sysctl.c proc_sys_readdir
+ *
+ * Me either ;) (Hajime, Jan 2013)
  */
-static void iterate_recursive (const struct SimSysIterator *iter, struct ctl_table *table);
 
-static void iterate_table_recursive (const struct SimSysIterator *iter, struct ctl_table *table)
+/* from proc_sysctl.c (XXX) */
+extern struct ctl_table_root sysctl_table_root;
+void first_entry(struct ctl_dir *dir,
+                 struct ctl_table_header **phead, struct ctl_table **pentry);
+void next_entry(struct ctl_table_header **phead, struct ctl_table **pentry);
+struct ctl_table *find_entry(struct ctl_table_header **phead,
+                             struct ctl_dir *dir, const char *name, int namelen);
+struct ctl_dir *xlate_dir(struct ctl_table_set *set, struct ctl_dir *dir);
+/* for init_net (XXX, should be fixed) */
+#include <net/net_namespace.h>
+
+static void iterate_table_recursive (const struct SimSysIterator *iter, struct ctl_table_header *head)
 {
-  struct ctl_table *cur_table;
-  for (cur_table = table; cur_table->procname != NULL; cur_table++)
+  struct ctl_table *entry;
+
+  for (entry = head->ctl_table; entry->procname; entry++) 
     {
-      if (table->child == 0)
-	{
-	  bool may_read = (table->mode & MAY_READ);
-	  bool may_write = (table->mode & MAY_WRITE);
-	  int flags = 0;
-	  flags |= may_read?SIM_SYS_FILE_READ:0;
-	  flags |= may_write?SIM_SYS_FILE_WRITE:0;
-	  iter->report_file (iter, cur_table->procname, flags, (struct SimSysFile *)cur_table);
-	}
+      bool may_read = (head->ctl_table->mode & MAY_READ);
+      bool may_write = (head->ctl_table->mode & MAY_WRITE);
+      int flags = 0;
+      flags |= may_read?SIM_SYS_FILE_READ:0;
+      flags |= may_write?SIM_SYS_FILE_WRITE:0;
+      iter->report_file (iter, entry->procname, flags, (struct SimSysFile *)entry);
+    }
+}
+
+
+static void iterate_recursive (const struct SimSysIterator *iter, struct ctl_table_header *head)
+{
+  struct ctl_table_header *h = NULL;
+  struct ctl_table *entry;
+  struct ctl_dir *ctl_dir;
+
+  ctl_dir = container_of(head, struct ctl_dir, header);
+  for (first_entry(ctl_dir, &h, &entry); h; next_entry(&h, &entry)) 
+    {
+      struct ctl_dir *dir;
+      int ret;
+
+      /* copy from sysctl_follow_link () */
+      if (S_ISLNK(entry->mode)) 
+        {
+          dir = xlate_dir(&init_net.sysctls, h->parent);
+          if (IS_ERR(dir))
+            {
+              ret = PTR_ERR(dir);
+              sim_assert (false);
+            }
+          else 
+            {
+              const char *procname = entry->procname;
+              h = NULL;
+              entry = find_entry(&h, dir, procname, strlen(procname));
+              ret = -ENOENT;
+            }
+        }
+
+      if (S_ISDIR(entry->mode))
+        {
+          iter->report_start_dir (iter, entry->procname);
+          iterate_recursive (iter, h);
+          iter->report_end_dir (iter);
+        }
       else
-	{
-	  iter->report_start_dir (iter, cur_table->procname);
-	  iterate_recursive (iter, table->child);
-	  iter->report_end_dir (iter);
-	}
-    }
-}
-
-static void iterate_recursive (const struct SimSysIterator *iter, struct ctl_table *table)
-{
-  struct ctl_table_header *root = sysctl_head_next (NULL);
-  struct ctl_table_header *cur;
-
-  iterate_table_recursive (iter, table);
-  for (cur = root; cur != 0; cur = sysctl_head_next (cur))
-    {
-      if (cur->set != table)
-	{
-	  continue;
-	}
-      iterate_table_recursive (iter, cur->root);
+        {
+          iterate_table_recursive (iter, h);
+        }
     }
 
 }
-
 
 
 void sim_sys_iterate_files (const struct SimSysIterator *iter)
 {
-  /* FIXME !!! */
-//	sim_assert (0);
-	return;
-  struct ctl_table_header *root = sysctl_head_next (NULL);
-  iterate_recursive (iter, root->ctl_table);
+  struct ctl_table_header *root = &sysctl_table_root.default_set.dir.header;
+  iterate_recursive (iter, root);
 }
 
 int sim_sys_file_read (const struct SimSysFile *file, char *buffer, int size, int offset)

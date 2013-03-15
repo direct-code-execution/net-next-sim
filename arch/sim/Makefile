@@ -125,6 +125,11 @@ archclean:
 
 $(KERNEL_LIB): $(ARCH_DIR)/objs.mk $(AUTOCONF) $(OBJS) $(ARCH_DIR)/linker.lds
 	$(CC) $(LDFLAGS) -Wl,--whole-archive $(OBJS) -o $@
+	ln -s -f $(KERNEL_LIB) liblinux.so
+
+test:
+	$(MAKE) -C $(ARCH_DIR)/test
+
 
 .PHONY : clean
 

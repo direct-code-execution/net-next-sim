@@ -2,14 +2,6 @@
 #include "sim.h"
 #include "sim-assert.h"
 
-/**
- * All these functions work on the global per-cpu workqueue.
- * Since we model only a single cpu, we have a single 
- * global workqueue.
- */
-
-static LIST_HEAD(g_work);
-
 struct wq_barrier {
   struct work_struct  work;
   struct SimTask      *waiter;
@@ -25,12 +17,13 @@ static void workqueue_barrier_fn (struct work_struct *work)
 static void
 workqueue_function (void *context)
 {
+  struct workqueue_struct *wq = context;
   while (true)
     {
       sim_task_wait ();
-      while (!list_empty (&g_work))
+      while (!list_empty (&wq->list))
        {
-         struct work_struct *work = list_first_entry(&g_work,
+         struct work_struct *work = list_first_entry(&wq->list,
                                                      struct work_struct, entry);
          work_func_t f = work->func;
          __list_del (work->entry.prev, work->entry.next);
@@ -40,28 +33,28 @@ workqueue_function (void *context)
     }
 }
 
-static struct SimTask *workqueue_task (void)
+static struct SimTask *workqueue_task (struct workqueue_struct *wq)
 {
   static struct SimTask *g_task = 0;
   if (g_task == 0)
     {
-      g_task = sim_task_start (&workqueue_function, 0);
+      g_task = sim_task_start (&workqueue_function, wq);
     }
   return g_task;
 }
 
-static int flush_entry (struct list_head *prev)
+static int flush_entry (struct workqueue_struct *wq, struct list_head *prev)
 {
   struct wq_barrier barr;
   int active = 0;
 
-  if (!list_empty(&g_work))
+  if (!list_empty(&wq->list))
     {
       active = 1;
       INIT_WORK_ONSTACK(&barr.work, &workqueue_barrier_fn);
       __set_bit(WORK_STRUCT_PENDING, work_data_bits(&barr.work));
       list_add(&barr.work.entry, prev);
-      sim_task_wakeup (workqueue_task ());
+      sim_task_wakeup (workqueue_task (wq));
       sim_task_wait ();
     }
 
@@ -76,6 +69,18 @@ static void delayed_work_timer_fn(unsigned long data)
   schedule_work (work);
 }
 
+bool queue_work(struct workqueue_struct *wq, struct work_struct *work)
+{
+  int ret = 0;
+
+  if (!test_and_set_bit (WORK_STRUCT_PENDING, work_data_bits(work))) {
+      list_add_tail (&work->entry, &wq->list);
+      sim_task_wakeup (workqueue_task (wq));
+      ret = 1;
+  }
+  return ret;
+}
+
 /**
  * @work: work to queue
  *
@@ -86,22 +91,15 @@ static void delayed_work_timer_fn(unsigned long data)
  */
 int schedule_work(struct work_struct *work)
 {
-  int ret = 0;
-
-  if (!test_and_set_bit (WORK_STRUCT_PENDING, work_data_bits(work))) {
-      list_add_tail (&work->entry, &g_work);
-      sim_task_wakeup (workqueue_task ());
-      ret = 1;
-  }
-  return ret;
+  return queue_work(system_wq, work);
 }
 void flush_scheduled_work(void)
 {
-  flush_entry (g_work.prev);
+  flush_entry (system_wq, system_wq->list.prev);
 }
 bool flush_work(struct work_struct *work)
 {
-  return flush_entry (&work->entry);
+  return flush_entry (system_wq, &work->entry);
 }
 bool cancel_work_sync(struct work_struct *work)
 {
@@ -148,5 +146,54 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 					       struct lock_class_key *key,
 					       const char *lock_name, ...)
 {
-	return 0;
+	va_list args, args1;
+	struct workqueue_struct *wq;
+	size_t namelen;
+
+	/* determine namelen, allocate wq and format name */
+	va_start(args, lock_name);
+	va_copy(args1, args);
+	namelen = vsnprintf(NULL, 0, fmt, args) + 1;
+
+	wq = kzalloc(sizeof(*wq) + namelen, GFP_KERNEL);
+	if (!wq)
+		goto err;
+
+	vsnprintf(wq->name, namelen, fmt, args1);
+	va_end(args);
+	va_end(args1);
+
+	/*
+	 * Workqueues which may be used during memory reclaim should
+	 * have a rescuer to guarantee forward progress.
+	 */
+	if (flags & WQ_MEM_RECLAIM)
+		flags |= WQ_RESCUER;
+
+	max_active = max_active ?: WQ_DFL_ACTIVE;
+	/* init wq */
+	wq->flags = flags;
+	wq->saved_max_active = max_active;
+	mutex_init(&wq->flush_mutex);
+	atomic_set(&wq->nr_cwqs_to_flush, 0);
+	INIT_LIST_HEAD(&wq->flusher_queue);
+	INIT_LIST_HEAD(&wq->flusher_overflow);
+
+	lockdep_init_map(&wq->lockdep_map, lock_name, key, 0);
+	INIT_LIST_HEAD(&wq->list);
+
+	return wq;
+err:
+	if (wq) {
+		kfree(wq);
+	}
+	return NULL;
 }
+
+struct workqueue_struct *system_wq __read_mostly;
+static int __init init_workqueues(void)
+{
+  system_wq = alloc_workqueue("events", 0, 0);
+  return 0;
+}
+fs_initcall(init_workqueues);

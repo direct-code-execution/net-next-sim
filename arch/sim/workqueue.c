@@ -99,7 +99,7 @@ static void delayed_work_timer_fn(unsigned long data)
   schedule_work (work);
 }
 
-bool queue_work(struct workqueue_struct *wq, struct work_struct *work)
+int queue_work(struct workqueue_struct *wq, struct work_struct *work)
 {
   int ret = 0;
 

@@ -55,6 +55,15 @@ int overflowuid = 0;
 int fs_overflowgid = 0;
 int fs_overflowuid = 0;
 
+/* from kobject_uevent.c */
+char uevent_helper[UEVENT_HELPER_PATH_LEN] = "dummy-uevent";
+/* from ksysfs.c */
+int rcu_expedited;
+/* from rt.c */
+int sched_rr_timeslice = RR_TIMESLICE;
+/* from main.c */
+bool initcall_debug;
+
 unsigned long __raw_local_save_flags(void)
 {
   return g_irqflags;
@@ -294,3 +303,14 @@ void add_taint(unsigned flag)
 {}
 struct pid *cad_pid = 0;
 
+void add_device_randomness(const void *buf, unsigned int size)
+{
+  return;
+}
+
+int sched_rr_handler(struct ctl_table *table, int write,
+                     void __user *buffer, size_t *lenp,
+                     loff_t *ppos)
+{
+  return 0;
+}

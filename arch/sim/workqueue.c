@@ -2,17 +2,40 @@
 #include "sim.h"
 #include "sim-assert.h"
 
-struct wq_barrier {
-  struct work_struct  work;
-  struct SimTask      *waiter;
+/* copy from kernel/workqueue.c */
+typedef unsigned long mayday_mask_t;
+struct workqueue_struct {
+	unsigned int		flags;		/* W: WQ_* flags */
+	union {
+		struct cpu_workqueue_struct __percpu	*pcpu;
+		struct cpu_workqueue_struct		*single;
+		unsigned long				v;
+	} cpu_wq;				/* I: cwq's */
+	struct list_head	list;		/* W: list of all workqueues */
+
+	struct mutex		flush_mutex;	/* protects wq flushing */
+	int			work_color;	/* F: current work color */
+	int			flush_color;	/* F: current flush color */
+	atomic_t		nr_cwqs_to_flush; /* flush in progress */
+	struct wq_flusher	*first_flusher;	/* F: first flusher */
+	struct list_head	flusher_queue;	/* F: flush waiters */
+	struct list_head	flusher_overflow; /* F: flush overflow list */
+
+	mayday_mask_t		mayday_mask;	/* cpus requesting rescue */
+	struct worker		*rescuer;	/* I: rescue worker */
+
+	int			nr_drainers;	/* W: drain in progress */
+	int			saved_max_active; /* W: saved cwq max_active */
+#ifdef CONFIG_LOCKDEP
+	struct lockdep_map	lockdep_map;
+#endif
+	char			name[];		/* I: workqueue name */
 };
 
-
-static void workqueue_barrier_fn (struct work_struct *work)
-{
-  struct wq_barrier *barr = container_of(work, struct wq_barrier, work);
-  sim_task_wakeup (barr->waiter);
-}
+struct wq_barrier {
+  struct SimTask *waiter;
+  struct workqueue_struct wq;
+};
 
 static void
 workqueue_function (void *context)
@@ -35,25 +58,21 @@ workqueue_function (void *context)
 
 static struct SimTask *workqueue_task (struct workqueue_struct *wq)
 {
-  static struct SimTask *g_task = 0;
-  if (g_task == 0)
+  struct wq_barrier *barr = container_of(wq, struct wq_barrier, wq);
+  if (barr->waiter == 0)
     {
-      g_task = sim_task_start (&workqueue_function, wq);
+      barr->waiter = sim_task_start (&workqueue_function, wq);
     }
-  return g_task;
+  return barr->waiter;
 }
 
 static int flush_entry (struct workqueue_struct *wq, struct list_head *prev)
 {
-  struct wq_barrier barr;
   int active = 0;
 
   if (!list_empty(&wq->list))
     {
       active = 1;
-      INIT_WORK_ONSTACK(&barr.work, &workqueue_barrier_fn);
-      __set_bit(WORK_STRUCT_PENDING, work_data_bits(&barr.work));
-      list_add(&barr.work.entry, prev);
       sim_task_wakeup (workqueue_task (wq));
       sim_task_wait ();
     }
@@ -147,7 +166,8 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 					       const char *lock_name, ...)
 {
 	va_list args, args1;
-	struct workqueue_struct *wq;
+        struct wq_barrier *barr;
+        struct workqueue_struct *wq;
 	size_t namelen;
 
 	/* determine namelen, allocate wq and format name */
@@ -155,9 +175,11 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 	va_copy(args1, args);
 	namelen = vsnprintf(NULL, 0, fmt, args) + 1;
 
-	wq = kzalloc(sizeof(*wq) + namelen, GFP_KERNEL);
-	if (!wq)
+	barr = kzalloc(sizeof(*barr) + namelen, GFP_KERNEL);
+	if (!barr)
 		goto err;
+        barr->waiter = 0;
+        wq = &barr->wq;
 
 	vsnprintf(wq->name, namelen, fmt, args1);
 	va_end(args);
@@ -182,10 +204,12 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 	lockdep_init_map(&wq->lockdep_map, lock_name, key, 0);
 	INIT_LIST_HEAD(&wq->list);
 
+        /* start waiter task */
+        workqueue_task (wq);
 	return wq;
 err:
-	if (wq) {
-		kfree(wq);
+	if (barr) {
+		kfree(barr);
 	}
 	return NULL;
 }

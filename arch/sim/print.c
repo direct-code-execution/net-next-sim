@@ -6,8 +6,10 @@
 int printk(const char * fmt, ...)
 {
   va_list args;
+  static char buf[256];
   va_start (args, fmt);
-  int value = sim_vprintf (fmt, args);
+  int value = vsnprintf(buf, 256, fmt, args);
+  sim_printf ("%s", buf);
   va_end (args);
   return value;
 }

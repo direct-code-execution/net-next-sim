@@ -16,4 +16,4 @@ fi
 export NS_ATTRIBUTE_DEFAULT='ns3::DceManagerHelper::LoaderFactory=ns3::DlmLoaderFactory[];ns3::TaskManager::FiberManagerType=UcontextFiberManager' 
 
 cd buildtop/source/dce
-LD_LIBRARY_PATH=${srctree} ./test.py -z test-runner-vdl -n ${VALGRIND} ${FAULT_INJECTION}
+LD_LIBRARY_PATH=${srctree} ./test.py -z test-runner-vdl -n ${VALGRIND} ${FAULT_INJECTION} ${VERBOSE} ${ADD_PARAM}

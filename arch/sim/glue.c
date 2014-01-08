@@ -289,3 +289,6 @@ unsigned long get_taint(void)
 void add_taint(unsigned flag)
 {}
 struct pid *cad_pid = 0;
+
+/* from crypo/fips.c */
+int fips_enabled = 0;

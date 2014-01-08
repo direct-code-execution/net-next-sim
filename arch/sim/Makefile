@@ -63,7 +63,8 @@ comma= ,
 kernel/_to_keep=notifier.o params.o time.o sysctl.o mutex.o \
 rwsem.o semaphore.o srcu.o rcupdate.o rcutiny.o kfifo.o
 mm/_to_keep=util.o
-crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o
+crypto/_to_keep=aead.o ahash.o shash.o api.o algapi.o cipher.o compress.o proc.o \
+crc32c.o
 drivers/base/_to_keep=class.o core.o bus.o dd.o driver.o devres.o module.o
 drivers/net/_to_keep=loopback.o
 lib/_to_keep=klist.o kobject.o kref.o hweight.o int_sqrt.o checksum.o \
@@ -94,6 +95,19 @@ $(ARCH_DIR)/timeconst.h: $(srctree)/.config
 	perl $(srctree)/kernel/timeconst.pl $(CONFIG_HZ) > $@
 $(ARCH_DIR)/linker.lds: $(ARCH_DIR)/generate-linker-script.py
 	ld -shared --verbose | ./$^ > $@
+
+# from lib/Makefile
+hostprogs-y	:= $(srctree)/lib/gen_crc32table
+clean-files	:= crc32table.h
+
+$(srctree)/lib/gen_crc32table: $(srctree)/lib/gen_crc32table.c
+	cc $^ -o $@
+
+quiet_cmd_crc32 = GEN     $@
+      cmd_crc32 = $< > $@
+
+$(ARCH_DIR)/crc32table.h: $(srctree)/lib/gen_crc32table
+	$(call cmd,crc32)
 
 KERNEL_BUILTIN=$(addprefix $(srctree)/,$(addsuffix builtin.o,$(dirs)))
 OBJS=$(SIM_OBJ) $(foreach builtin,$(KERNEL_BUILTIN),$(if $($(builtin)),$($(builtin))))

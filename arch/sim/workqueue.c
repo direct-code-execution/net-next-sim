@@ -87,7 +87,8 @@ static void delayed_work_timer_fn(unsigned long data)
   struct delayed_work *dwork = (struct delayed_work *)data;
   struct work_struct *work = &dwork->work;
 
-  queue_work (system_wq, work);
+  list_add_tail (&work->entry, &system_wq->list);
+  sim_task_wakeup (workqueue_task (system_wq));
 }
 
 int queue_work(struct workqueue_struct *wq, struct work_struct *work)

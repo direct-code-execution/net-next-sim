@@ -3,6 +3,13 @@ SRCDIR=$(dir $(firstword $(MAKEFILE_LIST)))
 #KERNEL_VERSION=6be35c700f742e911ecedd07fcc43d4439922334
 #KERNEL_VERSION=v3.4
 
+CC = gcc
+GCCVERSIONGTEQ48 := $(shell expr `gcc -dumpversion` \>= 4.8)
+ifeq "$(GCCVERSIONGTEQ48)" "1"
+   NO_TREE_LOOP_OPT += -fno-tree-loop-distribute-patterns
+endif
+
+
 SIM_SRC=\
 fs.c random.c sim.c softirq.c time.c \
 glue.c sim-device.c sysctl.c timer.c \
@@ -18,7 +25,7 @@ covl_yes=-fprofile-arcs
 covl_no=
 # no idea why OPT=no doesn't work...
 OPT?=yes
-opt_yes=-O3 -fomit-frame-pointer -fno-tree-loop-distribute-patterns
+opt_yes=-O3 -fomit-frame-pointer $(NO_TREE_LOOP_OPT)
 opt_no=-O0
 PIC?=yes
 pic_yes=-fpic -DPIC

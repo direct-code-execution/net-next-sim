@@ -4392,7 +4392,7 @@ static int vmx_vcpu_setup(struct vcpu_vmx *vmx)
 static void vmx_vcpu_reset(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
-	u64 msr;
+	struct msr_data apic_base_msr;
 
 	vmx->rmode.vm86_active = 0;
 
@@ -4400,10 +4400,11 @@ static void vmx_vcpu_reset(struct kvm_vcpu *vcpu)
 
 	vmx->vcpu.arch.regs[VCPU_REGS_RDX] = get_rdx_init_val();
 	kvm_set_cr8(&vmx->vcpu, 0);
-	msr = 0xfee00000 | MSR_IA32_APICBASE_ENABLE;
+	apic_base_msr.data = 0xfee00000 | MSR_IA32_APICBASE_ENABLE;
 	if (kvm_vcpu_is_bsp(&vmx->vcpu))
-		msr |= MSR_IA32_APICBASE_BSP;
-	kvm_set_apic_base(&vmx->vcpu, msr);
+		apic_base_msr.data |= MSR_IA32_APICBASE_BSP;
+	apic_base_msr.host_initiated = true;
+	kvm_set_apic_base(&vmx->vcpu, &apic_base_msr);
 
 	vmx_segment_cache_clear(vmx);
 
@@ -6687,7 +6688,7 @@ static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)
 		else if (is_page_fault(intr_info))
 			return enable_ept;
 		else if (is_no_device(intr_info) &&
-			 !(nested_read_cr0(vmcs12) & X86_CR0_TS))
+			 !(vmcs12->guest_cr0 & X86_CR0_TS))
 			return 0;
 		return vmcs12->exception_bitmap &
 				(1u << (intr_info & INTR_INFO_VECTOR_MASK));

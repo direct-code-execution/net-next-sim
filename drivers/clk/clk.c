@@ -575,16 +575,19 @@ struct clk_hw *__clk_get_hw(struct clk *clk)
 {
 	return !clk ? NULL : clk->hw;
 }
+EXPORT_SYMBOL_GPL(__clk_get_hw);
 
 u8 __clk_get_num_parents(struct clk *clk)
 {
 	return !clk ? 0 : clk->num_parents;
 }
+EXPORT_SYMBOL_GPL(__clk_get_num_parents);
 
 struct clk *__clk_get_parent(struct clk *clk)
 {
 	return !clk ? NULL : clk->parent;
 }
+EXPORT_SYMBOL_GPL(__clk_get_parent);
 
 struct clk *clk_get_parent_by_index(struct clk *clk, u8 index)
 {
@@ -598,6 +601,7 @@ struct clk *clk_get_parent_by_index(struct clk *clk, u8 index)
 	else
 		return clk->parents[index];
 }
+EXPORT_SYMBOL_GPL(clk_get_parent_by_index);
 
 unsigned int __clk_get_enable_count(struct clk *clk)
 {
@@ -629,6 +633,7 @@ unsigned long __clk_get_rate(struct clk *clk)
 out:
 	return ret;
 }
+EXPORT_SYMBOL_GPL(__clk_get_rate);
 
 unsigned long __clk_get_accuracy(struct clk *clk)
 {
@@ -685,6 +690,7 @@ bool __clk_is_enabled(struct clk *clk)
 out:
 	return !!ret;
 }
+EXPORT_SYMBOL_GPL(__clk_is_enabled);
 
 static struct clk *__clk_lookup_subtree(const char *name, struct clk *clk)
 {
@@ -776,6 +782,7 @@ out:
 
 	return best;
 }
+EXPORT_SYMBOL_GPL(__clk_mux_determine_rate);
 
 /***        clk api        ***/
 
@@ -2219,24 +2226,25 @@ EXPORT_SYMBOL_GPL(devm_clk_unregister);
  */
 int __clk_get(struct clk *clk)
 {
-	if (clk && !try_module_get(clk->owner))
-		return 0;
+	if (clk) {
+		if (!try_module_get(clk->owner))
+			return 0;
 
-	kref_get(&clk->ref);
+		kref_get(&clk->ref);
+	}
 	return 1;
 }
 
 void __clk_put(struct clk *clk)
 {
-	if (WARN_ON_ONCE(IS_ERR(clk)))
+	if (!clk || WARN_ON_ONCE(IS_ERR(clk)))
 		return;
 
 	clk_prepare_lock();
 	kref_put(&clk->ref, __clk_release);
 	clk_prepare_unlock();
 
-	if (clk)
-		module_put(clk->owner);
+	module_put(clk->owner);
 }
 
 /***        clk rate change notifiers        ***/
@@ -2372,8 +2380,6 @@ struct of_clk_provider {
 	struct clk *(*get)(struct of_phandle_args *clkspec, void *data);
 	void *data;
 };
-
-extern struct of_device_id __clk_of_table[];
 
 static const struct of_device_id __clk_of_table_sentinel
 	__used __section(__clk_of_table_end);
@@ -2534,7 +2540,7 @@ void __init of_clk_init(const struct of_device_id *matches)
 	struct device_node *np;
 
 	if (!matches)
-		matches = __clk_of_table;
+		matches = &__clk_of_table;
 
 	for_each_matching_node_and_match(np, matches, &match) {
 		of_clk_init_cb_t clk_init_cb = match->data;

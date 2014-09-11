@@ -816,9 +816,10 @@ static int qlcnic_82xx_setup_intr(struct qlcnic_adapter *adapter)
 
 		if (!(adapter->flags & QLCNIC_MSIX_ENABLED)) {
 			qlcnic_disable_multi_tx(adapter);
+			adapter->drv_sds_rings = QLCNIC_SINGLE_RING;
 
 			err = qlcnic_enable_msi_legacy(adapter);
-			if (!err)
+			if (err)
 				return err;
 		}
 	}
@@ -1837,6 +1838,7 @@ int __qlcnic_up(struct qlcnic_adapter *adapter, struct net_device *netdev)
 	qlcnic_linkevent_request(adapter, 1);
 
 	adapter->ahw->reset_context = 0;
+	netif_tx_start_all_queues(netdev);
 	return 0;
 }
 
@@ -2704,14 +2706,8 @@ static int qlcnic_open(struct net_device *netdev)
 
 	err = __qlcnic_up(adapter, netdev);
 	if (err)
-		goto err_out;
+		qlcnic_detach(adapter);
 
-	netif_tx_start_all_queues(netdev);
-
-	return 0;
-
-err_out:
-	qlcnic_detach(adapter);
 	return err;
 }
 
@@ -3868,7 +3864,7 @@ int qlcnic_validate_rings(struct qlcnic_adapter *adapter, __u32 ring_cnt,
 		strcpy(buf, "Tx");
 	}
 
-	if (!qlcnic_use_msi_x && !qlcnic_use_msi) {
+	if (!QLCNIC_IS_MSI_FAMILY(adapter)) {
 		netdev_err(netdev, "No RSS/TSS support in INT-x mode\n");
 		return -EINVAL;
 	}

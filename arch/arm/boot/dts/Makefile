@@ -38,6 +38,7 @@ dtb-$(CONFIG_ARCH_AT91) += at91sam9g35ek.dtb
 dtb-$(CONFIG_ARCH_AT91) += at91sam9x25ek.dtb
 dtb-$(CONFIG_ARCH_AT91) += at91sam9x35ek.dtb
 # sama5d3
+dtb-$(CONFIG_ARCH_AT91)	+= at91-sama5d3_xplained.dtb
 dtb-$(CONFIG_ARCH_AT91)	+= sama5d31ek.dtb
 dtb-$(CONFIG_ARCH_AT91)	+= sama5d33ek.dtb
 dtb-$(CONFIG_ARCH_AT91)	+= sama5d34ek.dtb
@@ -152,10 +153,13 @@ dtb-$(CONFIG_ARCH_MXC) += \
 	imx53-mba53.dtb \
 	imx53-qsb.dtb \
 	imx53-smd.dtb \
+	imx6dl-cubox-i.dtb \
+	imx6dl-hummingboard.dtb \
 	imx6dl-sabreauto.dtb \
 	imx6dl-sabresd.dtb \
 	imx6dl-wandboard.dtb \
 	imx6q-arm2.dtb \
+	imx6q-cubox-i.dtb \
 	imx6q-phytec-pbab01.dtb \
 	imx6q-sabreauto.dtb \
 	imx6q-sabrelite.dtb \
@@ -205,7 +209,8 @@ dtb-$(CONFIG_ARCH_OMAP2PLUS) += omap2420-h4.dtb \
 	omap3-n900.dtb \
 	omap3-n9.dtb \
 	omap3-n950.dtb \
-	omap3-tobi.dtb \
+	omap3-overo-tobi.dtb \
+	omap3-overo-storm-tobi.dtb \
 	omap3-gta04.dtb \
 	omap3-igep0020.dtb \
 	omap3-igep0030.dtb \

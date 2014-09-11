@@ -240,7 +240,7 @@ static void xenvif_gop_frag_copy(struct xenvif *vif, struct sk_buff *skb,
 	struct gnttab_copy *copy_gop;
 	struct xenvif_rx_meta *meta;
 	unsigned long bytes;
-	int gso_type;
+	int gso_type = XEN_NETIF_GSO_TYPE_NONE;
 
 	/* Data must not cross a page boundary. */
 	BUG_ON(size + offset > PAGE_SIZE<<compound_order(page));
@@ -299,12 +299,12 @@ static void xenvif_gop_frag_copy(struct xenvif *vif, struct sk_buff *skb,
 		}
 
 		/* Leave a gap for the GSO descriptor. */
-		if (skb_shinfo(skb)->gso_type & SKB_GSO_TCPV4)
-			gso_type = XEN_NETIF_GSO_TYPE_TCPV4;
-		else if (skb_shinfo(skb)->gso_type & SKB_GSO_TCPV6)
-			gso_type = XEN_NETIF_GSO_TYPE_TCPV6;
-		else
-			gso_type = XEN_NETIF_GSO_TYPE_NONE;
+		if (skb_is_gso(skb)) {
+			if (skb_shinfo(skb)->gso_type & SKB_GSO_TCPV4)
+				gso_type = XEN_NETIF_GSO_TYPE_TCPV4;
+			else if (skb_shinfo(skb)->gso_type & SKB_GSO_TCPV6)
+				gso_type = XEN_NETIF_GSO_TYPE_TCPV6;
+		}
 
 		if (*head && ((1 << gso_type) & vif->gso_mask))
 			vif->rx.req_cons++;
@@ -338,19 +338,15 @@ static int xenvif_gop_skb(struct sk_buff *skb,
 	int head = 1;
 	int old_meta_prod;
 	int gso_type;
-	int gso_size;
 
 	old_meta_prod = npo->meta_prod;
 
-	if (skb_shinfo(skb)->gso_type & SKB_GSO_TCPV4) {
-		gso_type = XEN_NETIF_GSO_TYPE_TCPV4;
-		gso_size = skb_shinfo(skb)->gso_size;
-	} else if (skb_shinfo(skb)->gso_type & SKB_GSO_TCPV6) {
-		gso_type = XEN_NETIF_GSO_TYPE_TCPV6;
-		gso_size = skb_shinfo(skb)->gso_size;
-	} else {
-		gso_type = XEN_NETIF_GSO_TYPE_NONE;
-		gso_size = 0;
+	gso_type = XEN_NETIF_GSO_TYPE_NONE;
+	if (skb_is_gso(skb)) {
+		if (skb_shinfo(skb)->gso_type & SKB_GSO_TCPV4)
+			gso_type = XEN_NETIF_GSO_TYPE_TCPV4;
+		else if (skb_shinfo(skb)->gso_type & SKB_GSO_TCPV6)
+			gso_type = XEN_NETIF_GSO_TYPE_TCPV6;
 	}
 
 	/* Set up a GSO prefix descriptor, if necessary */
@@ -358,7 +354,7 @@ static int xenvif_gop_skb(struct sk_buff *skb,
 		req = RING_GET_REQUEST(&vif->rx, vif->rx.req_cons++);
 		meta = npo->meta + npo->meta_prod++;
 		meta->gso_type = gso_type;
-		meta->gso_size = gso_size;
+		meta->gso_size = skb_shinfo(skb)->gso_size;
 		meta->size = 0;
 		meta->id = req->id;
 	}
@@ -368,7 +364,7 @@ static int xenvif_gop_skb(struct sk_buff *skb,
 
 	if ((1 << gso_type) & vif->gso_mask) {
 		meta->gso_type = gso_type;
-		meta->gso_size = gso_size;
+		meta->gso_size = skb_shinfo(skb)->gso_size;
 	} else {
 		meta->gso_type = XEN_NETIF_GSO_TYPE_NONE;
 		meta->gso_size = 0;
@@ -476,7 +472,6 @@ static void xenvif_rx_action(struct xenvif *vif)
 	unsigned long offset;
 	struct skb_cb_overlay *sco;
 	bool need_to_notify = false;
-	bool ring_full = false;
 
 	struct netrx_pending_operations npo = {
 		.copy  = vif->grant_copy_op,
@@ -486,7 +481,7 @@ static void xenvif_rx_action(struct xenvif *vif)
 	skb_queue_head_init(&rxq);
 
 	while ((skb = skb_dequeue(&vif->rx_queue)) != NULL) {
-		int max_slots_needed;
+		RING_IDX max_slots_needed;
 		int i;
 
 		/* We need a cheap worse case estimate for the number of
@@ -501,17 +496,19 @@ static void xenvif_rx_action(struct xenvif *vif)
 			size = skb_frag_size(&skb_shinfo(skb)->frags[i]);
 			max_slots_needed += DIV_ROUND_UP(size, PAGE_SIZE);
 		}
-		if (skb_shinfo(skb)->gso_type & SKB_GSO_TCPV4 ||
-		    skb_shinfo(skb)->gso_type & SKB_GSO_TCPV6)
+		if (skb_is_gso(skb) &&
+		   (skb_shinfo(skb)->gso_type & SKB_GSO_TCPV4 ||
+		    skb_shinfo(skb)->gso_type & SKB_GSO_TCPV6))
 			max_slots_needed++;
 
 		/* If the skb may not fit then bail out now */
 		if (!xenvif_rx_ring_slots_available(vif, max_slots_needed)) {
 			skb_queue_head(&vif->rx_queue, skb);
 			need_to_notify = true;
-			ring_full = true;
+			vif->rx_last_skb_slots = max_slots_needed;
 			break;
-		}
+		} else
+			vif->rx_last_skb_slots = 0;
 
 		sco = (struct skb_cb_overlay *)skb->cb;
 		sco->meta_slots_used = xenvif_gop_skb(skb, &npo);
@@ -521,8 +518,6 @@ static void xenvif_rx_action(struct xenvif *vif)
 	}
 
 	BUG_ON(npo.meta_prod > ARRAY_SIZE(vif->meta));
-
-	vif->rx_queue_stopped = !npo.copy_prod && ring_full;
 
 	if (!npo.copy_prod)
 		goto done;
@@ -1473,8 +1468,8 @@ static struct xen_netif_rx_response *make_rx_response(struct xenvif *vif,
 
 static inline int rx_work_todo(struct xenvif *vif)
 {
-	return (!skb_queue_empty(&vif->rx_queue) && !vif->rx_queue_stopped) ||
-		vif->rx_event;
+	return !skb_queue_empty(&vif->rx_queue) &&
+	       xenvif_rx_ring_slots_available(vif, vif->rx_last_skb_slots);
 }
 
 static inline int tx_work_todo(struct xenvif *vif)
@@ -1559,8 +1554,6 @@ int xenvif_kthread(void *data)
 
 		if (!skb_queue_empty(&vif->rx_queue))
 			xenvif_rx_action(vif);
-
-		vif->rx_event = false;
 
 		if (skb_queue_empty(&vif->rx_queue) &&
 		    netif_queue_stopped(vif->dev))

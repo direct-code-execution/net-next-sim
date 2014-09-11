@@ -55,6 +55,7 @@
 
 #include "datapath.h"
 #include "flow.h"
+#include "flow_table.h"
 #include "flow_netlink.h"
 #include "vport-internal_dev.h"
 #include "vport-netdev.h"
@@ -160,7 +161,6 @@ static void destroy_dp_rcu(struct rcu_head *rcu)
 {
 	struct datapath *dp = container_of(rcu, struct datapath, rcu);
 
-	ovs_flow_tbl_destroy(&dp->table);
 	free_percpu(dp->stats_percpu);
 	release_net(ovs_dp_get_net(dp));
 	kfree(dp->ports);
@@ -464,12 +464,24 @@ static int queue_userspace_packet(struct datapath *dp, struct sk_buff *skb,
 	}
 	nla->nla_len = nla_attr_size(skb->len);
 
-	skb_zerocopy(user_skb, skb, skb->len, hlen);
+	err = skb_zerocopy(user_skb, skb, skb->len, hlen);
+	if (err)
+		goto out;
+
+	/* Pad OVS_PACKET_ATTR_PACKET if linear copy was performed */
+	if (!(dp->user_features & OVS_DP_F_UNALIGNED)) {
+		size_t plen = NLA_ALIGN(user_skb->len) - user_skb->len;
+
+		if (plen > 0)
+			memset(skb_put(user_skb, plen), 0, plen);
+	}
 
 	((struct nlmsghdr *) user_skb->data)->nlmsg_len = user_skb->len;
 
 	err = genlmsg_unicast(ovs_dp_get_net(dp), user_skb, upcall_info->portid);
 out:
+	if (err)
+		skb_tx_error(skb);
 	kfree_skb(nskb);
 	return err;
 }
@@ -852,11 +864,8 @@ static int ovs_flow_cmd_new_or_set(struct sk_buff *skb, struct genl_info *info)
 			goto err_unlock_ovs;
 
 		/* The unmasked key has to be the same for flow updates. */
-		error = -EINVAL;
-		if (!ovs_flow_cmp_unmasked_key(flow, &match)) {
-			OVS_NLERR("Flow modification message rejected, unmasked key does not match.\n");
+		if (!ovs_flow_cmp_unmasked_key(flow, &match))
 			goto err_unlock_ovs;
-		}
 
 		/* Update actions. */
 		old_acts = ovsl_dereference(flow->sf_acts);
@@ -1079,6 +1088,7 @@ static size_t ovs_dp_cmd_msg_size(void)
 	msgsize += nla_total_size(IFNAMSIZ);
 	msgsize += nla_total_size(sizeof(struct ovs_dp_stats));
 	msgsize += nla_total_size(sizeof(struct ovs_dp_megaflow_stats));
+	msgsize += nla_total_size(sizeof(u32)); /* OVS_DP_ATTR_USER_FEATURES */
 
 	return msgsize;
 }
@@ -1168,7 +1178,7 @@ static void ovs_dp_reset_user_features(struct sk_buff *skb, struct genl_info *in
 	struct datapath *dp;
 
 	dp = lookup_datapath(sock_net(skb->sk), info->userhdr, info->attrs);
-	if (!dp)
+	if (IS_ERR(dp))
 		return;
 
 	WARN(dp->user_features, "Dropping previously announced user features\n");
@@ -1279,7 +1289,7 @@ err_destroy_ports_array:
 err_destroy_percpu:
 	free_percpu(dp->stats_percpu);
 err_destroy_table:
-	ovs_flow_tbl_destroy(&dp->table);
+	ovs_flow_tbl_destroy(&dp->table, false);
 err_free_dp:
 	release_net(ovs_dp_get_net(dp));
 	kfree(dp);
@@ -1306,9 +1316,12 @@ static void __dp_destroy(struct datapath *dp)
 	list_del_rcu(&dp->list_node);
 
 	/* OVSP_LOCAL is datapath internal port. We need to make sure that
-	 * all port in datapath are destroyed first before freeing datapath.
+	 * all ports in datapath are destroyed first before freeing datapath.
 	 */
 	ovs_dp_detach_port(ovs_vport_ovsl(dp, OVSP_LOCAL));
+
+	/* RCU destroy the flow table */
+	ovs_flow_tbl_destroy(&dp->table, true);
 
 	call_rcu(&dp->rcu, destroy_dp_rcu);
 }
@@ -1753,11 +1766,12 @@ static int ovs_vport_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 	int bucket = cb->args[0], skip = cb->args[1];
 	int i, j = 0;
 
-	dp = get_dp(sock_net(skb->sk), ovs_header->dp_ifindex);
-	if (!dp)
-		return -ENODEV;
-
 	rcu_read_lock();
+	dp = get_dp(sock_net(skb->sk), ovs_header->dp_ifindex);
+	if (!dp) {
+		rcu_read_unlock();
+		return -ENODEV;
+	}
 	for (i = bucket; i < DP_VPORT_HASH_BUCKETS; i++) {
 		struct vport *vport;
 

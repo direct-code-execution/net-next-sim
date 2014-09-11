@@ -69,6 +69,7 @@ static void qeth_clear_output_buffer(struct qeth_qdio_out_q *queue,
 static int qeth_init_qdio_out_buf(struct qeth_qdio_out_q *, int);
 
 struct workqueue_struct *qeth_wq;
+EXPORT_SYMBOL_GPL(qeth_wq);
 
 static void qeth_close_dev_handler(struct work_struct *work)
 {
@@ -616,15 +617,12 @@ static struct qeth_ipa_cmd *qeth_check_ipa_data(struct qeth_card *card,
 				qeth_schedule_recovery(card);
 				return NULL;
 			case IPA_CMD_SETBRIDGEPORT:
-				if (cmd->data.sbp.hdr.command_code ==
-					IPA_SBP_BRIDGE_PORT_STATE_CHANGE) {
-					qeth_bridge_state_change(card, cmd);
-					return NULL;
-				} else
-					return cmd;
 			case IPA_CMD_ADDRESS_CHANGE_NOTIF:
-				qeth_bridge_host_event(card, cmd);
-				return NULL;
+				if (card->discipline->control_event_handler
+								(card, cmd))
+					return cmd;
+				else
+					return NULL;
 			case IPA_CMD_MODCCID:
 				return cmd;
 			case IPA_CMD_REGISTER_LOCAL_ADDR:
@@ -1662,7 +1660,6 @@ int qeth_qdio_clear_card(struct qeth_card *card, int use_halt)
 				QDIO_FLAG_CLEANUP_USING_CLEAR);
 		if (rc)
 			QETH_CARD_TEXT_(card, 3, "1err%d", rc);
-		qdio_free(CARD_DDEV(card));
 		atomic_set(&card->qdio.state, QETH_QDIO_ALLOCATED);
 		break;
 	case QETH_QDIO_CLEANING:
@@ -2607,6 +2604,7 @@ static int qeth_mpc_initialize(struct qeth_card *card)
 	return 0;
 out_qdio:
 	qeth_qdio_clear_card(card, card->info.type != QETH_CARD_TYPE_IQD);
+	qdio_free(CARD_DDEV(card));
 	return rc;
 }
 
@@ -4908,9 +4906,11 @@ retry:
 	if (retries < 3)
 		QETH_DBF_MESSAGE(2, "%s Retrying to do IDX activates.\n",
 			dev_name(&card->gdev->dev));
+	rc = qeth_qdio_clear_card(card, card->info.type != QETH_CARD_TYPE_IQD);
 	ccw_device_set_offline(CARD_DDEV(card));
 	ccw_device_set_offline(CARD_WDEV(card));
 	ccw_device_set_offline(CARD_RDEV(card));
+	qdio_free(CARD_DDEV(card));
 	rc = ccw_device_set_online(CARD_RDEV(card));
 	if (rc)
 		goto retriable;
@@ -4920,7 +4920,6 @@ retry:
 	rc = ccw_device_set_online(CARD_DDEV(card));
 	if (rc)
 		goto retriable;
-	rc = qeth_qdio_clear_card(card, card->info.type != QETH_CARD_TYPE_IQD);
 retriable:
 	if (rc == -ERESTARTSYS) {
 		QETH_DBF_TEXT(SETUP, 2, "break1");
@@ -4973,10 +4972,6 @@ retriable:
 		qeth_query_setadapterparms(card);
 	if (qeth_adp_supported(card, IPA_SETADP_SET_DIAG_ASSIST))
 		qeth_query_setdiagass(card);
-	qeth_bridgeport_query_support(card);
-	if (card->options.sbp.supported_funcs)
-		dev_info(&card->gdev->dev,
-		"The device represents a HiperSockets Bridge Capable Port\n");
 	return 0;
 out:
 	dev_warn(&card->gdev->dev, "The qeth device driver failed to recover "

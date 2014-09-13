@@ -106,7 +106,7 @@ $(AUTOCONF): $(ARCH_DIR)/generate-autoconf.py $(srctree)/.config $(ARCH_DIR)/tim
 	$(call if_changed,autoconf)
 quiet_cmd_timeconst = GEN     $@
       cmd_timeconst = echo "hz=$(CONFIG_HZ)" > $(srctree)/arch/sim/hz.bc ; \
-                      bc $(srctree)/arch/sim/hz.bc kernel/time/timeconst.bc > $@
+                      bc $(srctree)/arch/sim/hz.bc kernel/timeconst.bc > $@
 $(ARCH_DIR)/timeconst.h: $(srctree)/.config
 	$(call if_changed,timeconst)
 quiet_cmd_linker = GEN     $@

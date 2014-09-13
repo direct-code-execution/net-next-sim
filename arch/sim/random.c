@@ -1,7 +1,7 @@
 #include "sim.h"
 #include <linux/random.h>
 
-u32 random32()
+u32 random32(void)
 {
   return sim_random ();
 }

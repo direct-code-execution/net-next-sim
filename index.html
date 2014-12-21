@@ -4,11 +4,11 @@
     <meta charset='utf-8'>
     <meta http-equiv="X-UA-Compatible" content="chrome=1">
 
-    <link rel="stylesheet" type="text/css" href="stylesheets/stylesheet.css" media="screen" />
-    <link rel="stylesheet" type="text/css" href="stylesheets/pygment_trac.css" media="screen" />
-    <link rel="stylesheet" type="text/css" href="stylesheets/print.css" media="print" />
+    <link rel="stylesheet" type="text/css" href="stylesheets/stylesheet.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="stylesheets/pygment_trac.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="stylesheets/print.css" media="print">
 
-    <title>net-next-sim: ns-3 Direct Code Execution with Linux kernel by thehajime</title>
+    <title>net-next-sim: ns-3 Direct Code Execution with Linux kernel by direct-code-execution</title>
   </head>
 
   <body>
@@ -19,9 +19,9 @@
         <h2></h2>
 
         <section id="downloads">
-          <a href="https://github.com/thehajime/net-next-sim/zipball/master" class="btn">Download as .zip</a>
-          <a href="https://github.com/thehajime/net-next-sim/tarball/master" class="btn">Download as .tar.gz</a>
-          <a href="https://github.com/thehajime/net-next-sim" class="btn btn-github"><span class="icon"></span>View on GitHub</a>
+          <a href="https://github.com/direct-code-execution/net-next-sim/zipball/master" class="btn">Download as .zip</a>
+          <a href="https://github.com/direct-code-execution/net-next-sim/tarball/master" class="btn">Download as .tar.gz</a>
+          <a href="https://github.com/direct-code-execution/net-next-sim" class="btn btn-github"><span class="icon"></span>View on GitHub</a>
         </section>
       </div>
     </header>
@@ -29,31 +29,36 @@
     <div class="container">
       <section id="main_content">
         <h2>
-<a name="quick-start" class="anchor" href="#quick-start"><span class="octicon octicon-link"></span></a>Quick start</h2>
+<a id="quick-start" class="anchor" href="#quick-start" aria-hidden="true"><span class="octicon octicon-link"></span></a>Quick start</h2>
 
-<pre><code> git clone git://github.com/thehajime/net-next-sim.git
+<pre><code> git clone git://github.com/direct-code-execution/net-next-sim.git
  cd net-next-sim
- make defconfig ARCH=sim
- make library ARCH=sim
- make testbin -C arch/sim/test
- make test ARCH=sim
+ make defconfig ARCH=lib
+ make library ARCH=lib
+ make testbin -C arch/lib/test
+ make test ARCH=lib
 </code></pre>
 
 <p>see what's going on.</p>
 
+<p><strong>NOTE</strong>
+Old code available at non-default branches (sim-ns3-2.6.36-branch, sim-ns3-3.14.0-branch, etc) use different ARCH name, which is <em>sim</em>. You need to replace the above instruction <em>lib</em> to <em>sim</em> (e.g., <code>make library ARCH=sim</code> should be used for 2.6.36 branch).</p>
+
 <h2>
-<a name="what-is-this-" class="anchor" href="#what-is-this-"><span class="octicon octicon-link"></span></a>What is this ?</h2>
+<a id="what-is-this-" class="anchor" href="#what-is-this-" aria-hidden="true"><span class="octicon octicon-link"></span></a>What is this ?</h2>
 
 <p><em>net-next-sim</em> is a shared library of Linux (net-next) kernel to integrate with userspace applications, such as ns-3 network simulator. It consists of <strong>sim</strong> architecture (located arch/sim/) to avoid touching the main part of Linux kernel.</p>
 
 <h2>
-<a name="gallery" class="anchor" href="#gallery"><span class="octicon octicon-link"></span></a>Gallery</h2>
+<a id="gallery" class="anchor" href="#gallery" aria-hidden="true"><span class="octicon octicon-link"></span></a>Gallery</h2>
 
 <ul>
 <li><a href="https://www.youtube.com/watch?v=fN_nv7RdFm8">mptcp Linux kernel</a></li>
 <li><a href="https://www.youtube.com/watch?v=y790NE3EPCg">Mobile IPv6</a></li>
-</ul><h2>
-<a name="more-information" class="anchor" href="#more-information"><span class="octicon octicon-link"></span></a>More information</h2>
+</ul>
+
+<h2>
+<a id="more-information" class="anchor" href="#more-information" aria-hidden="true"><span class="octicon octicon-link"></span></a>More information</h2>
 
 <ul>
 <li><a href="http://yans.pl.sophia.inria.fr/trac/DCE/wiki">Wiki</a></li>

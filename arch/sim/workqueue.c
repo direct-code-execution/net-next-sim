@@ -96,7 +96,7 @@ bool queue_work_on(int cpu, struct workqueue_struct *wq,
 {
   int ret = 0;
 
-  if (!test_and_set_bit (WORK_STRUCT_PENDING, work_data_bits(work))) {
+  if (!test_and_set_bit (WORK_STRUCT_PENDING_BIT, work_data_bits(work))) {
       list_add_tail (&work->entry, &wq->list);
       sim_task_wakeup (workqueue_task (wq));
       ret = 1;
@@ -119,7 +119,7 @@ void flush_workqueue(struct workqueue_struct *wq)
 bool cancel_work_sync(struct work_struct *work)
 {
   int retval = 0;
-  if (!test_and_set_bit(WORK_STRUCT_PENDING, work_data_bits(work)))
+  if (!test_and_set_bit(WORK_STRUCT_PENDING_BIT, work_data_bits(work)))
     {
       // work was not yet queued
       return 0;
@@ -144,7 +144,7 @@ bool queue_delayed_work_on(int cpu, struct workqueue_struct *wq,
       return queue_work (wq, work);
     }
 
-  if (!test_and_set_bit(WORK_STRUCT_PENDING, work_data_bits(work)))
+  if (!test_and_set_bit(WORK_STRUCT_PENDING_BIT, work_data_bits(work)))
     {
       sim_assert (!timer_pending (timer));
       dwork->wq = wq;

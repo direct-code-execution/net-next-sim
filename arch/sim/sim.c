@@ -1,6 +1,7 @@
 #include <linux/init.h> // initcall_t
 #include <linux/kernel.h> // SYSTEM_BOOTING
 #include <linux/sched.h> // struct task_struct
+#include <linux/mm.h>
 #include <stdio.h>
 #include "sim-init.h"
 #include "sim.h"
@@ -177,6 +178,7 @@ void sim_init (struct SimExported *exported, const struct SimImported *imported,
 
   // finally, put the system in RUNNING state.
   system_state = SYSTEM_RUNNING;
+  totalram_pages = 8192;
 
   /* XXX handle atexit registration for gcov */
   int i;

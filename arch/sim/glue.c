@@ -44,7 +44,7 @@ struct uts_namespace init_uts_ns = {
 
 // XXX: used in network stack !
 unsigned long num_physpages = 0;
-unsigned long totalram_pages = 8192;
+unsigned long totalram_pages = 0;
 
 // XXX figure out initial value
 unsigned int interrupt_pending = 0;

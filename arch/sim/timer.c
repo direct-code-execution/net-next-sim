@@ -46,9 +46,11 @@ static void run_timer_softirq(struct softirq_action *h)
       fn = timer->function;
       data = timer->data;
       sim_assert (timer->base == 0);
-      list_del (&timer->entry);
-      timer->entry.next = NULL;
-      fn (data);
+      if (timer->entry.prev != LIST_POISON2) {
+        list_del (&timer->entry);
+        timer->entry.next = NULL;
+        fn (data);
+      }
     }
 }
 
@@ -67,7 +69,9 @@ static void timer_trampoline (void *context)
   ensure_softirq_opened ();
   struct timer_list *timer = context;
   timer->base = 0;
-  list_del (&timer->entry);
+  if (timer->entry.prev != LIST_POISON2) {
+    list_del (&timer->entry);
+  }
   list_add_tail (&timer->entry, &g_expired_events);
   raise_softirq (TIMER_SOFTIRQ);
 }
@@ -131,8 +135,10 @@ int del_timer(struct timer_list *timer)
     {
       retval = 0;
     }
-  list_del(&timer->entry);
-  timer->entry.next = NULL;
+  if (timer->entry.prev != LIST_POISON2) {
+    list_del(&timer->entry);
+    timer->entry.next = NULL;
+  }
   return retval;
 }
 

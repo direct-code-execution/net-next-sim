@@ -32,10 +32,12 @@ workqueue_function (void *context)
        {
          struct work_struct *work = list_first_entry(&g_work,
                                                      struct work_struct, entry);
-         work_func_t f = work->func;
-         __list_del (work->entry.prev, work->entry.next);
-         work_clear_pending (work);
-         f(work);
+         if (work->entry.prev != LIST_POISON2) {
+           work_func_t f = work->func;
+           __list_del (work->entry.prev, work->entry.next);
+           work_clear_pending (work);
+           f(work);
+         }
        }
     }
 }
@@ -114,9 +116,11 @@ int cancel_work_sync(struct work_struct *work)
   if (!list_empty(&work->entry))
     {
       // work was queued. now unqueued.
-      list_del_init(&work->entry);
-      work_clear_pending (work);
-      retval = 1;
+      if (work->entry.prev != LIST_POISON2) {
+        list_del_init(&work->entry);
+        work_clear_pending (work);
+        retval = 1;
+      }
     }
   return retval;
 }

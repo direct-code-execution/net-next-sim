@@ -137,8 +137,8 @@ int del_timer(struct timer_list *timer)
     }
   if (timer->entry.prev != LIST_POISON2) {
     list_del(&timer->entry);
-    timer->entry.next = NULL;
   }
+  timer->entry.next = NULL;
   return retval;
 }
 
